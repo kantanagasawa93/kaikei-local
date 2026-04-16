@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KAIKEI LOCAL - 確定申告、もうサブスクはいらない。</title>
+  <meta name="description" content="個人事業主のためのオフライン会計アプリ。買い切り3,980円。データは全てMacのローカルに保存。freeeやマネーフォワードのサブスク疲れに。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #fafafa;
+      --fg: #111;
+      --muted: #666;
+      --accent: #1a1a2e;
+      --blue: #3b82f6;
+      --green: #10b981;
+      --card: #fff;
+      --border: #e5e5e5;
+    }
+    body {
+      font-family: 'Noto Sans JP', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.7;
+      font-size: 16px;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ===== HERO ===== */
+    .hero {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: #fff;
+      padding: 80px 24px 100px;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-block;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 100px;
+      padding: 6px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 32px;
+      letter-spacing: 0.5px;
+    }
+    .hero h1 {
+      font-size: clamp(32px, 5vw, 56px);
+      font-weight: 900;
+      line-height: 1.2;
+      margin-bottom: 20px;
+      letter-spacing: -0.02em;
+    }
+    .hero h1 span { color: #60a5fa; }
+    .hero p {
+      font-size: 18px;
+      opacity: 0.85;
+      max-width: 600px;
+      margin: 0 auto 40px;
+    }
+    .hero-price {
+      font-size: 48px;
+      font-weight: 900;
+      margin-bottom: 8px;
+    }
+    .hero-price-note {
+      font-size: 14px;
+      opacity: 0.6;
+      margin-bottom: 32px;
+    }
+    .hero-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #fff;
+      color: var(--accent);
+      padding: 16px 40px;
+      border-radius: 12px;
+      font-size: 18px;
+      font-weight: 700;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .hero-cta:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+      text-decoration: none;
+    }
+    .hero-sub {
+      margin-top: 16px;
+      font-size: 13px;
+      opacity: 0.5;
+    }
+
+    /* ===== CONTAINER ===== */
+    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+    /* ===== SECTION ===== */
+    section { padding: 80px 0; }
+    section h2 {
+      font-size: 28px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    /* ===== FEATURES ===== */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+    }
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+    }
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 16px;
+    }
+    .feature-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ===== COMPARISON ===== */
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .comparison-table th, .comparison-table td {
+      padding: 16px 20px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .comparison-table th {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 500;
+    }
+    .comparison-table tr:last-child td { border-bottom: none; }
+    .comparison-table .highlight {
+      background: #eff6ff;
+      font-weight: 600;
+    }
+
+    /* ===== FAQ ===== */
+    .faq-list { max-width: 700px; margin: 0 auto; }
+    .faq-item {
+      border-bottom: 1px solid var(--border);
+      padding: 24px 0;
+    }
+    .faq-item:last-child { border-bottom: none; }
+    .faq-q {
+      font-weight: 700;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .faq-a {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    /* ===== CTA ===== */
+    .cta-section {
+      background: var(--accent);
+      color: #fff;
+      text-align: center;
+      padding: 80px 24px;
+    }
+    .cta-section h2 { color: #fff; margin-bottom: 16px; }
+    .cta-section p { opacity: 0.7; margin-bottom: 32px; }
+
+    /* ===== FOOTER ===== */
+    footer {
+      text-align: center;
+      padding: 32px 24px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    footer a { color: var(--muted); }
+
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 640px) {
+      .hero { padding: 60px 20px 80px; }
+      .hero-price { font-size: 36px; }
+      section { padding: 60px 0; }
+      .comparison-table { font-size: 12px; }
+      .comparison-table th, .comparison-table td { padding: 10px 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">Mac App for 個人事業主</div>
+  <h1>確定申告、もう<br><span>サブスク</span>はいらない。</h1>
+  <p>データは全てあなたのMacに。クラウドに一切送信しない、完全オフラインの会計アプリ。</p>
+  <div class="hero-price">&yen;3,980</div>
+  <div class="hero-price-note">買い切り・月額なし・追加料金なし</div>
+  <a href="#download" class="hero-cta">
+    ダウンロード（無料 or 購入）
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+  </a>
+  <div class="hero-sub">macOS 10.15以降 / Apple Silicon &amp; Intel Mac 対応</div>
+</div>
+
+<!-- FEATURES -->
+<section>
+  <div class="container">
+    <h2>freeeの半分の機能を、1/10の価格で。</h2>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
+        <h3>完全オフライン</h3>
+        <p>仕訳、領収書、請求書...全てMacのローカルに保存。クラウドへのデータ送信は一切なし。あなたの財務データは、あなただけのもの。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">&#128179;</div>
+        <h3>買い切り 3,980円</h3>
+        <p>月額課金なし。freeeの2ヶ月分で、永久に使える。税制改正対応のアップデートも良心的な価格で提供予定。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128247;</div>
+        <h3>スマホで撮影→即取込</h3>
+        <p>アプリが表示するQRコードをスマホで読み取り、写真を撮って送信。同じWi-Fi内で完結。アプリのインストール不要。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128218;</div>
+        <h3>青色申告対応</h3>
+        <p>複式簿記の仕訳帳、月次推移の損益計算書・貸借対照表、家事按分、固定資産台帳、減価償却まで。65万円控除に対応。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#9889;</div>
+        <h3>自動仕訳ルール</h3>
+        <p>銀行・クレカのCSVを取り込むと、登録したルールで勘定科目を自動推測。使うほど正答率が上がる学習型。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#128196;</div>
+        <h3>請求書発行</h3>
+        <p>適格請求書（インボイス）フォーマットのPDFを出力。取引先マスタ連携、税率ごとの税額計算、登録番号対応。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARISON -->
+<section style="background:#f5f5f5;">
+  <div class="container">
+    <h2>他サービスとの比較</h2>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>KAIKEI LOCAL</th>
+          <th>freee</th>
+          <th>マネーフォワード</th>
+          <th>やよい青色</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>年間コスト</td>
+          <td class="highlight">3,980円（買い切り）</td>
+          <td>11,760円〜</td>
+          <td>10,560円〜</td>
+          <td>8,800円〜</td>
+        </tr>
+        <tr>
+          <td>データ保存先</td>
+          <td class="highlight">ローカルのみ</td>
+          <td>クラウド</td>
+          <td>クラウド</td>
+          <td>クラウド</td>
+        </tr>
+        <tr>
+          <td>オフライン利用</td>
+          <td class="highlight">可能</td>
+          <td>不可</td>
+          <td>不可</td>
+          <td>不可</td>
+        </tr>
+        <tr>
+          <td>青色申告65万円控除</td>
+          <td class="highlight">対応</td>
+          <td>対応</td>
+          <td>対応</td>
+          <td>対応</td>
+        </tr>
+        <tr>
+          <td>請求書発行</td>
+          <td class="highlight">対応</td>
+          <td>対応</td>
+          <td>対応</td>
+          <td>別料金</td>
+        </tr>
+        <tr>
+          <td>銀行API連携</td>
+          <td>CSV取込</td>
+          <td>対応</td>
+          <td>対応</td>
+          <td>対応</td>
+        </tr>
+        <tr>
+          <td>アプリサイズ</td>
+          <td class="highlight">32MB</td>
+          <td>Webアプリ</td>
+          <td>Webアプリ</td>
+          <td>Webアプリ</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section>
+  <div class="container">
+    <h2>よくある質問</h2>
+    <div class="faq-list">
+      <div class="faq-item">
+        <div class="faq-q">Q: データは本当に外に出ませんか？</div>
+        <div class="faq-a">はい。全てのデータ（仕訳、領収書画像、請求書）はMacのローカルフォルダにSQLiteファイルとして保存されます。インターネットへの送信は一切行いません。スマホ連携も同一Wi-Fi内のLAN通信のみです。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: freeeから乗り換えられますか？</div>
+        <div class="faq-a">freeeからCSVエクスポートした仕訳データを取り込むことができます。完全な自動移行ではありませんが、主要なデータは移行可能です。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: 確定申告はオンラインでできますか？</div>
+        <div class="faq-a">アプリ内で所得税・消費税を自動計算し、確認用PDFを出力します。実際の提出は、そのPDFを参照しながら国税庁のe-Taxサイトでマイナンバーカード＋スマホを使って行います。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: Windowsには対応していますか？</div>
+        <div class="faq-a">現在はmacOS専用です。Windows版は需要に応じて検討します。技術的にはTauriフレームワークを使っているため、Windows対応は可能です。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: 別のMacにデータを移行できますか？</div>
+        <div class="faq-a">「設定」画面からワンクリックでバックアップZIPを作成できます。DB＋領収書画像を丸ごと含みます。新しいMacでアプリをインストールし、ZIPから復元するだけです。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: 税制改正に対応しますか？</div>
+        <div class="faq-a">毎年の税制改正に合わせたアップデート版を提供予定です。アップデートは良心的な価格でご提供します。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section" id="download">
+  <h2>今すぐダウンロード</h2>
+  <p>32MBの軽量アプリ。インストールして、すぐに使い始められます。</p>
+  <div class="hero-price">&yen;3,980</div>
+  <div class="hero-price-note" style="margin-bottom:32px;">買い切り・月額なし</div>
+  <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;margin-bottom:16px;">
+    <a href="https://github.com/kantanagasawa93/kaikei-local/releases/download/v0.1.0/KAIKEI.LOCAL_0.1.0_aarch64.dmg" class="hero-cta">
+      Apple Silicon 版
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    </a>
+    <a href="https://github.com/kantanagasawa93/kaikei-local/releases/download/v0.1.0/KAIKEI.LOCAL_0.1.0_x64.dmg" class="hero-cta" style="background:#e5e5e5;color:#333;">
+      Intel Mac 版
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    </a>
+  </div>
+  <div class="hero-sub">macOS 10.15以降<br>Apple Silicon (M1/M2/M3/M4) または Intel Mac 対応</div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>&copy; 2026 KAIKEI LOCAL. All rights reserved.</p>
+  <p style="margin-top:8px;">
+    <a href="#">プライバシーポリシー</a> &middot;
+    <a href="#">利用規約</a> &middot;
+    <a href="#">お問い合わせ</a>
+  </p>
+</footer>
+
+</body>
+</html>
