@@ -11,8 +11,12 @@ import {
   FolderOpen,
   HelpCircle,
   Trash2,
+  FileDown,
+  Upload,
+  FileText,
 } from "lucide-react";
-import { cleanupOrphanReceiptFiles } from "@/lib/receipts";
+import { cleanupOrphanReceiptFiles, openReceiptsFolder } from "@/lib/receipts";
+import Link from "next/link";
 
 type Stats = {
   journals: number;
@@ -27,16 +31,9 @@ export default function SettingsPage() {
   const [appDir, setAppDir] = useState<string>("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [apiKey, setApiKey] = useState("");
-  const [apiKeySaved, setApiKeySaved] = useState(false);
 
   useEffect(() => {
     (async () => {
-      try {
-        const { getApiKey } = await import("@/lib/ai-ocr");
-        const key = await getApiKey();
-        if (key) { setApiKey(key); setApiKeySaved(true); }
-      } catch {}
       try {
         const { db } = await import("@/lib/localDb");
         const [j, r, inv, p, f] = await Promise.all([
@@ -277,6 +274,60 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
+            <FileDown className="h-4 w-4" />
+            他ソフトから移行
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            freee / マネーフォワード / 弥生 などから CSV をエクスポートして KAIKEI LOCAL に取り込めます。
+          </p>
+          <div className="flex gap-2 flex-wrap">
+            <Link href="/journals/import">
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 mr-1" />
+                仕訳帳 CSV 取込（8形式）
+              </Button>
+            </Link>
+            <Link href="/masters/import">
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 mr-1" />
+                マスタ CSV 取込（勘定科目・取引先）
+              </Button>
+            </Link>
+            <Link href="/evidence/import">
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 mr-1" />
+                証憑 ZIP 取込（電帳法対応）
+              </Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileText className="h-4 w-4" />
+            e-Tax 申告情報
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            確定申告 XTX ファイル生成に必要な納税者情報（氏名・住所・税務署・利用者識別番号など）を登録します。
+          </p>
+          <Link href="/settings/etax/">
+            <Button variant="outline" size="sm">
+              <FileText className="h-4 w-4 mr-1" />
+              納税者情報を設定
+            </Button>
+          </Link>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
             <Database className="h-4 w-4" />
             データ概要
           </CardTitle>
@@ -326,6 +377,10 @@ export default function SettingsPage() {
               <FolderOpen className="h-4 w-4 mr-1" />
               データフォルダを開く
             </Button>
+            <Button onClick={openReceiptsFolder} variant="outline">
+              <FolderOpen className="h-4 w-4 mr-1" />
+              領収書画像フォルダを開く
+            </Button>
             <Button onClick={handleCleanup} variant="outline" disabled={busy}>
               <Trash2 className="h-4 w-4 mr-1" />
               孤児ファイル整理
@@ -340,49 +395,29 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">AI 読み取りプラン</CardTitle>
+          <CardTitle className="text-base flex items-center gap-2">
+            ✨ AI 読み取り
+            <span className="text-xs font-normal text-muted-foreground">（無料・設定不要）</span>
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            領収書の写真から店名・金額・日付を AI で自動読み取りします。
-            月 500枚までお使いいただけます。
+            領収書の写真から店名・金額・日付・勘定科目を AI が自動で読み取ります。
+            API キー不要・追加料金なし。領収書のドロップ時に「AI 解析＋仕訳化」トグルが ON であれば取り込んだ瞬間に処理が走ります。
           </p>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value.trim().toUpperCase()); setApiKeySaved(false); }}
-              placeholder="KL-XXXX-XXXX-XXXX-XXXX"
-              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-            />
-            <Button
-              variant={apiKeySaved ? "outline" : "default"}
-              disabled={!apiKey || apiKeySaved}
-              onClick={async () => {
-                const { saveLicenseKey, verifyLicense } = await import("@/lib/ai-ocr");
-                const v = await verifyLicense(apiKey);
-                if (!v.valid) {
-                  setMessage(`ライセンスキーが無効です: ${v.reason || v.status || "unknown"}`);
-                  return;
-                }
-                await saveLicenseKey(apiKey);
-                setApiKeySaved(true);
-                setMessage(`有効です。今月 ${v.used_this_month}/${v.monthly_limit}枚 利用中`);
-                setTimeout(() => setMessage(null), 4000);
-              }}
-            >
-              {apiKeySaved ? "保存済み" : "確認して保存"}
-            </Button>
-          </div>
-          <div className="bg-muted/50 rounded-lg p-3 space-y-1 text-xs text-muted-foreground">
-            <p><strong className="text-foreground">お持ちでない方へ:</strong></p>
-            <p>
-              <a href="https://kaikei-local.com#ai-plan" target="_blank" rel="noopener" className="underline text-primary">
-                月額 980円 または 年額 9,800円で購入
-              </a>
-              できます（1年分2ヶ月無料）。購入後、メールでライセンスキーが届きます。
+          <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs space-y-1">
+            <p className="font-medium">📊 1日あたりの利用上限</p>
+            <p className="text-muted-foreground">
+              フェアユース（過剰利用防止）のため、<b>1つの Mac / IP から 1日200リクエストまで</b>に制限しています。
+              個人事業主なら月300枚でも余裕で収まる設計です。
             </p>
-            <p className="pt-1">ライセンスキーはこの Mac のローカルにのみ保存されます。</p>
+            <p className="text-muted-foreground">
+              上限に達するとエラー「1日の利用上限 200 回に達しました」が表示され、日本時間で翌日 0:00 頃にリセットされます。
+            </p>
+            <p className="text-muted-foreground">
+              AI の中身は <code>Google Gemini 2.5 Flash</code>。サーバー側でシェア運用しているため、
+              全ユーザ合計で 1日 1,500リクエストの無料枠を共有しています。もし全体枠が逼迫したら有料化の通知をします。
+            </p>
           </div>
         </CardContent>
       </Card>
