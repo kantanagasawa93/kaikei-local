@@ -22,7 +22,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Upload, Check, X, CreditCard } from "lucide-react";
-import { parseBankCSV, parseCreditCardCSV, type ParsedTransaction } from "@/lib/csv-import";
+import { type ParsedTransaction } from "@/lib/csv-import";
+import { parseBankOrCardCsv } from "@/lib/bank-csv";
+import { toast } from "@/lib/toast";
 import { findAccountCodeByName, getAccountByCode } from "@/lib/accounts";
 import { findMatchingRule, recordRuleApplication } from "@/lib/auto-rules";
 import type { BankAccount, BankTransaction } from "@/types";
@@ -68,10 +70,22 @@ export default function TransactionsPage() {
 
     const text = await file.text();
     const account = bankAccounts.find((a) => a.id === selectedAccountId);
-    const parsed = account?.account_type === "credit_card"
-      ? parseCreditCardCSV(text)
-      : parseBankCSV(text);
-    setParsedData(parsed);
+    const kind: "bank" | "card" =
+      account?.account_type === "credit_card" ? "card" : "bank";
+    const result = parseBankOrCardCsv(text, kind);
+    setParsedData(result.transactions);
+
+    if (result.transactions.length === 0) {
+      toast.error("CSV を解釈できませんでした。対応銀行の形式か確認してください。");
+    } else if (result.fallback) {
+      toast.info(
+        `汎用パーサで ${result.transactions.length} 件を読み込みました。銀行自動判別に失敗したので取引先名が一部崩れる可能性があります。`
+      );
+    } else {
+      toast.success(
+        `${result.bankName} として ${result.transactions.length} 件を読み込みました。`
+      );
+    }
   }, [bankAccounts, selectedAccountId]);
 
   async function handleImport() {
