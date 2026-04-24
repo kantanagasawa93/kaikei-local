@@ -19,7 +19,14 @@ export {
 } from "./xml-builder";
 export { buildCatalog, buildProcedureRoot, buildXtx, wrapInEnvelope } from "./envelope";
 export { buildItSection } from "./it-section";
-export { validateTaxpayer, splitErrors } from "./validator";
+export {
+  validateTaxpayer,
+  splitErrors,
+  toFieldMap,
+  normalizePostal,
+  normalizePhone,
+  normalizeRiyoshaId,
+} from "./validator";
 export { loadTaxpayerInfo, saveTaxpayerInfo, emptyTaxpayerInfo } from "./storage";
 export { buildEtaxConfirmationPdf, type EtaxPdfInput } from "./pdf";
 export {

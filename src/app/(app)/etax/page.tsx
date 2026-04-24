@@ -41,6 +41,8 @@ import {
   Settings,
   FileText,
   ArrowRight,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import type {
   TaxReturn,
@@ -84,10 +86,14 @@ export default function EtaxPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [lastGenerated, setLastGenerated] = useState<{
-    shotoku?: { name: string; bytes: Blob };
-    shohi?: { name: string; bytes: Blob };
-    pdf?: { name: string; bytes: Blob };
+    shotoku?: { name: string; bytes: Blob; xml: string };
+    shohi?: { name: string; bytes: Blob; xml: string };
+    pdf?: { name: string; bytes: Blob; url: string };
   }>({});
+  // 「生成済みのXTX/PDFを画面上で見る」プレビュー切替
+  const [preview, setPreview] = useState<"none" | "shotoku" | "shohi" | "pdf">(
+    "none"
+  );
 
   // ── 初期読み込み ──
   useEffect(() => {
@@ -95,6 +101,16 @@ export default function EtaxPage() {
       const info = await loadTaxpayerInfo();
       setTaxpayer(info);
     })();
+  }, []);
+
+  // アンマウント時に PDF Object URL を破棄
+  useEffect(() => {
+    return () => {
+      setLastGenerated((p) => {
+        if (p.pdf?.url) URL.revokeObjectURL(p.pdf.url);
+        return p;
+      });
+    };
   }, []);
 
   useEffect(() => {
@@ -226,11 +242,19 @@ export default function EtaxPage() {
       const pdfBlob = new Blob([new Uint8Array(pdfBytes)], { type: "application/pdf" });
       const pdfName = `kakutei_shinkoku_${year}_confirm.pdf`;
 
-      setLastGenerated((p) => ({
-        ...p,
-        shotoku: { name: xtx.suggestedFileName, bytes: blob },
-        pdf: { name: pdfName, bytes: pdfBlob },
-      }));
+      // 既存の PDF Object URL があれば破棄
+      setLastGenerated((p) => {
+        if (p.pdf?.url) URL.revokeObjectURL(p.pdf.url);
+        return {
+          ...p,
+          shotoku: { name: xtx.suggestedFileName, bytes: blob, xml: xtx.xml },
+          pdf: {
+            name: pdfName,
+            bytes: pdfBlob,
+            url: URL.createObjectURL(pdfBlob),
+          },
+        };
+      });
       setMessage(
         `所得税申告 XTX 生成完了: ${xtx.suggestedFileName} (${xtx.xml.length.toLocaleString()} bytes)\n内容確認用PDF: ${pdfName}`
       );
@@ -269,7 +293,7 @@ export default function EtaxPage() {
         const blob = new Blob([xtx.xml], { type: "application/xml" });
         setLastGenerated((p) => ({
           ...p,
-          shohi: { name: xtx.suggestedFileName, bytes: blob },
+          shohi: { name: xtx.suggestedFileName, bytes: blob, xml: xtx.xml },
         }));
         setMessage(
           `消費税申告 (原則) XTX 生成完了: ${xtx.suggestedFileName}`
@@ -289,7 +313,7 @@ export default function EtaxPage() {
         const blob = new Blob([xtx.xml], { type: "application/xml" });
         setLastGenerated((p) => ({
           ...p,
-          shohi: { name: xtx.suggestedFileName, bytes: blob },
+          shohi: { name: xtx.suggestedFileName, bytes: blob, xml: xtx.xml },
         }));
         setMessage(
           `消費税申告 (簡易) XTX 生成完了: ${xtx.suggestedFileName}`
@@ -313,8 +337,10 @@ export default function EtaxPage() {
   };
 
   // ── e-Tax Web版を開く ──
+  // clientweb.e-tax.nta.go.jp のルートは 403 を返す仕様のため、
+  // 公式ログイン画面 (個人) を直接開く。
   const openEtaxWeb = async () => {
-    const url = "https://clientweb.e-tax.nta.go.jp/";
+    const url = "https://login.e-tax.nta.go.jp/login/reception/loginIndividual";
     try {
       const { open } = await import("@tauri-apps/plugin-shell");
       await open(url);
@@ -448,38 +474,66 @@ export default function EtaxPage() {
             含む 1つの XTX ファイル (RKO0010) を生成します。e-Tax Web版の
             「作成した申告・申請データを表示」メニューから取り込めます。
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button onClick={handleGenerateShotoku} disabled={!canGenerate || busy}>
               <FileText className="h-4 w-4 mr-1" />
               所得税申告 XTX を生成
             </Button>
             {lastGenerated.shotoku && (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  downloadBlob(
-                    lastGenerated.shotoku!.name,
-                    lastGenerated.shotoku!.bytes
-                  )
-                }
-              >
-                <Download className="h-4 w-4 mr-1" />
-                XTX をダウンロード
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    downloadBlob(
+                      lastGenerated.shotoku!.name,
+                      lastGenerated.shotoku!.bytes
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  XTX をダウンロード
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    setPreview(preview === "shotoku" ? "none" : "shotoku")
+                  }
+                >
+                  {preview === "shotoku" ? (
+                    <EyeOff className="h-4 w-4 mr-1" />
+                  ) : (
+                    <Eye className="h-4 w-4 mr-1" />
+                  )}
+                  XTXの中身
+                </Button>
+              </>
             )}
             {lastGenerated.pdf && (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  downloadBlob(
-                    lastGenerated.pdf!.name,
-                    lastGenerated.pdf!.bytes
-                  )
-                }
-              >
-                <Download className="h-4 w-4 mr-1" />
-                確認用PDF
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    downloadBlob(
+                      lastGenerated.pdf!.name,
+                      lastGenerated.pdf!.bytes
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  確認用PDF
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => setPreview(preview === "pdf" ? "none" : "pdf")}
+                >
+                  {preview === "pdf" ? (
+                    <EyeOff className="h-4 w-4 mr-1" />
+                  ) : (
+                    <Eye className="h-4 w-4 mr-1" />
+                  )}
+                  PDFを画面で見る
+                </Button>
+              </>
             )}
           </div>
           {lastGenerated.shotoku && (
@@ -579,15 +633,33 @@ export default function EtaxPage() {
               消費税申告 XTX を生成
             </Button>
             {lastGenerated.shohi && (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  downloadBlob(lastGenerated.shohi!.name, lastGenerated.shohi!.bytes)
-                }
-              >
-                <Download className="h-4 w-4 mr-1" />
-                ダウンロード
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    downloadBlob(
+                      lastGenerated.shohi!.name,
+                      lastGenerated.shohi!.bytes
+                    )
+                  }
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  ダウンロード
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    setPreview(preview === "shohi" ? "none" : "shohi")
+                  }
+                >
+                  {preview === "shohi" ? (
+                    <EyeOff className="h-4 w-4 mr-1" />
+                  ) : (
+                    <Eye className="h-4 w-4 mr-1" />
+                  )}
+                  XTXの中身
+                </Button>
+              </>
             )}
           </div>
           {lastGenerated.shohi && (
@@ -597,6 +669,51 @@ export default function EtaxPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* プレビューパネル (XTX/PDFの中身を画面で確認) */}
+      {preview !== "none" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center justify-between">
+              <span>
+                {preview === "shotoku" && "所得税申告 XTX の中身"}
+                {preview === "shohi" && "消費税申告 XTX の中身"}
+                {preview === "pdf" && "確認用 PDF プレビュー"}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPreview("none")}
+              >
+                <EyeOff className="h-4 w-4 mr-1" />
+                閉じる
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {preview === "shotoku" && lastGenerated.shotoku && (
+              <pre className="text-xs font-mono bg-muted/50 border rounded-md p-3 max-h-[60vh] overflow-auto whitespace-pre-wrap break-all">
+                {lastGenerated.shotoku.xml}
+              </pre>
+            )}
+            {preview === "shohi" && lastGenerated.shohi && (
+              <pre className="text-xs font-mono bg-muted/50 border rounded-md p-3 max-h-[60vh] overflow-auto whitespace-pre-wrap break-all">
+                {lastGenerated.shohi.xml}
+              </pre>
+            )}
+            {preview === "pdf" && lastGenerated.pdf && (
+              <iframe
+                src={lastGenerated.pdf.url}
+                className="w-full h-[70vh] border rounded-md bg-white"
+                title="確認用PDF"
+              />
+            )}
+            <p className="text-xs text-muted-foreground mt-2">
+              ※ アップロード前に中身を目視確認できます。誤りがあれば設定や計算値を直して再生成してください。
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ステップ4: e-Tax Web版で送信 */}
       <Card>

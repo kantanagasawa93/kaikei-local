@@ -170,3 +170,39 @@ export function splitErrors(errors: ValidationError[]) {
     warnings: errors.filter((e) => e.severity === "warning"),
   };
 }
+
+/**
+ * フィールド名 → エラー/警告メッセージ のマップに変換。
+ * フォームの各 Input 近傍に「このフィールドの問題」だけ表示したい時に使う。
+ */
+export function toFieldMap(errors: ValidationError[]): Record<string, ValidationError[]> {
+  const m: Record<string, ValidationError[]> = {};
+  for (const e of errors) {
+    if (!m[e.field]) m[e.field] = [];
+    m[e.field].push(e);
+  }
+  return m;
+}
+
+/**
+ * 郵便番号の数字を7桁にゼロ埋め/切り詰めせず、単純に数字のみ取り出す。
+ */
+export function normalizePostal(s: string): string {
+  return s.replace(/\D/g, "").slice(0, 7);
+}
+
+/**
+ * 電話番号を半角数字 + ハイフンのみに正規化。
+ */
+export function normalizePhone(s: string): string {
+  return s
+    .replace(/[\uFF10-\uFF19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 0x30))
+    .replace(/[^\d-]/g, "");
+}
+
+/**
+ * 利用者識別番号を数字のみ16桁に正規化。
+ */
+export function normalizeRiyoshaId(s: string): string {
+  return s.replace(/\D/g, "").slice(0, 16);
+}
