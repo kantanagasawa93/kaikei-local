@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Upload, Check, X, CreditCard } from "lucide-react";
 import { type ParsedTransaction } from "@/lib/csv-import";
-import { parseBankOrCardCsv } from "@/lib/bank-csv";
+import { parseBankOrCardCsvBytes } from "@/lib/bank-csv";
 import { toast } from "@/lib/toast";
 import { findAccountCodeByName, getAccountByCode } from "@/lib/accounts";
 import { findMatchingRule, recordRuleApplication } from "@/lib/auto-rules";
@@ -68,22 +68,24 @@ export default function TransactionsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const text = await file.text();
+    // Shift_JIS 対応のため ArrayBuffer で読み取って parseBankOrCardCsvBytes に渡す
+    const bytes = await file.arrayBuffer();
     const account = bankAccounts.find((a) => a.id === selectedAccountId);
     const kind: "bank" | "card" =
       account?.account_type === "credit_card" ? "card" : "bank";
-    const result = parseBankOrCardCsv(text, kind);
+    const result = parseBankOrCardCsvBytes(bytes, kind);
     setParsedData(result.transactions);
 
+    const encLabel = result.encoding === "shift_jis" ? " [Shift_JIS 自動変換]" : "";
     if (result.transactions.length === 0) {
       toast.error("CSV を解釈できませんでした。対応銀行の形式か確認してください。");
     } else if (result.fallback) {
       toast.info(
-        `汎用パーサで ${result.transactions.length} 件を読み込みました。銀行自動判別に失敗したので取引先名が一部崩れる可能性があります。`
+        `汎用パーサで ${result.transactions.length} 件を読み込みました${encLabel}。銀行自動判別に失敗したので取引先名が一部崩れる可能性があります。`
       );
     } else {
       toast.success(
-        `${result.bankName} として ${result.transactions.length} 件を読み込みました。`
+        `${result.bankName} として ${result.transactions.length} 件を読み込みました${encLabel}。`
       );
     }
   }, [bankAccounts, selectedAccountId]);
