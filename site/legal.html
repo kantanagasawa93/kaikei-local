@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>法的情報 | KAIKEI LOCAL</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --card: #fff;
+    --border: #e5e5e5;
+    --accent: #0a84ff;
+  }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif; line-height:1.7; }
+  header { padding:20px 24px; border-bottom:1px solid var(--border); background:#fff; }
+  header a { color:var(--fg); text-decoration:none; font-weight:600; font-size:15px; }
+  main { max-width:780px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:28px; margin:16px 0 24px; }
+  h2 { font-size:22px; margin:40px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+  h3 { font-size:16px; margin:24px 0 8px; }
+  p, li { font-size:14px; color:#333; }
+  .muted { color:var(--muted); font-size:13px; }
+  code { background:#f0f0f0; padding:1px 6px; border-radius:4px; font-size:13px; }
+  ul { padding-left:22px; }
+  a { color:var(--accent); }
+  .nav-tabs { display:flex; gap:4px; margin-bottom:24px; border-bottom:1px solid var(--border); }
+  .nav-tabs a { padding:8px 16px; font-size:14px; text-decoration:none; color:var(--muted); border-bottom:2px solid transparent; }
+  .nav-tabs a.active { color:var(--fg); border-bottom-color:var(--accent); font-weight:600; }
+  footer { text-align:center; padding:32px 16px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); margin-top:60px; }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="index.html">← KAIKEI LOCAL</a>
+</header>
+
+<main>
+  <h1>法的情報</h1>
+
+  <nav class="nav-tabs">
+    <a href="#privacy" class="active">プライバシーポリシー</a>
+    <a href="#terms">利用規約</a>
+  </nav>
+
+  <section id="privacy">
+    <h2>プライバシーポリシー</h2>
+    <p class="muted">最終更新日: 2026年4月24日</p>
+
+    <h3>1. はじめに</h3>
+    <p>
+      KAIKEI LOCAL（以下「本アプリ」）は、個人事業主の会計業務を支援するデスクトップアプリケーションです。
+      本プライバシーポリシーは、本アプリにおけるお客様のデータの取り扱いについて説明します。
+    </p>
+
+    <h3>2. データの保存場所</h3>
+    <p>
+      本アプリで入力された全てのデータ（仕訳、領収書画像、取引先情報、請求書、確定申告データ等）は、
+      お客様の Mac のローカルストレージにのみ保存されます。
+    </p>
+    <p>具体的な保存先: <code>~/Library/Application Support/dev.kaikei.app/</code></p>
+
+    <h3>3. 外部送信について</h3>
+    <p>
+      本アプリは、オプトイン機能を使った場合に限り以下の外部通信を行います。これら以外の外部送信は一切行いません。
+    </p>
+    <ul>
+      <li><b>AI 読み取り（明示同意時のみ）:</b>
+        領収書の AI 読み取り機能を利用する場合、領収書画像 (base64) を
+        <code>api.kaikei-local.com</code> 経由で Google Gemini 2.5 Flash に送信します。
+        初回利用時に明示同意を取得し、同意しない場合は従来の Tesseract OCR（オフライン処理）にフォールバックします。
+        画像はサーバー側で解析後に即時破棄され、AI モデルの学習には使用されません。
+      </li>
+      <li><b>ライセンス検証（購入者のみ）:</b>
+        有料プラン利用時のライセンスキー検証と月次利用枠チェックのため、
+        <code>api.kaikei-local.com</code> にライセンスキーを送信します。氏名・住所・納税データは送信しません。
+      </li>
+      <li><b>郵便番号→住所検索（任意）:</b>
+        設定画面で住所検索ボタンを押した時のみ、郵便番号 7桁を
+        <code>zipcloud.ibsnet.co.jp</code> に送信します。
+      </li>
+      <li><b>LAN 内通信:</b>
+        スマホからの領収書取込機能は、同一 Wi-Fi ネットワーク内のみで動作します。
+        インターネットへのデータ送信は行いません。
+      </li>
+    </ul>
+    <p class="muted">
+      納税者情報（氏名・住所・利用者識別番号・マイナンバー等）はローカル DB にのみ保存され、
+      いかなる場合も外部サーバーに送信されません。
+    </p>
+
+    <h3>4. 収集しない情報</h3>
+    <p>本アプリは以下の情報を収集しません:</p>
+    <ul>
+      <li>個人を識別できる情報（氏名、メールアドレス等、ただし有料プランの購入時に Stripe が取得する決済情報を除く）</li>
+      <li>利用状況の分析データ</li>
+      <li>クラッシュレポート</li>
+      <li>位置情報</li>
+      <li>Cookie やトラッキングデータ</li>
+    </ul>
+
+    <h3>5. データの管理</h3>
+    <p>
+      お客様は「設定・ヘルプ」画面からいつでもデータのバックアップ・復元・削除を行えます。
+      アプリをアンインストールしてもデータフォルダは残りますので、
+      完全削除する場合はデータフォルダを手動で削除してください。
+    </p>
+
+    <h3>6. お問い合わせ</h3>
+    <p>
+      本ポリシーに関するお問い合わせは開発者までメールでご連絡ください:
+      <a href="mailto:k.nagasawa.pc@gmail.com">k.nagasawa.pc@gmail.com</a>
+    </p>
+  </section>
+
+  <section id="terms">
+    <h2>利用規約</h2>
+    <p class="muted">最終更新日: 2026年4月24日</p>
+
+    <h3>1. 本アプリについて</h3>
+    <p>
+      KAIKEI LOCAL（以下「本アプリ」）は、個人事業主の日常的な会計業務および確定申告の準備を支援するデスクトップアプリケーションです。
+    </p>
+
+    <h3>2. 免責事項（重要）</h3>
+    <p><b>本アプリが算出する税額、所得額、消費税額等の数値は参考値であり、正確性を保証するものではありません。</b></p>
+    <ul>
+      <li>確定申告書の提出にあたっては、必ずご自身で内容を確認してください。</li>
+      <li>税務に関する判断は、税理士等の専門家にご相談ください。</li>
+      <li>本アプリの利用により生じた損害について、開発者は一切の責任を負いません。</li>
+      <li>税法の改正により、計算ロジックが最新の法令に対応していない場合があります。</li>
+    </ul>
+
+    <h3>3. 利用条件</h3>
+    <ul>
+      <li>本アプリは個人利用を目的としています。</li>
+      <li>1ライセンスにつき、お客様が所有する Mac 1台での利用を想定しています。</li>
+      <li>リバースエンジニアリング、再配布、改変しての販売は禁止します。</li>
+    </ul>
+
+    <h3>4. 有料プランと決済</h3>
+    <ul>
+      <li>有料プラン (Standard / Pro) の決済は Stripe を通じて行われます。決済情報は Stripe 社に保管され、開発者側では保持しません。</li>
+      <li>サブスクリプションは毎月/毎年自動更新されます。解約は Stripe カスタマーポータルから随時可能です。</li>
+      <li>サブスクリプションをキャンセルした場合、当該期間の終了時点で AI 読み取り機能が停止します。返金は行いません。</li>
+    </ul>
+
+    <h3>5. データの責任</h3>
+    <p>
+      本アプリのデータはお客様の Mac にローカル保存されます。
+      データの紛失・破損に備え、定期的なバックアップを強く推奨します。
+      データの紛失について、開発者は責任を負いません。
+    </p>
+
+    <h3>6. アップデート</h3>
+    <p>
+      税制改正等に対応するアップデート版は、別途提供する場合があります。アップデートの提供を保証するものではありません。
+    </p>
+
+    <h3>7. 知的財産権</h3>
+    <p>本アプリの著作権その他の知的財産権は開発者に帰属します。</p>
+
+    <h3>8. 準拠法</h3>
+    <p>本規約は日本法に準拠し、日本国の裁判所を専属的合意管轄とします。</p>
+  </section>
+</main>
+
+<footer>
+  &copy; 2026 KAIKEI LOCAL.
+  <a href="mailto:k.nagasawa.pc@gmail.com">お問い合わせ</a>
+</footer>
+
+</body>
+</html>

@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 国税庁 e-Tax 仕様書 (CAB/XSD, 計 300MB+、公開ソースから随時取得)
+# 再取得: scripts/download_etax_specs.sh (or docs/etax-specs.md 参照)
+/specs/
+
+# ローカル Claude 設定
+/.claude/

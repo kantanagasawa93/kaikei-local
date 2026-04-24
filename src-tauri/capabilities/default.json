@@ -1,0 +1,39 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "kaikei desktop app default permissions",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "sql:default",
+    "sql:allow-load",
+    "sql:allow-execute",
+    "sql:allow-select",
+    "fs:default",
+    "fs:allow-write-file",
+    "fs:allow-mkdir",
+    "fs:allow-read-file",
+    "fs:allow-exists",
+    "fs:allow-app-read",
+    "fs:allow-app-write",
+    "fs:allow-app-read-recursive",
+    "fs:allow-app-write-recursive",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$APPDATA" },
+        { "path": "$APPDATA/**" },
+        { "path": "$HOME/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "shell:default",
+    "shell:allow-open",
+    "log:default"
+  ]
+}
