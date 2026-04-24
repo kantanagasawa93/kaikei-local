@@ -160,6 +160,17 @@ export default function FixedAssetsPage() {
           <CardContent className="py-12 text-center">
             <Package className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
             <p className="text-muted-foreground">固定資産がまだ登録されていません。</p>
+            <Button
+              className="mt-4"
+              variant="outline"
+              onClick={() => setOpen(true)}
+            >
+              <Plus className="h-4 w-4 mr-1" />
+              最初の固定資産を登録
+            </Button>
+            <p className="mt-3 text-xs text-muted-foreground">
+              10万円以上の備品やPC等を登録すると、減価償却費が自動計算されます。
+            </p>
           </CardContent>
         </Card>
       ) : (

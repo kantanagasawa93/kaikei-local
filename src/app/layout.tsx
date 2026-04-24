@@ -5,6 +5,7 @@ import "@fontsource/noto-sans-jp/500.css";
 import "@fontsource/noto-sans-jp/700.css";
 import "./globals.css";
 import { Boot } from "@/components/boot";
+import { Toaster } from "@/components/toast";
 
 export const metadata: Metadata = {
   title: "KAIKEI LOCAL",
@@ -21,6 +22,7 @@ export default function RootLayout({
       <body className="min-h-full">
         <Boot />
         {children}
+        <Toaster />
       </body>
     </html>
   );

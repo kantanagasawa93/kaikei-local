@@ -147,3 +147,48 @@ export async function saveLicenseKey(key: string): Promise<void> {
 // 後方互換: 既存コードが getApiKey を参照している
 export const getApiKey = getLicenseKey;
 export const saveApiKey = saveLicenseKey;
+
+// ──────────────────────────────────────────────────────────
+// AI OCR データ送信同意フラグ
+// ──────────────────────────────────────────────────────────
+//
+// 領収書画像を外部サーバー (api.kaikei-local.com 経由 Gemini) に送信するため、
+// 初回に明示同意を取得する。app_settings.id="ai_ocr_consent" に "1" / "0" で保持。
+
+const CONSENT_KEY = "ai_ocr_consent";
+
+export async function hasAiOcrConsent(): Promise<boolean> {
+  try {
+    const { db } = await import("@/lib/localDb");
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", CONSENT_KEY)
+      .single();
+    return (data as { value?: string } | null)?.value === "1";
+  } catch {
+    return false;
+  }
+}
+
+export async function setAiOcrConsent(consented: boolean): Promise<void> {
+  const { db } = await import("@/lib/localDb");
+  const value = consented ? "1" : "0";
+  const { data: existing } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", CONSENT_KEY)
+    .single();
+  if (existing) {
+    await db
+      .from("app_settings")
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq("id", CONSENT_KEY);
+  } else {
+    await db.from("app_settings").insert({
+      id: CONSENT_KEY,
+      value,
+      updated_at: new Date().toISOString(),
+    });
+  }
+}
