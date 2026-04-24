@@ -217,6 +217,38 @@
     }
     footer a { color: var(--muted); }
 
+    /* ===== BANK GRID ===== */
+    .bank-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .bank-chip {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--fg);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .bank-chip:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+    }
+    .bank-bar {
+      display: inline-block;
+      width: 4px;
+      height: 24px;
+      background: var(--brand, #999);
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
     /* ===== RESPONSIVE ===== */
     @media (max-width: 640px) {
       .hero { padding: 60px 20px 80px; }
@@ -354,6 +386,110 @@
   </div>
 </section>
 
+<!-- SUPPORTED BANKS -->
+<section>
+  <div class="container">
+    <h2>対応銀行・カード</h2>
+    <p style="text-align:center;color:var(--muted);font-size:14px;max-width:640px;margin:-32px auto 40px;">
+      各銀行・カード会社が発行する CSV を自動判別してインポートします。未対応の銀行でも、
+      一般的な形式なら汎用パーサで取り込めます。Shift_JIS / UTF-8 両対応。
+    </p>
+
+    <!-- 銀行 -->
+    <h3 style="font-size:18px;margin:0 0 16px;color:var(--fg);">🏦 銀行 (15行)</h3>
+    <div class="bank-grid" style="margin-bottom:40px;">
+      <div class="bank-chip" style="--brand:#003f8e;"><span class="bank-bar"></span>みずほ銀行</div>
+      <div class="bank-chip" style="--brand:#c8102e;"><span class="bank-bar"></span>三菱UFJ銀行</div>
+      <div class="bank-chip" style="--brand:#1e8b4e;"><span class="bank-bar"></span>三井住友銀行</div>
+      <div class="bank-chip" style="--brand:#0a4e9a;"><span class="bank-bar"></span>りそな銀行</div>
+      <div class="bank-chip" style="--brand:#ff6600;"><span class="bank-bar"></span>ゆうちょ銀行</div>
+      <div class="bank-chip" style="--brand:#003876;"><span class="bank-bar"></span>住信SBIネット銀行</div>
+      <div class="bank-chip" style="--brand:#bf0000;"><span class="bank-bar"></span>楽天銀行</div>
+      <div class="bank-chip" style="--brand:#e60000;"><span class="bank-bar"></span>PayPay銀行</div>
+      <div class="bank-chip" style="--brand:#0066cc;"><span class="bank-bar"></span>ソニー銀行</div>
+      <div class="bank-chip" style="--brand:#ff6600;"><span class="bank-bar"></span>auじぶん銀行</div>
+      <div class="bank-chip" style="--brand:#003a70;"><span class="bank-bar"></span>SBI新生銀行</div>
+      <div class="bank-chip" style="--brand:#007041;"><span class="bank-bar"></span>セブン銀行</div>
+      <div class="bank-chip" style="--brand:#d4007a;"><span class="bank-bar"></span>イオン銀行</div>
+      <div class="bank-chip" style="--brand:#004ea2;"><span class="bank-bar"></span>横浜銀行</div>
+      <div class="bank-chip" style="--brand:#009944;"><span class="bank-bar"></span>千葉銀行</div>
+      <div class="bank-chip" style="--brand:#d2002e;"><span class="bank-bar"></span>福岡銀行</div>
+      <div class="bank-chip" style="--brand:#004ea8;"><span class="bank-bar"></span>西日本シティ銀行</div>
+      <div class="bank-chip" style="--brand:#009b3a;"><span class="bank-bar"></span>常陽銀行</div>
+      <div class="bank-chip" style="--brand:#006837;"><span class="bank-bar"></span>静岡銀行</div>
+      <div class="bank-chip" style="--brand:#0071ce;"><span class="bank-bar"></span>京都銀行</div>
+      <div class="bank-chip" style="--brand:#c50018;"><span class="bank-bar"></span>広島銀行</div>
+      <div class="bank-chip" style="--brand:#1e4f99;"><span class="bank-bar"></span>スルガ銀行</div>
+      <div class="bank-chip" style="--brand:#e60012;"><span class="bank-bar"></span>北洋銀行</div>
+      <div class="bank-chip" style="--brand:#003f88;"><span class="bank-bar"></span>北海道銀行</div>
+      <div class="bank-chip" style="--brand:#e50012;"><span class="bank-bar"></span>東邦銀行</div>
+    </div>
+
+    <!-- カード -->
+    <h3 style="font-size:18px;margin:0 0 16px;color:var(--fg);">💳 クレジットカード (11社)</h3>
+    <div class="bank-grid">
+      <div class="bank-chip" style="--brand:#bf0000;"><span class="bank-bar"></span>楽天カード</div>
+      <div class="bank-chip" style="--brand:#1e8b4e;"><span class="bank-bar"></span>三井住友カード</div>
+      <div class="bank-chip" style="--brand:#004e9e;"><span class="bank-bar"></span>JCB</div>
+      <div class="bank-chip" style="--brand:#c8102e;"><span class="bank-bar"></span>三菱UFJニコス</div>
+      <div class="bank-chip" style="--brand:#006a4d;"><span class="bank-bar"></span>VIEW カード</div>
+      <div class="bank-chip" style="--brand:#cc0033;"><span class="bank-bar"></span>dカード</div>
+      <div class="bank-chip" style="--brand:#006fcf;"><span class="bank-bar"></span>American Express</div>
+      <div class="bank-chip" style="--brand:#134086;"><span class="bank-bar"></span>セゾンカード</div>
+      <div class="bank-chip" style="--brand:#c8102e;"><span class="bank-bar"></span>エポスカード</div>
+      <div class="bank-chip" style="--brand:#e60000;"><span class="bank-bar"></span>PayPayカード</div>
+      <div class="bank-chip" style="--brand:#ff6600;"><span class="bank-bar"></span>au PAY カード</div>
+      <div class="bank-chip" style="--brand:#d4007a;"><span class="bank-bar"></span>イオンカード</div>
+    </div>
+
+    <p style="text-align:center;color:var(--muted);font-size:12px;margin-top:32px;line-height:1.8;">
+      ※ 上記ロゴマーク・銀行名・カード名は各社の商標です。KAIKEI LOCAL は各社と提携していません。<br>
+      未対応の銀行・カードでも、CSV ヘッダが標準的な形式 (日付 / 摘要 / 入金 / 出金 / 残高)<br>
+      であれば汎用パーサで取り込めます。対応追加のご要望は
+      <a href="mailto:k.nagasawa.pc@gmail.com">k.nagasawa.pc@gmail.com</a> まで。
+    </p>
+  </div>
+</section>
+
+<!-- TRUST / SECURITY -->
+<section style="background:#f5f5f5;">
+  <div class="container">
+    <h2>なぜ安心して使えるのか</h2>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
+        <h3>オフライン動作</h3>
+        <p>仕訳・領収書・請求書・確定申告データはすべて Mac のローカル SQLite ファイルに保存。クラウドへのバックアップ送信も一切ありません。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">&#128737;&#65039;</div>
+        <h3>データは自分のもの</h3>
+        <p>~/Library/Application Support/dev.kaikei.app/ にファイルとして存在。バックアップの ZIP 化、Finder からの直接アクセス、他 Mac への移行も自由。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128257;</div>
+        <h3>日次自動バックアップ</h3>
+        <p>アプリ起動時に DB を snapshots/ に自動保存。直近 7 日分保持。復元時も自動で pre-restore スナップショットを作成するので失敗時に安全に戻せます。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#128196;</div>
+        <h3>オープンソース</h3>
+        <p><a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank">GitHub で全コードを公開</a>。データの取り扱いも第三者が検証可能。隠れた外部送信はありません。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128269;</div>
+        <h3>AI 送信は明示同意制</h3>
+        <p>AI 読み取り機能の画像送信は初回利用時に明示同意ダイアログを表示。送信先・内容・保存ポリシーを開示。同意しない場合はオフライン OCR が自動で動作。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#9989;</div>
+        <h3>e-Tax 実機で検証済み</h3>
+        <p>令和 7 年分 (2025 年分) の所得税申告 XTX は e-Tax マイページの「データ内容確認」機能でパース・帳票表示まで通過確認済み。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- FAQ -->
 <section>
   <div class="container">
@@ -381,7 +517,27 @@
       </div>
       <div class="faq-item">
         <div class="faq-q">Q: 税制改正に対応しますか？</div>
-        <div class="faq-a">毎年の税制改正に合わせたアップデート版を提供予定です。アップデートは良心的な価格でご提供します。</div>
+        <div class="faq-a">毎年の税制改正に合わせたアップデート版を提供します。新バージョン公開時はアプリ起動時に通知され、GitHub Releases から最新 DMG を取得できます。アップデート自体は無料です。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: 基本機能は本当にずっと無料ですか？</div>
+        <div class="faq-a">はい。仕訳・領収書・請求書・青色申告決算書・所得税/消費税計算・e-Tax 用 XTX 出力まで、すべて無料でご利用いただけます。課金が必要なのは AI 領収書読み取り機能のみです。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: AI 読み取りプランはいつでも解約できますか？</div>
+        <div class="faq-a">はい。Stripe のカスタマーポータルから随時解約可能です。解約後も基本機能は引き続き無料でご利用いただけます。オフラインの Tesseract OCR は解約後も動作します。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: 初回起動時に「開発元を確認できません」と出ます</div>
+        <div class="faq-a">現在はベータ配布中のため Apple 公証未取得です。「KAIKEI LOCAL.app」を Control キーを押しながらクリック → 「開く」で起動できます。詳しくは <a href="install.html">インストールガイド</a> をご覧ください。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: e-Tax で実際に送信できますか？</div>
+        <div class="faq-a">令和 7 年分所得税申告 XTX は e-Tax マイページの「作成した申告・申請データの内容を確認」で読み込み・帳票表示まで検証済みです。実送信は国税庁の確定申告書等作成コーナーで新規入力するか、e-Taxソフト (Windows) で組み込み送信する形になります。Mac から直接送信できる手段は現時点で国税庁側に存在しません。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Q: 対応していない銀行・カードの CSV はどうすれば？</div>
+        <div class="faq-a">対応リスト外でも汎用パーサが動作します。ヘッダが「日付・摘要・入金・出金・残高」などの標準的な名前なら大丈夫です。うまく読み込めなかった場合は k.nagasawa.pc@gmail.com に CSV のヘッダ行だけお送りいただければ、個別対応を追加します。</div>
       </div>
     </div>
   </div>
