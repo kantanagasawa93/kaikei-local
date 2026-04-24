@@ -31,6 +31,23 @@ export async function deleteReceipt(id: string): Promise<void> {
 }
 
 /**
+ * receipts/ フォルダを Finder で開く。
+ * AppData 配下の receipts/ が未作成なら先に作ってから shell.open で開く。
+ */
+export async function openReceiptsFolder(): Promise<void> {
+  const { appDataDir, join } = await import("@tauri-apps/api/path");
+  const { mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+  try {
+    await mkdir("receipts", { baseDir: BaseDirectory.AppData, recursive: true });
+  } catch {
+    // 既にあれば無視
+  }
+  const full = await join(await appDataDir(), "receipts");
+  const { open } = await import("@tauri-apps/plugin-shell");
+  await open(full);
+}
+
+/**
  * DB に紐付いていない孤児ファイルを receipts/ ディレクトリから検出して削除する。
  * ユーザが「ストレージを整理」ボタンを押した時に使う想定。
  */
