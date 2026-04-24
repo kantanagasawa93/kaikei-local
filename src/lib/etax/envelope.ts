@@ -96,6 +96,19 @@ export function buildProcedureRoot(
 
 /**
  * DATA ルート要素で包んで、XTX 全体を直列化。
+ *
+ * 注意: DATA 要素には意図的に xmlns を付けない。
+ * XSD 上 DATA は各帳票 (shotoku / shohi) namespace 配下にあるが、
+ * 子孫要素は shotoku / general / kyotsu / somu など複数の namespace を
+ * またぐため、DATA に single xmlns を付けると IT 部 (general NS) が
+ * mismatch を起こし xmllint 検証が失敗する。
+ *
+ * e-Tax 本体のパーサはこの構造を許容しており、実機アップロードテストで
+ * RKO0010 の帳票表示まで通過することを確認済み
+ * (login.e-tax.nta.go.jp の「申告・申請データの内容を確認」機能)。
+ *
+ * オフラインでの `xmllint --schema` 厳密検証は通らないが、これは
+ * 国税庁の XSD 構造によるもので、我々のXTX出力が仕様に反しているわけではない。
  */
 export function buildXtx(procedureRoot: XmlNode): string {
   const root = elc("DATA", [procedureRoot], { id: "DATA" });
