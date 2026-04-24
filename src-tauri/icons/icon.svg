@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- 背景: 角丸四角 -->
+  <rect width="1024" height="1024" rx="220" fill="#1a1a2e"/>
+
+  <!-- 内側のグラデーション帯 -->
+  <rect x="80" y="80" width="864" height="864" rx="160" fill="url(#grad)"/>
+
+  <!-- 帳簿ページ（白の紙） -->
+  <rect x="260" y="200" width="504" height="624" rx="32" fill="white" opacity="0.95"/>
+
+  <!-- 帳簿の見出し線 -->
+  <rect x="320" y="280" width="200" height="12" rx="6" fill="#1a1a2e" opacity="0.15"/>
+
+  <!-- 仕訳行: 借方 -->
+  <rect x="320" y="340" width="160" height="10" rx="5" fill="#3b82f6" opacity="0.6"/>
+  <rect x="560" y="340" width="80" height="10" rx="5" fill="#3b82f6" opacity="0.3"/>
+
+  <!-- 仕訳行: 貸方 -->
+  <rect x="360" y="390" width="140" height="10" rx="5" fill="#10b981" opacity="0.6"/>
+  <rect x="560" y="390" width="80" height="10" rx="5" fill="#10b981" opacity="0.3"/>
+
+  <!-- 仕訳行: 借方2 -->
+  <rect x="320" y="450" width="120" height="10" rx="5" fill="#3b82f6" opacity="0.6"/>
+  <rect x="560" y="450" width="60" height="10" rx="5" fill="#3b82f6" opacity="0.3"/>
+
+  <!-- 仕訳行: 貸方2 -->
+  <rect x="360" y="500" width="100" height="10" rx="5" fill="#10b981" opacity="0.6"/>
+  <rect x="560" y="500" width="60" height="10" rx="5" fill="#10b981" opacity="0.3"/>
+
+  <!-- セパレータ -->
+  <line x1="300" y1="560" x2="720" y2="560" stroke="#1a1a2e" stroke-opacity="0.1" stroke-width="3"/>
+
+  <!-- 合計行 -->
+  <rect x="320" y="590" width="100" height="12" rx="6" fill="#1a1a2e" opacity="0.2"/>
+  <rect x="530" y="590" width="110" height="12" rx="6" fill="#1a1a2e" opacity="0.4"/>
+
+  <!-- 合計金額 -->
+  <rect x="320" y="640" width="80" height="14" rx="7" fill="#1a1a2e" opacity="0.15"/>
+  <rect x="520" y="636" width="120" height="22" rx="11" fill="#3b82f6" opacity="0.8"/>
+
+  <!-- ローカルシールド（右下） -->
+  <circle cx="720" cy="720" r="110" fill="#1a1a2e"/>
+  <circle cx="720" cy="720" r="90" fill="white"/>
+
+  <!-- 鍵アイコン in シールド -->
+  <rect x="700" y="710" width="40" height="32" rx="6" fill="#1a1a2e"/>
+  <circle cx="720" cy="696" r="20" fill="none" stroke="#1a1a2e" stroke-width="8"/>
+  <circle cx="720" cy="722" r="4" fill="white"/>
+  <rect x="717" y="722" width="6" height="10" rx="2" fill="white"/>
+
+  <!-- K L ロゴ（左上） -->
+  <text x="290" y="264" font-family="Helvetica,Arial,sans-serif" font-weight="bold" font-size="44" fill="#1a1a2e" opacity="0.7">K L</text>
+
+  <defs>
+    <linearGradient id="grad" x1="0" y1="0" x2="1024" y2="1024">
+      <stop offset="0%" stop-color="#16213e"/>
+      <stop offset="100%" stop-color="#0f3460"/>
+    </linearGradient>
+  </defs>
+</svg>

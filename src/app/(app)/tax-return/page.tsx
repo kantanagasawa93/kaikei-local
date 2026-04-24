@@ -33,7 +33,7 @@ import {
   getTaxBracketInfo,
 } from "@/lib/tax-calculator";
 import { FileCheck, Calculator, ArrowRight, FileDown } from "lucide-react";
-import type { TaxReturn, TaxReturnExpense, JournalLine } from "@/types";
+import type { TaxReturn, TaxReturnExpense, JournalLine, WithholdingSlip } from "@/types";
 import { exportTaxReturnPdf, downloadBlob } from "@/lib/pdf-export";
 
 export default function TaxReturnPage() {
@@ -146,9 +146,10 @@ export default function TaxReturnPage() {
 
     let wTotal = withholdingTotal;
     if (slips && slips.length > 0) {
-      wTotal = slips.reduce((sum, s) => sum + s.withholding_tax, 0);
+      const slipsList = slips as WithholdingSlip[];
+      wTotal = slipsList.reduce((sum, s) => sum + s.withholding_tax, 0);
       setWithholdingTotal(wTotal);
-      const sInsurance = slips.reduce((sum, s) => sum + s.social_insurance, 0);
+      const sInsurance = slipsList.reduce((sum, s) => sum + s.social_insurance, 0);
       if (sInsurance > 0) setSocialInsurance(sInsurance);
     }
 

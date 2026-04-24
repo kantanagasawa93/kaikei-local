@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Database,
   HardDriveDownload,
@@ -11,8 +13,20 @@ import {
   FolderOpen,
   HelpCircle,
   Trash2,
+  FileDown,
+  Upload,
+  FileText,
+  KeyRound,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
-import { cleanupOrphanReceiptFiles } from "@/lib/receipts";
+import { cleanupOrphanReceiptFiles, openReceiptsFolder } from "@/lib/receipts";
+import {
+  getLicenseKey,
+  saveLicenseKey,
+  verifyLicense,
+} from "@/lib/ai-ocr";
+import Link from "next/link";
 
 type Stats = {
   journals: number;
@@ -22,21 +36,88 @@ type Stats = {
   fixedAssets: number;
 };
 
+type LicenseInfo = {
+  valid: boolean;
+  plan?: string;
+  status?: string;
+  expires_at?: string;
+  monthly_limit?: number;
+  used_this_month?: number;
+  reason?: string;
+};
+
 export default function SettingsPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [appDir, setAppDir] = useState<string>("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [apiKey, setApiKey] = useState("");
-  const [apiKeySaved, setApiKeySaved] = useState(false);
 
+  // ライセンスキー関連
+  const [licenseInput, setLicenseInput] = useState("");
+  const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
+
+  // 初回ロードで既存キーを読み込み & verify
   useEffect(() => {
     (async () => {
       try {
-        const { getApiKey } = await import("@/lib/ai-ocr");
-        const key = await getApiKey();
-        if (key) { setApiKey(key); setApiKeySaved(true); }
-      } catch {}
+        const key = await getLicenseKey();
+        if (!key) return;
+        setLicenseInput(key);
+        const info = await verifyLicense(key);
+        setLicenseInfo(info);
+      } catch {
+        // ネットワーク不通時は放置
+      }
+    })();
+  }, []);
+
+  const handleLicenseSave = async () => {
+    const key = licenseInput.trim();
+    if (!key) {
+      setLicenseMessage("ライセンスキーを入力してください");
+      return;
+    }
+    setLicenseBusy(true);
+    setLicenseMessage(null);
+    try {
+      const info = await verifyLicense(key);
+      if (!info.valid) {
+        setLicenseInfo(info);
+        setLicenseMessage(
+          `認証失敗: ${info.reason || "不明なエラー"}。キーを確認して再度お試しください。`
+        );
+        return;
+      }
+      await saveLicenseKey(key);
+      setLicenseInfo(info);
+      setLicenseMessage("ライセンスキーを保存・認証しました。");
+      setTimeout(() => setLicenseMessage(null), 3000);
+    } catch (e) {
+      setLicenseMessage(`エラー: ${(e as Error).message}`);
+    } finally {
+      setLicenseBusy(false);
+    }
+  };
+
+  const handleLicenseClear = async () => {
+    if (!window.confirm("保存済みのライセンスキーを削除しますか？\n無料プラン扱いに戻ります。")) {
+      return;
+    }
+    try {
+      await saveLicenseKey("");
+      setLicenseInput("");
+      setLicenseInfo(null);
+      setLicenseMessage("ライセンスキーを削除しました。");
+      setTimeout(() => setLicenseMessage(null), 2500);
+    } catch (e) {
+      setLicenseMessage(`削除失敗: ${(e as Error).message}`);
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
       try {
         const { db } = await import("@/lib/localDb");
         const [j, r, inv, p, f] = await Promise.all([
@@ -277,6 +358,60 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
+            <FileDown className="h-4 w-4" />
+            他ソフトから移行
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            freee / マネーフォワード / 弥生 などから CSV をエクスポートして KAIKEI LOCAL に取り込めます。
+          </p>
+          <div className="flex gap-2 flex-wrap">
+            <Link href="/journals/import">
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 mr-1" />
+                仕訳帳 CSV 取込（8形式）
+              </Button>
+            </Link>
+            <Link href="/masters/import">
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 mr-1" />
+                マスタ CSV 取込（勘定科目・取引先）
+              </Button>
+            </Link>
+            <Link href="/evidence/import">
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 mr-1" />
+                証憑 ZIP 取込（電帳法対応）
+              </Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileText className="h-4 w-4" />
+            e-Tax 申告情報
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            確定申告 XTX ファイル生成に必要な納税者情報（氏名・住所・税務署・利用者識別番号など）を登録します。
+          </p>
+          <Link href="/settings/etax/">
+            <Button variant="outline" size="sm">
+              <FileText className="h-4 w-4 mr-1" />
+              納税者情報を設定
+            </Button>
+          </Link>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
             <Database className="h-4 w-4" />
             データ概要
           </CardTitle>
@@ -326,6 +461,10 @@ export default function SettingsPage() {
               <FolderOpen className="h-4 w-4 mr-1" />
               データフォルダを開く
             </Button>
+            <Button onClick={openReceiptsFolder} variant="outline">
+              <FolderOpen className="h-4 w-4 mr-1" />
+              領収書画像フォルダを開く
+            </Button>
             <Button onClick={handleCleanup} variant="outline" disabled={busy}>
               <Trash2 className="h-4 w-4 mr-1" />
               孤児ファイル整理
@@ -340,49 +479,115 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">AI 読み取りプラン</CardTitle>
+          <CardTitle className="text-base flex items-center gap-2">
+            ✨ AI 読み取り
+            {licenseInfo?.valid ? (
+              <Badge variant="default" className="font-normal">
+                {licenseInfo.plan === "yearly" ? "年額プラン" : "月額プラン"}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="font-normal">未契約</Badge>
+            )}
+          </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            領収書の写真から店名・金額・日付を AI で自動読み取りします。
-            月 500枚までお使いいただけます。
+            領収書の写真から店名・金額・日付・勘定科目を AI が自動で読み取ります。
+            領収書のドロップ時に「AI 解析＋仕訳化」トグルが ON であれば取り込んだ瞬間に処理が走ります。
           </p>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value.trim().toUpperCase()); setApiKeySaved(false); }}
-              placeholder="KL-XXXX-XXXX-XXXX-XXXX"
-              className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
-            />
-            <Button
-              variant={apiKeySaved ? "outline" : "default"}
-              disabled={!apiKey || apiKeySaved}
-              onClick={async () => {
-                const { saveLicenseKey, verifyLicense } = await import("@/lib/ai-ocr");
-                const v = await verifyLicense(apiKey);
-                if (!v.valid) {
-                  setMessage(`ライセンスキーが無効です: ${v.reason || v.status || "unknown"}`);
-                  return;
-                }
-                await saveLicenseKey(apiKey);
-                setApiKeySaved(true);
-                setMessage(`有効です。今月 ${v.used_this_month}/${v.monthly_limit}枚 利用中`);
-                setTimeout(() => setMessage(null), 4000);
-              }}
-            >
-              {apiKeySaved ? "保存済み" : "確認して保存"}
-            </Button>
-          </div>
-          <div className="bg-muted/50 rounded-lg p-3 space-y-1 text-xs text-muted-foreground">
-            <p><strong className="text-foreground">お持ちでない方へ:</strong></p>
-            <p>
-              <a href="https://kaikei-local.com#ai-plan" target="_blank" rel="noopener" className="underline text-primary">
-                月額 980円 または 年額 9,800円で購入
-              </a>
-              できます（1年分2ヶ月無料）。購入後、メールでライセンスキーが届きます。
+
+          {/* ライセンスキー入力欄 */}
+          <div className="rounded-md border p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-muted-foreground" />
+              <Label htmlFor="license-key" className="text-sm font-medium">
+                ライセンスキー（有料プランご購入の方）
+              </Label>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                id="license-key"
+                value={licenseInput}
+                onChange={(e) => setLicenseInput(e.target.value)}
+                placeholder="例: KAIKEI-XXXX-XXXX-XXXX-XXXX"
+                className="font-mono text-sm"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <Button
+                onClick={handleLicenseSave}
+                disabled={licenseBusy}
+                size="sm"
+              >
+                {licenseBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 mr-1" />
+                )}
+                認証・保存
+              </Button>
+              {licenseInfo?.valid && (
+                <Button
+                  onClick={handleLicenseClear}
+                  variant="ghost"
+                  size="sm"
+                  title="保存済みキーを削除"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            {licenseMessage && (
+              <p
+                className={`text-xs ${
+                  licenseMessage.startsWith("認証失敗") ||
+                  licenseMessage.startsWith("エラー") ||
+                  licenseMessage.startsWith("削除失敗")
+                    ? "text-red-600"
+                    : "text-green-700"
+                }`}
+              >
+                {licenseMessage}
+              </p>
+            )}
+            {licenseInfo?.valid && (
+              <div className="text-xs text-muted-foreground space-y-0.5 pt-1">
+                <p>
+                  プラン:{" "}
+                  <b>
+                    {licenseInfo.plan === "yearly"
+                      ? "年額プラン (¥9,800/年)"
+                      : "月額プラン (¥980/月)"}
+                  </b>
+                  {licenseInfo.expires_at && (
+                    <> ・ 次回更新: {new Date(licenseInfo.expires_at).toLocaleDateString("ja-JP")}</>
+                  )}
+                </p>
+                {typeof licenseInfo.monthly_limit === "number" && (
+                  <p>
+                    今月の利用: {licenseInfo.used_this_month ?? 0} /{" "}
+                    {licenseInfo.monthly_limit} 枚 (月 500枚まで)
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              有料プランは kaikei LP から購入できます。
+              ライセンスキーは購入時のメールに記載されます。
             </p>
-            <p className="pt-1">ライセンスキーはこの Mac のローカルにのみ保存されます。</p>
+          </div>
+
+          {/* プラン説明 */}
+          <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs space-y-1">
+            <p className="font-medium">📊 プラン</p>
+            <p className="text-muted-foreground">
+              <b>未契約 (Free):</b> Tesseract オフライン OCR のみ利用可。AI 読み取りは使えません。
+            </p>
+            <p className="text-muted-foreground">
+              <b>月額 ¥980 / 年額 ¥9,800:</b> AI 読み取り 月 500 枚まで。
+              AI エンジンは <code>Google Gemini 2.5 Flash</code>。
+              画像はサーバー側で解析後に即座に破棄され、保存・AI 学習には使われません。
+            </p>
           </div>
         </CardContent>
       </Card>

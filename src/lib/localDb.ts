@@ -12,6 +12,29 @@
 
 import Database from "@tauri-apps/plugin-sql";
 
+/**
+ * DB 関連エラーのうち「.single() でレコードが無かった」等の想定内エラーは
+ * UI 側で 0 件扱いになるので toast は出さない。接続不能・テーブル不在・
+ * SQL 構文エラーなどの「ユーザーが原因を知りたい」致命系のみ toast する。
+ */
+function notifyDbError(e: unknown): void {
+  const msg = (e as Error)?.message || String(e);
+  // 「1件だけ欲しかったが 0 件返ってきた」系は routine なので silent
+  if (
+    /no rows returned|expected one row|not found|returned no rows/i.test(msg)
+  ) {
+    return;
+  }
+  // toast 発火 (ブラウザ環境でない or Toaster 未マウント時は no-op)
+  void import("@/lib/toast")
+    .then(({ toast }) => {
+      toast.error(
+        `データベースエラー: ${msg.length > 160 ? msg.slice(0, 160) + "…" : msg}`
+      );
+    })
+    .catch(() => {});
+}
+
 let _db: Database | null = null;
 
 async function getDb(): Promise<Database> {
@@ -192,6 +215,7 @@ class QueryBuilder<T = Row> implements PromiseLike<Result<T>> {
       throw new Error(`Unknown action: ${action}`);
     } catch (e) {
       console.error("[localDb]", e);
+      notifyDbError(e);
       return { data: null, error: e as Error };
     }
   }

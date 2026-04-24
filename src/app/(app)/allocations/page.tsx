@@ -90,7 +90,7 @@ export default function AllocationsPage() {
     }
 
     setRows(
-      allocs.map((a) => {
+      (allocs as BizAllocation[]).map((a) => {
         const total = totals[a.account_code] || 0;
         const bizAmount = Math.floor((total * a.business_ratio) / 100);
         return {
