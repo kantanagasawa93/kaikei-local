@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>インストールガイド | KAIKEI LOCAL</title>
+<style>
+  :root {
+    --bg: #fafafa; --fg: #1a1a1a; --muted: #666; --card: #fff;
+    --border: #e5e5e5; --accent: #0a84ff; --warn:#f59e0b;
+  }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    line-height:1.75;
+  }
+  header { padding:20px 24px; border-bottom:1px solid var(--border); background:#fff; }
+  header a { color:var(--fg); text-decoration:none; font-weight:600; font-size:15px; }
+  main { max-width:760px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:30px; margin:16px 0 8px; }
+  .subtitle { color:var(--muted); margin-bottom:32px; }
+  h2 { font-size:20px; margin:40px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .step-num { display:inline-flex; align-items:center; justify-content:center;
+    width:28px; height:28px; border-radius:50%; background:var(--accent);
+    color:#fff; font-size:14px; font-weight:700; }
+  p, li { font-size:15px; color:#222; }
+  .muted { color:var(--muted); font-size:13px; }
+  code { background:#f0f0f0; padding:1px 6px; border-radius:4px; font-size:13px; }
+  kbd { background:#fff; border:1px solid #ccc; border-bottom-width:2px; padding:1px 6px; border-radius:4px; font-size:12px; font-family: inherit; }
+  .dl-btn {
+    display:inline-flex; align-items:center; gap:8px;
+    background:#1a1a1a; color:#fff; padding:14px 28px; border-radius:12px;
+    font-size:16px; font-weight:600; text-decoration:none; margin:8px 0;
+  }
+  .dl-btn:hover { background:#000; }
+  .callout {
+    background:#fef3c7; border:1px solid #fcd34d; border-radius:10px;
+    padding:14px 16px; margin:16px 0; font-size:14px;
+  }
+  .callout b { color:#92400e; }
+  footer { text-align:center; padding:32px 16px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); margin-top:60px; }
+  img.screenshot { max-width:100%; border:1px solid var(--border); border-radius:8px; margin:12px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="index.html">← KAIKEI LOCAL</a>
+</header>
+
+<main>
+  <h1>インストールガイド</h1>
+  <p class="subtitle">KAIKEI LOCAL を Mac にインストールする方法</p>
+
+  <p style="text-align:center;">
+    <a class="dl-btn" href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg">
+      ⬇︎ 最新版をダウンロード (.dmg)
+    </a>
+  </p>
+  <p class="muted" style="text-align:center;">
+    ダウンロード元: GitHub Releases ・ サイズ: 約 30-50MB ・ 必要容量: 100MB 以上
+  </p>
+
+  <h2><span class="step-num">1</span>DMG を開く</h2>
+  <p>
+    ダウンロードした <code>KAIKEI_LOCAL.dmg</code> をダブルクリック。
+    ボリュームがマウントされて、「KAIKEI LOCAL.app」と Applications フォルダのショートカットが表示されます。
+  </p>
+
+  <h2><span class="step-num">2</span>Applications にドラッグ</h2>
+  <p>
+    「KAIKEI LOCAL.app」を Applications フォルダにドラッグ&amp;ドロップ。
+    これで <code>/Applications/KAIKEI LOCAL.app</code> にインストールされます。
+  </p>
+
+  <h2><span class="step-num">3</span>初回起動</h2>
+  <p>
+    Launchpad や Applications フォルダから「KAIKEI LOCAL」を起動。
+  </p>
+
+  <div class="callout">
+    <b>⚠️ 「開発元を確認できません」と表示される場合</b><br>
+    現在のベータ配布は Apple 公証を取得していないため、初回起動時に Gatekeeper の警告が出ることがあります。次の手順で開いてください:
+    <ol>
+      <li>Finder で「KAIKEI LOCAL.app」を <b>Control キーを押しながらクリック</b></li>
+      <li>メニューから「<b>開く</b>」を選択</li>
+      <li>ダイアログで再度「開く」をクリック</li>
+    </ol>
+    以降、通常通りダブルクリックで起動できます。正式版では公証済み DMG を配布予定です。
+  </div>
+
+  <h2><span class="step-num">4</span>オンボーディング</h2>
+  <p>
+    初回起動すると簡単なツアー (5 画面) が表示されます。
+    最後に氏名・屋号・税務署コードなどを入力できますが、あとで設定画面から入力してもOK。
+  </p>
+
+  <h2>🔒 プライバシー</h2>
+  <p>
+    KAIKEI LOCAL で入力したデータはすべて Mac のローカル
+    (<code>~/Library/Application Support/dev.kaikei.app/</code>) に保存されます。
+    クラウド送信は一切行いません (AI OCR を明示同意で使う場合のみ、画像が外部サーバで解析されます)。
+  </p>
+  <p>
+    詳細は <a href="legal.html">プライバシーポリシー</a> をご覧ください。
+  </p>
+
+  <h2>🆘 困ったとき</h2>
+  <ul>
+    <li>起動しない / クラッシュする: メニューバー「ファイル」→「データフォルダを開く」でデータ本体にアクセスできます</li>
+    <li>バックアップ / 復元: アプリの「設定・ヘルプ」画面の「バックアップ」ボタンから</li>
+    <li>質問・不具合報告:
+      <a href="mailto:k.nagasawa.pc@gmail.com">k.nagasawa.pc@gmail.com</a>
+      もしくは
+      <a href="https://github.com/kantanagasawa93/kaikei-local/issues">GitHub Issues</a>
+    </li>
+  </ul>
+</main>
+
+<footer>
+  &copy; 2026 KAIKEI LOCAL &middot;
+  <a href="index.html">トップ</a> &middot;
+  <a href="legal.html">法的情報</a>
+</footer>
+
+</body>
+</html>
