@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Database,
   HardDriveDownload,
@@ -14,8 +16,16 @@ import {
   FileDown,
   Upload,
   FileText,
+  KeyRound,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { cleanupOrphanReceiptFiles, openReceiptsFolder } from "@/lib/receipts";
+import {
+  getLicenseKey,
+  saveLicenseKey,
+  verifyLicense,
+} from "@/lib/ai-ocr";
 import Link from "next/link";
 
 type Stats = {
@@ -26,11 +36,85 @@ type Stats = {
   fixedAssets: number;
 };
 
+type LicenseInfo = {
+  valid: boolean;
+  plan?: string;
+  status?: string;
+  expires_at?: string;
+  monthly_limit?: number;
+  used_this_month?: number;
+  reason?: string;
+};
+
 export default function SettingsPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [appDir, setAppDir] = useState<string>("");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // ライセンスキー関連
+  const [licenseInput, setLicenseInput] = useState("");
+  const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
+
+  // 初回ロードで既存キーを読み込み & verify
+  useEffect(() => {
+    (async () => {
+      try {
+        const key = await getLicenseKey();
+        if (!key) return;
+        setLicenseInput(key);
+        const info = await verifyLicense(key);
+        setLicenseInfo(info);
+      } catch {
+        // ネットワーク不通時は放置
+      }
+    })();
+  }, []);
+
+  const handleLicenseSave = async () => {
+    const key = licenseInput.trim();
+    if (!key) {
+      setLicenseMessage("ライセンスキーを入力してください");
+      return;
+    }
+    setLicenseBusy(true);
+    setLicenseMessage(null);
+    try {
+      const info = await verifyLicense(key);
+      if (!info.valid) {
+        setLicenseInfo(info);
+        setLicenseMessage(
+          `認証失敗: ${info.reason || "不明なエラー"}。キーを確認して再度お試しください。`
+        );
+        return;
+      }
+      await saveLicenseKey(key);
+      setLicenseInfo(info);
+      setLicenseMessage("ライセンスキーを保存・認証しました。");
+      setTimeout(() => setLicenseMessage(null), 3000);
+    } catch (e) {
+      setLicenseMessage(`エラー: ${(e as Error).message}`);
+    } finally {
+      setLicenseBusy(false);
+    }
+  };
+
+  const handleLicenseClear = async () => {
+    if (!window.confirm("保存済みのライセンスキーを削除しますか？\n無料プラン扱いに戻ります。")) {
+      return;
+    }
+    try {
+      await saveLicenseKey("");
+      setLicenseInput("");
+      setLicenseInfo(null);
+      setLicenseMessage("ライセンスキーを削除しました。");
+      setTimeout(() => setLicenseMessage(null), 2500);
+    } catch (e) {
+      setLicenseMessage(`削除失敗: ${(e as Error).message}`);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -397,26 +481,112 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             ✨ AI 読み取り
-            <span className="text-xs font-normal text-muted-foreground">（無料・設定不要）</span>
+            {licenseInfo?.valid ? (
+              <Badge variant="default" className="font-normal">
+                {licenseInfo.plan === "yearly" ? "年額プラン" : "月額プラン"}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="font-normal">未契約</Badge>
+            )}
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
             領収書の写真から店名・金額・日付・勘定科目を AI が自動で読み取ります。
-            API キー不要・追加料金なし。領収書のドロップ時に「AI 解析＋仕訳化」トグルが ON であれば取り込んだ瞬間に処理が走ります。
+            領収書のドロップ時に「AI 解析＋仕訳化」トグルが ON であれば取り込んだ瞬間に処理が走ります。
           </p>
+
+          {/* ライセンスキー入力欄 */}
+          <div className="rounded-md border p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-muted-foreground" />
+              <Label htmlFor="license-key" className="text-sm font-medium">
+                ライセンスキー（有料プランご購入の方）
+              </Label>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                id="license-key"
+                value={licenseInput}
+                onChange={(e) => setLicenseInput(e.target.value)}
+                placeholder="例: KAIKEI-XXXX-XXXX-XXXX-XXXX"
+                className="font-mono text-sm"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <Button
+                onClick={handleLicenseSave}
+                disabled={licenseBusy}
+                size="sm"
+              >
+                {licenseBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 mr-1" />
+                )}
+                認証・保存
+              </Button>
+              {licenseInfo?.valid && (
+                <Button
+                  onClick={handleLicenseClear}
+                  variant="ghost"
+                  size="sm"
+                  title="保存済みキーを削除"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            {licenseMessage && (
+              <p
+                className={`text-xs ${
+                  licenseMessage.startsWith("認証失敗") ||
+                  licenseMessage.startsWith("エラー") ||
+                  licenseMessage.startsWith("削除失敗")
+                    ? "text-red-600"
+                    : "text-green-700"
+                }`}
+              >
+                {licenseMessage}
+              </p>
+            )}
+            {licenseInfo?.valid && (
+              <div className="text-xs text-muted-foreground space-y-0.5 pt-1">
+                <p>
+                  プラン:{" "}
+                  <b>
+                    {licenseInfo.plan === "yearly"
+                      ? "年額プラン (¥9,800/年)"
+                      : "月額プラン (¥980/月)"}
+                  </b>
+                  {licenseInfo.expires_at && (
+                    <> ・ 次回更新: {new Date(licenseInfo.expires_at).toLocaleDateString("ja-JP")}</>
+                  )}
+                </p>
+                {typeof licenseInfo.monthly_limit === "number" && (
+                  <p>
+                    今月の利用: {licenseInfo.used_this_month ?? 0} /{" "}
+                    {licenseInfo.monthly_limit} 枚 (月 500枚まで)
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              有料プランは kaikei LP から購入できます。
+              ライセンスキーは購入時のメールに記載されます。
+            </p>
+          </div>
+
+          {/* プラン説明 */}
           <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs space-y-1">
-            <p className="font-medium">📊 1日あたりの利用上限</p>
+            <p className="font-medium">📊 プラン</p>
             <p className="text-muted-foreground">
-              フェアユース（過剰利用防止）のため、<b>1つの Mac / IP から 1日200リクエストまで</b>に制限しています。
-              個人事業主なら月300枚でも余裕で収まる設計です。
+              <b>未契約 (Free):</b> Tesseract オフライン OCR のみ利用可。AI 読み取りは使えません。
             </p>
             <p className="text-muted-foreground">
-              上限に達するとエラー「1日の利用上限 200 回に達しました」が表示され、日本時間で翌日 0:00 頃にリセットされます。
-            </p>
-            <p className="text-muted-foreground">
-              AI の中身は <code>Google Gemini 2.5 Flash</code>。サーバー側でシェア運用しているため、
-              全ユーザ合計で 1日 1,500リクエストの無料枠を共有しています。もし全体枠が逼迫したら有料化の通知をします。
+              <b>月額 ¥980 / 年額 ¥9,800:</b> AI 読み取り 月 500 枚まで。
+              AI エンジンは <code>Google Gemini 2.5 Flash</code>。
+              画像はサーバー側で解析後に即座に破棄され、保存・AI 学習には使われません。
             </p>
           </div>
         </CardContent>

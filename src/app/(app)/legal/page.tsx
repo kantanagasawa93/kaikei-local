@@ -43,17 +43,31 @@ export default function LegalPage() {
 
               <section>
                 <h3 className="font-semibold text-base mt-4">3. 外部送信について</h3>
-                <p>本アプリは以下の通信を行います:</p>
+                <p>本アプリは、オプトイン機能を使った場合に限り以下の外部通信を行います。これら以外の外部送信は一切行いません。</p>
                 <ul className="list-disc pl-5 space-y-1">
                   <li>
-                    <strong>LAN内通信のみ:</strong> スマホからの領収書取込機能は、同一Wi-Fiネットワーク内でのみ動作します。
-                    インターネットへのデータ送信は一切行いません。
+                    <strong>AI 読み取り (明示同意時のみ):</strong> 領収書の AI 読み取り機能を利用する場合、
+                    領収書画像 (base64) を <code>api.kaikei-local.com</code> 経由で Google Gemini 2.5 Flash に送信します。
+                    初回利用時に明示同意を取得し、同意しない場合は従来の Tesseract OCR (オフライン処理) にフォールバックします。
+                    画像はサーバー側で解析後に即時破棄され、AI モデルの学習には使用されません。
                   </li>
                   <li>
-                    <strong>外部サーバへの送信なし:</strong> クラウドストレージ、分析サービス、広告ネットワーク等への
-                    データ送信は行いません。
+                    <strong>ライセンス検証 (購入者のみ):</strong> 有料プラン利用時のライセンスキー検証と月次利用枠チェックのため、
+                    <code>api.kaikei-local.com</code> にライセンスキーを送信します。氏名・住所・納税データは送信しません。
+                  </li>
+                  <li>
+                    <strong>郵便番号→住所検索 (任意):</strong> 設定画面で住所検索ボタンを押した時のみ、
+                    郵便番号 7桁を <code>zipcloud.ibsnet.co.jp</code> に送信します。
+                  </li>
+                  <li>
+                    <strong>LAN内通信:</strong> スマホからの領収書取込機能は、同一Wi-Fiネットワーク内のみで動作します。
+                    インターネットへのデータ送信は行いません。
                   </li>
                 </ul>
+                <p className="text-xs text-muted-foreground mt-1">
+                  納税者情報 (氏名・住所・利用者識別番号・マイナンバー等) はローカル DB にのみ保存され、
+                  いかなる場合も外部サーバーに送信されません。
+                </p>
               </section>
 
               <section>
@@ -80,7 +94,13 @@ export default function LegalPage() {
               <section>
                 <h3 className="font-semibold text-base mt-4">6. お問い合わせ</h3>
                 <p>
-                  本ポリシーに関するお問い合わせは、開発者までご連絡ください。
+                  本ポリシーに関するお問い合わせは、開発者までメールでご連絡ください:{" "}
+                  <a
+                    href="mailto:k.nagasawa.pc@gmail.com"
+                    className="underline"
+                  >
+                    k.nagasawa.pc@gmail.com
+                  </a>
                 </p>
               </section>
             </CardContent>

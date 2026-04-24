@@ -128,7 +128,21 @@ export default function PartnersPage() {
         <Card>
           <CardContent className="py-12 text-center">
             <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <p className="text-muted-foreground">取引先がまだ登録されていません。</p>
+            <p className="text-muted-foreground">
+              {partners.length === 0
+                ? "取引先がまだ登録されていません"
+                : "検索条件に一致する取引先がありません"}
+            </p>
+            {partners.length === 0 && (
+              <Button
+                className="mt-4"
+                variant="outline"
+                onClick={() => setOpen(true)}
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                最初の取引先を登録
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (

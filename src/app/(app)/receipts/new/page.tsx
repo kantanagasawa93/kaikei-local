@@ -10,7 +10,14 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { processReceiptImage } from "@/lib/ocr";
-import { ocrWithClaude, fileToBase64, getApiKey } from "@/lib/ai-ocr";
+import {
+  ocrWithClaude,
+  fileToBase64,
+  getApiKey,
+  hasAiOcrConsent,
+  setAiOcrConsent,
+} from "@/lib/ai-ocr";
+import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
 import { supabase } from "@/lib/supabase";
 import type { OcrResult } from "@/types";
 import { ArrowLeft, Sparkles, Save, Zap } from "lucide-react";
@@ -25,6 +32,9 @@ export default function NewReceiptPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [useAiOcr, setUseAiOcr] = useState(true);
   const [hasApiKey, setHasApiKey] = useState(false);
+  // 同意ダイアログ: pendingFile を保持しておき、同意後に再試行する
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   const [vendorName, setVendorName] = useState("");
   const [amount, setAmount] = useState("");
@@ -41,6 +51,19 @@ export default function NewReceiptPage() {
   });
 
   const handleFileSelect = async (file: File) => {
+    // AI OCR を使う場合、初回のみ同意を取る
+    if (useAiOcr && hasApiKey) {
+      const consented = await hasAiOcrConsent();
+      if (!consented) {
+        setPendingFile(file);
+        setConsentOpen(true);
+        return;
+      }
+    }
+    await runOcr(file);
+  };
+
+  const runOcr = async (file: File) => {
     setSelectedFile(file);
     setIsProcessing(true);
     setError(null);
@@ -208,6 +231,26 @@ export default function NewReceiptPage() {
 
   return (
     <div className="space-y-6 max-w-2xl">
+      <AiOcrConsentDialog
+        open={consentOpen}
+        onAgree={async () => {
+          await setAiOcrConsent(true);
+          setConsentOpen(false);
+          if (pendingFile) {
+            const f = pendingFile;
+            setPendingFile(null);
+            await runOcr(f);
+          }
+        }}
+        onDecline={() => {
+          setConsentOpen(false);
+          const f = pendingFile;
+          setPendingFile(null);
+          setUseAiOcr(false); // 次回からは Tesseract
+          if (f) runOcr(f);
+        }}
+      />
+
       <div className="flex items-center gap-4">
         <Link href="/receipts">
           <Button variant="ghost" size="sm">
