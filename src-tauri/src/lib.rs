@@ -115,10 +115,19 @@ pub fn run() {
                 let open_receipts_item =
                     MenuItemBuilder::with_id("open_receipts_dir", "領収書フォルダを開く")
                         .build(handle)?;
+                let open_snapshots_item =
+                    MenuItemBuilder::with_id("open_snapshots_dir", "自動バックアップフォルダを開く")
+                        .build(handle)?;
+                let open_logs_item =
+                    MenuItemBuilder::with_id("open_logs_dir", "ログフォルダを開く")
+                        .build(handle)?;
 
                 let file_submenu = SubmenuBuilder::new(handle, "ファイル")
                     .item(&open_data_item)
                     .item(&open_receipts_item)
+                    .item(&open_snapshots_item)
+                    .separator()
+                    .item(&open_logs_item)
                     .build()?;
 
                 let edit_submenu = SubmenuBuilder::new(handle, "編集")
@@ -145,15 +154,29 @@ pub fn run() {
                 app.set_menu(menu)?;
                 app.on_menu_event(|app_handle, event| {
                     let id = event.id().as_ref();
-                    if id == "open_data_dir" || id == "open_receipts_dir" {
-                        if let Ok(base) = app_handle.path().app_data_dir() {
-                            let target = if id == "open_receipts_dir" {
-                                base.join("receipts")
-                            } else {
-                                base
-                            };
-                            open_in_finder(&target);
+                    match id {
+                        "open_data_dir" => {
+                            if let Ok(base) = app_handle.path().app_data_dir() {
+                                open_in_finder(&base);
+                            }
                         }
+                        "open_receipts_dir" => {
+                            if let Ok(base) = app_handle.path().app_data_dir() {
+                                open_in_finder(&base.join("receipts"));
+                            }
+                        }
+                        "open_snapshots_dir" => {
+                            if let Ok(base) = app_handle.path().app_data_dir() {
+                                open_in_finder(&base.join("snapshots"));
+                            }
+                        }
+                        "open_logs_dir" => {
+                            // ~/Library/Logs/dev.kaikei.app/
+                            if let Ok(logs) = app_handle.path().app_log_dir() {
+                                open_in_finder(&logs);
+                            }
+                        }
+                        _ => {}
                     }
                 });
             }

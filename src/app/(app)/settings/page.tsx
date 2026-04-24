@@ -25,6 +25,7 @@ import {
   getLicenseKey,
   saveLicenseKey,
   verifyLicense,
+  probeApiServer,
 } from "@/lib/ai-ocr";
 import Link from "next/link";
 
@@ -57,10 +58,15 @@ export default function SettingsPage() {
   const [licenseInfo, setLicenseInfo] = useState<LicenseInfo | null>(null);
   const [licenseBusy, setLicenseBusy] = useState(false);
   const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
+  // API サーバー生存フラグ (未デプロイなら false)
+  const [apiAlive, setApiAlive] = useState<boolean | null>(null);
 
-  // 初回ロードで既存キーを読み込み & verify
+  // 初回ロードで API サーバー probe + 既存キーを読み込み & verify
   useEffect(() => {
     (async () => {
+      const alive = await probeApiServer();
+      setApiAlive(alive);
+      if (!alive) return; // API 死んでたら verify スキップ
       try {
         const key = await getLicenseKey();
         if (!key) return;
@@ -257,6 +263,8 @@ export default function SettingsPage() {
       return;
     setBusy(true);
     setMessage(null);
+    // rollback 関数は catch からも見える必要があるので try の外で宣言
+    let rollback: () => Promise<void> = async () => {};
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const {
@@ -287,6 +295,34 @@ export default function SettingsPage() {
       }
 
       const bytes = await readFile(path);
+
+      // ── 復元前スナップショット ──
+      // 失敗してもロールバックできるように、現在の kaikei.db を
+      // kaikei.db.pre-restore にコピーしておく。
+      let preRestoreCreated = false;
+      try {
+        const current = await readFile("kaikei.db", {
+          baseDir: BaseDirectory.AppData,
+        });
+        await writeFile("kaikei.db.pre-restore", current, {
+          baseDir: BaseDirectory.AppData,
+        });
+        preRestoreCreated = true;
+      } catch {
+        // 現DB が無い = 初回なので snapshot 不要
+      }
+
+      rollback = async () => {
+        if (!preRestoreCreated) return;
+        try {
+          const snap = await readFile("kaikei.db.pre-restore", {
+            baseDir: BaseDirectory.AppData,
+          });
+          await writeFile("kaikei.db", snap, {
+            baseDir: BaseDirectory.AppData,
+          });
+        } catch {}
+      };
 
       if (path.toLowerCase().endsWith(".zip")) {
         // ZIP 展開
@@ -325,21 +361,23 @@ export default function SettingsPage() {
         }
 
         if (!dbRestored) {
-          setMessage("バックアップ ZIP に kaikei.db が含まれていません");
+          await rollback();
+          setMessage("バックアップ ZIP に kaikei.db が含まれていません。元のデータに戻しました。");
           setBusy(false);
           return;
         }
         setMessage(
-          `復元しました (DB + 領収書 ${receiptCount}件)\nアプリを再起動してください。`
+          `復元しました (DB + 領収書 ${receiptCount}件)\nアプリを再起動してください。\n復元前のデータは kaikei.db.pre-restore に保存されています (問題があれば削除してリネーム)。`
         );
       } else {
         // 旧フォーマット: .db のみ
         await writeFile("kaikei.db", bytes, { baseDir: BaseDirectory.AppData });
-        setMessage("復元しました。アプリを再起動してください。\n(旧フォーマットのため画像は復元されません)");
+        setMessage("復元しました。アプリを再起動してください。\n(旧フォーマットのため画像は復元されません)\n復元前のデータは kaikei.db.pre-restore に保存されています。");
       }
     } catch (e) {
       console.error(e);
-      setMessage(`復元に失敗しました: ${(e as Error).message}`);
+      await rollback();
+      setMessage(`復元に失敗しました: ${(e as Error).message}\n元のデータに自動でロールバックしました。`);
     } finally {
       setBusy(false);
     }
@@ -495,6 +533,16 @@ export default function SettingsPage() {
             領収書の写真から店名・金額・日付・勘定科目を AI が自動で読み取ります。
             領収書のドロップ時に「AI 解析＋仕訳化」トグルが ON であれば取り込んだ瞬間に処理が走ります。
           </p>
+
+          {apiAlive === false && (
+            <div className="rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-900">
+              <b>⚠️ AI 読み取りサービスは現在準備中です。</b>
+              <br />
+              サーバー (<code>api.kaikei-local.com</code>) が未稼働です。
+              当面はオフラインの Tesseract OCR のみご利用いただけます。
+              正式公開までお待ちください。
+            </div>
+          )}
 
           {/* ライセンスキー入力欄 */}
           <div className="rounded-md border p-3 space-y-2">

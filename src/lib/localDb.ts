@@ -25,14 +25,60 @@ function notifyDbError(e: unknown): void {
   ) {
     return;
   }
-  // toast 発火 (ブラウザ環境でない or Toaster 未マウント時は no-op)
+  const friendly = translateDbError(msg);
   void import("@/lib/toast")
-    .then(({ toast }) => {
-      toast.error(
-        `データベースエラー: ${msg.length > 160 ? msg.slice(0, 160) + "…" : msg}`
-      );
-    })
+    .then(({ toast }) => toast.error(friendly))
     .catch(() => {});
+}
+
+/**
+ * SQLite / Tauri の英語エラーメッセージを日本語に翻訳。
+ * パターンマッチしないものは先頭 160 文字を「データベースエラー:」プレフィックスで出す。
+ */
+function translateDbError(msg: string): string {
+  // 接続エラー系
+  if (/unable to open database file|failed to open database/i.test(msg)) {
+    return "データベースファイルを開けませんでした。アプリを再起動してください。";
+  }
+  if (/database is locked/i.test(msg)) {
+    return "データベースが他の操作でロックされています。少し待ってもう一度お試しください。";
+  }
+  if (/disk I\/O error|disk full|no space/i.test(msg)) {
+    return "ディスク書き込みエラー。Mac の空き容量を確認してください。";
+  }
+  // スキーマ系
+  if (/no such table/i.test(msg)) {
+    const t = msg.match(/no such table:?\s*(\S+)/i)?.[1] ?? "";
+    return `データベースのテーブルが見つかりません${t ? ` (${t})` : ""}。アプリを再起動して初期化してください。`;
+  }
+  if (/no such column/i.test(msg)) {
+    const c = msg.match(/no such column:?\s*(\S+)/i)?.[1] ?? "";
+    return `データ構造が想定と異なります${c ? ` (列: ${c})` : ""}。最新版へアップデートしてください。`;
+  }
+  // 制約違反系
+  if (/UNIQUE constraint failed/i.test(msg)) {
+    return "同じデータが既に登録されています (UNIQUE 制約違反)。";
+  }
+  if (/FOREIGN KEY constraint failed/i.test(msg)) {
+    return "関連するデータが他で参照されています (外部キー制約違反)。先に参照側を削除してください。";
+  }
+  if (/NOT NULL constraint failed/i.test(msg)) {
+    const col = msg.match(/NOT NULL constraint failed:?\s*(\S+)/i)?.[1] ?? "";
+    return `必須項目が未入力です${col ? ` (${col})` : ""}。`;
+  }
+  if (/CHECK constraint failed/i.test(msg)) {
+    return "入力値が不正です (チェック制約違反)。";
+  }
+  // SQL 構文系
+  if (/syntax error/i.test(msg)) {
+    return "SQL 構文エラー。アプリのバグの可能性があります。開発者にご連絡ください。";
+  }
+  // Tauri API 系
+  if (/Cannot read propert(y|ies).*invoke/i.test(msg)) {
+    return "Tauri API が利用できない環境です。デスクトップアプリとして起動してください。";
+  }
+  // 汎用フォールバック
+  return `データベースエラー: ${msg.length > 160 ? msg.slice(0, 160) + "…" : msg}`;
 }
 
 let _db: Database | null = null;
