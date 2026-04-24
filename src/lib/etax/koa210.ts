@@ -313,7 +313,15 @@ function buildPage1(ctx: EtaxContext, d: BlueReturnData): XmlNode {
 }
 
 function buildPage2(_ctx: EtaxContext, d: BlueReturnData): XmlNode {
-  const monthlyChildren: XmlNode[] = [];
+  // KOA210-2 (FA3026 月別売上) は帳票右上に「令和N年分」「フリガナ/氏名」欄を持つ。
+  // IT 部 NENBUN / NOZEISHA_NM(_KN) を IDREF で参照しないと PDF 上で空表示になる。
+  const children: XmlNode[] = [
+    ref("AMF00538", "NENBUN"),
+    elc("AMF00540", [
+      ref("AMF00550", "NOZEISHA_NM_KN"),
+      ref("AMF00560", "NOZEISHA_NM"),
+    ]),
+  ];
   if (d.monthly && d.monthly.length === 12) {
     const kids: XmlNode[] = [];
     const monthTags = [
@@ -351,9 +359,9 @@ function buildPage2(_ctx: EtaxContext, d: BlueReturnData): XmlNode {
         el("AMF00990", Math.round(totalCost)),
       ])
     );
-    monthlyChildren.push(elc("AMF00580", kids));
+    children.push(elc("AMF00580", kids));
   }
-  return elc("KOA210-2", monthlyChildren, { page: 1 });
+  return elc("KOA210-2", children, { page: 1 });
 }
 
 /**
