@@ -35,7 +35,7 @@ const navigation = [
   { name: "スマホ取込", href: "/phone-upload", icon: Smartphone },
   { name: "仕訳帳", href: "/journals", icon: BookOpen },
   { name: "請求書", href: "/invoices", icon: FileSignature },
-  { name: "月次推移", href: "/reports", icon: BarChart3 },
+  { name: "月次レポート", href: "/reports", icon: BarChart3 },
 ];
 
 const navigation2 = [
