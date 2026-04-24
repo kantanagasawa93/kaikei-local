@@ -32,6 +32,7 @@ export default function NewReceiptPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [useAiOcr, setUseAiOcr] = useState(true);
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [ocrUsage, setOcrUsage] = useState<{ used: number; limit: number } | null>(null);
   // 同意ダイアログ: pendingFile を保持しておき、同意後に再試行する
   const [consentOpen, setConsentOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -76,7 +77,9 @@ export default function NewReceiptPage() {
         const apiKey = await getApiKey();
         if (apiKey) {
           const { base64, mediaType } = await fileToBase64(file);
-          result = await ocrWithClaude(base64, mediaType, apiKey);
+          const r = await ocrWithClaude(base64, mediaType, apiKey);
+          if (r.usage) setOcrUsage(r.usage);
+          result = r;
         } else {
           result = await processReceiptImage(file);
         }
@@ -310,6 +313,11 @@ export default function NewReceiptPage() {
               )}
               {useAiOcr && hasApiKey ? "AI 読み取り結果" : "OCR 読み取り結果"}
               <span className="text-xs font-normal text-muted-foreground">（必ず確認してください）</span>
+              {ocrUsage && useAiOcr && hasApiKey && (
+                <Badge variant="outline" className="ml-auto font-normal text-xs">
+                  今月 {ocrUsage.used} / {ocrUsage.limit} 枚
+                </Badge>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">

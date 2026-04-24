@@ -148,6 +148,42 @@ export async function saveLicenseKey(key: string): Promise<void> {
 export const getApiKey = getLicenseKey;
 export const saveApiKey = saveLicenseKey;
 
+/**
+ * API サーバーが生きているか確認する。
+ * 未デプロイだと AI OCR/ライセンス系機能が全滅するので、UI で
+ * 「有料プラン準備中」と表示するために使う。
+ *
+ * 判定: HEAD or OPTIONS で 2xx/3xx が返れば生存。TypeError/timeout なら死亡。
+ * 結果は 5分キャッシュ (頻繁に叩かない)。
+ */
+let _probeCache: { ok: boolean; at: number } | null = null;
+const PROBE_TTL_MS = 5 * 60 * 1000;
+
+export async function probeApiServer(): Promise<boolean> {
+  const now = Date.now();
+  if (_probeCache && now - _probeCache.at < PROBE_TTL_MS) return _probeCache.ok;
+  const base = await getApiBase();
+  try {
+    // 3秒 timeout
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(`${base}/api/license/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ license_key: "__probe__" }),
+      signal: controller.signal,
+    });
+    clearTimeout(t);
+    // 401 でもサーバー生存なので OK
+    const ok = res.status < 500;
+    _probeCache = { ok, at: now };
+    return ok;
+  } catch {
+    _probeCache = { ok: false, at: now };
+    return false;
+  }
+}
+
 // ──────────────────────────────────────────────────────────
 // AI OCR データ送信同意フラグ
 // ──────────────────────────────────────────────────────────

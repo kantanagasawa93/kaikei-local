@@ -123,6 +123,22 @@ export default function DashboardPage() {
 
       <ReceiptDropZone onImported={() => { loadStats(); loadRecentJournals(); }} />
 
+      {/* 消費税課税判定 (売上 1000万円超えで翌々年から課税事業者) */}
+      {stats.totalIncome >= 10_000_000 && (
+        <div className="rounded-md border border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-900">
+          <p className="font-medium mb-1">
+            ⚠️ 消費税の課税事業者になる可能性があります
+          </p>
+          <p className="text-xs leading-relaxed">
+            今年度の売上が <b>¥{stats.totalIncome.toLocaleString()}</b> で、
+            1,000 万円を超えています。基準期間の課税売上高が 1,000 万円超となる場合、
+            翌々年から消費税の納税義務が発生します
+            (インボイス登録済みなら翌年以降も課税事業者扱い)。
+            詳細は税務署・税理士にご相談ください。
+          </p>
+        </div>
+      )}
+
       <StaggerContainer className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StaggerItem>
           <Card>
