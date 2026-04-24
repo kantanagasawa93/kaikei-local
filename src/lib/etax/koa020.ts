@@ -49,24 +49,42 @@ export interface HaigushaInfo {
   name: string;
   mynumber?: string; // 個人番号 12桁
   birthday: WarekiDate;
-  shogaisha?: boolean; // 障害者
-  tokubetsu_shogaisha?: boolean; // 特別障害者
-  kokugai_kyoju?: boolean; // 国外居住
-  douikyo?: boolean; // 同居
+  shogaisha?: boolean; // 障 (ABY00060)
+  tokubetsu_shogaisha?: boolean; // 特障 (ABY00070)
+  kokugai_kyoju?: boolean; // 国外居住 (ABY00090)
+  nencho?: boolean; // 年末調整済 (ABY00100)
+  douikyo?: boolean; // 住民税 同一生計 (ABY00120)
+  bekkyo?: boolean; // 住民税 別居 (ABY00130)
 }
 
 /**
  * 扶養親族 (ABY00150 繰り返し)
+ *
+ * 区分マーク:
+ *   - tokutei_fuyo (特親): 特定扶養親族 (その年 12/31 で 19〜22歳)
+ *   - rojin_fuyo_dokyo (老人扶養 同居): 70歳以上で同居老親 → XSD上は「障」等と別で、別居老親以外は自動計算扱い
+ *     (ここではフラグのみ保持。別居老親は bekkyo_roshin)
+ *   - under16 (16): 16歳未満 (扶養控除対象外だが住民税計算で記載)
+ *   - bekkyo_roshin (別居): 別居老親
  */
 export interface FuyoShinzokuInfo {
   name: string;
   mynumber?: string;
-  zokugara: string; // 続柄 (子、父、母 など)
+  zokugara: string; // 続柄
   birthday: WarekiDate;
-  shogaisha?: boolean;
-  tokubetsu_shogaisha?: boolean;
-  kokugai_kyoju?: boolean;
-  douikyo?: boolean;
+  shogaisha?: boolean; // 障 (ABY00210)
+  tokubetsu_shogaisha?: boolean; // 特障 (ABY00220)
+  kokugai_kyoju?: boolean; // 国外 (ABY00235)
+  nencho?: boolean; // 年調 (ABY00250)
+  tokutei_fuyo?: boolean; // 特親 (ABY00253)
+  under16?: boolean; // 16歳未満 (ABY00270)
+  bekkyo_roshin?: boolean; // 別居老親 (ABY00280)
+  /**
+   * 同居の老人扶養親族であるかの判定用フラグ (70歳以上かつ同居)。
+   * 現 v23 XSD には単独の「同居老親」要素が無いため、表示フラグとしてのみ保持。
+   * 出力 XTX には影響しない (控除計算の参考値)。
+   */
+  rojin_fuyo_dokyo?: boolean;
 }
 
 /**
@@ -356,11 +374,15 @@ function buildABH(d: IncomeReturnData): XmlNode | undefined {
 
 /**
  * ABY (配偶者・扶養親族) を生成。
+ *
+ * KOA020-023 XSD 準拠。ABY00050/00080/00110 などの wrapper (障害者/国外居住/住民税)
+ * を省略せずに出力する。wrapper 以下の要素は全て minOccurs=0 なので、
+ * 該当フラグが立っていなければ wrapper ごと省略する。
  */
 function buildABY(d: IncomeReturnData): XmlNode | undefined {
   const children: XmlNode[] = [];
 
-  // 配偶者 ABY00010
+  // ── 配偶者 ABY00010 ──
   if (d.haigusha) {
     const h = d.haigusha;
     const row: XmlNode[] = [
@@ -368,22 +390,50 @@ function buildABY(d: IncomeReturnData): XmlNode | undefined {
       ...(h.mynumber ? [el("ABY00030", h.mynumber)] : []),
       elc("ABY00040", warekiChildren(h.birthday)),
     ];
-    if (h.shogaisha) row.push(el("ABY00060", "1"));
-    if (h.tokubetsu_shogaisha) row.push(el("ABY00070", "1"));
-    if (h.kokugai_kyoju) row.push(el("ABY00090", "1"));
-    if (h.douikyo) row.push(el("ABY00120", "1"));
+    // ABY00050 障害者
+    const shogaiInner: XmlNode[] = [];
+    if (h.shogaisha) shogaiInner.push(el("ABY00060", "1"));
+    if (h.tokubetsu_shogaisha) shogaiInner.push(el("ABY00070", "1"));
+    if (shogaiInner.length) row.push(elc("ABY00050", shogaiInner));
+    // ABY00080 国外居住
+    const kokugaiInner: XmlNode[] = [];
+    if (h.kokugai_kyoju) kokugaiInner.push(el("ABY00090", "1"));
+    if (h.nencho) kokugaiInner.push(el("ABY00100", "1"));
+    if (kokugaiInner.length) row.push(elc("ABY00080", kokugaiInner));
+    // ABY00110 住民税
+    const jyuminInner: XmlNode[] = [];
+    if (h.douikyo) jyuminInner.push(el("ABY00120", "1"));
+    if (h.bekkyo) jyuminInner.push(el("ABY00130", "1"));
+    if (jyuminInner.length) row.push(elc("ABY00110", jyuminInner));
     children.push(elc("ABY00010", row));
   }
 
-  // 扶養親族 ABY00150 (繰り返し)
+  // ── 扶養親族 ABY00150 (繰り返し, 最大4人) ──
   if (d.fuyo_shinzoku) {
-    for (const f of d.fuyo_shinzoku) {
+    for (const f of d.fuyo_shinzoku.slice(0, 4)) {
       const row: XmlNode[] = [
         el("ABY00160", f.name),
         ...(f.mynumber ? [el("ABY00170", f.mynumber)] : []),
         el("ABY00180", f.zokugara),
         elc("ABY00190", warekiChildren(f.birthday)),
       ];
+      // ABY00200 障害者
+      const shogaiInner: XmlNode[] = [];
+      if (f.shogaisha) shogaiInner.push(el("ABY00210", "1"));
+      if (f.tokubetsu_shogaisha) shogaiInner.push(el("ABY00220", "1"));
+      if (shogaiInner.length) row.push(elc("ABY00200", shogaiInner));
+      // ABY00230 国外居住
+      const kokugaiInner: XmlNode[] = [];
+      if (f.kokugai_kyoju) kokugaiInner.push(el("ABY00235", "1"));
+      if (f.nencho) kokugaiInner.push(el("ABY00250", "1"));
+      if (kokugaiInner.length) row.push(elc("ABY00230", kokugaiInner));
+      // ABY00253 特親 (特定扶養親族)
+      if (f.tokutei_fuyo) row.push(el("ABY00253", "1"));
+      // ABY00260 住民税
+      const jyuminInner: XmlNode[] = [];
+      if (f.under16) jyuminInner.push(el("ABY00270", "1"));
+      if (f.bekkyo_roshin) jyuminInner.push(el("ABY00280", "1"));
+      if (jyuminInner.length) row.push(elc("ABY00260", jyuminInner));
       children.push(elc("ABY00150", row));
     }
   }

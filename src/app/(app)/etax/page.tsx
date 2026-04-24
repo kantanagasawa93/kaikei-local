@@ -715,36 +715,83 @@ export default function EtaxPage() {
         </Card>
       )}
 
-      {/* ステップ4: e-Tax Web版で送信 */}
+      {/* ステップ4: 内容確認 → 本送信 */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">③ e-Tax Web版で署名・送信</CardTitle>
+          <CardTitle className="text-base">③ 内容確認 → 本送信</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <ol className="text-sm space-y-2 list-decimal pl-5">
-            <li>
-              PC ブラウザで <b>e-Tax Web版</b> を開く
-            </li>
-            <li>
-              上で生成した XTX ファイルをアップロード（「作成した申告・申請データを表示」メニュー）
-            </li>
-            <li>
-              帳票内容を確認 →「電子署名」メニュー
-            </li>
-            <li>
-              画面に表示されるQRコードをiPhoneの「<b>マイナポータル</b>」アプリで読み取り
-            </li>
-            <li>
-              マイナンバーカードをiPhoneにかざして署名 (PIN入力)
-            </li>
-            <li>
-              PC 側で「送信」→ 受信通知を保存
-            </li>
-          </ol>
+        <CardContent className="space-y-4">
+          <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 space-y-2">
+            <p className="font-medium">
+              📋 先に「内容確認」でスキーマ検証を通す (推奨)
+            </p>
+            <ol className="list-decimal pl-5 space-y-1 text-xs">
+              <li>
+                <a
+                  className="underline"
+                  href="https://login.e-tax.nta.go.jp/login/reception/loginIndividual"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  e-Tax マイページ
+                </a>
+                にログイン (マイナンバーカード + iPhone のマイナポータルアプリ)
+              </li>
+              <li>
+                マイページ下部「その他機能」→「<b>作成した申告・申請データ(拡張子「.xtx」)の表示</b>」
+              </li>
+              <li>
+                上で生成した XTX をアップロード →「次へ」→「全選択」→「帳票表示」
+              </li>
+              <li>
+                PDF をダウンロードし、各帳票の数値・氏名が正しいか確認
+              </li>
+            </ol>
+          </div>
+
+          <div className="rounded-md border p-3 text-sm space-y-2">
+            <p className="font-medium">🚀 本送信 (Mac ユーザーの現実解)</p>
+            <p className="text-xs text-muted-foreground">
+              e-Tax マイページの「内容確認」はスキーマ検証とPDF表示のみで、送信はできません。
+              Mac から確定申告を実送信するには以下のどちらか。
+            </p>
+            <ul className="text-xs space-y-1 list-disc pl-5">
+              <li>
+                <b>確定申告書等作成コーナー</b>
+                (keisan.nta.go.jp) でブラウザから新規入力 → そのまま送信。
+                kaikei の確認用PDFと同じ数値を手動転記。Mac/マイナンバーカードで完結
+              </li>
+              <li>
+                <b>e-Taxソフト(ダウンロード版)</b> は <b>Windows専用</b>。
+                Mac では Parallels/CrossOver 等で Windows を起動する必要あり
+              </li>
+              <li>
+                kaikei の XTX を直接読み込んで送信できる Mac ネイティブ手段は
+                <b>現時点で無し</b>（国税庁側の制約）
+              </li>
+            </ul>
+          </div>
+
           <div className="flex gap-2 flex-wrap">
             <Button onClick={openEtaxWeb}>
               <ExternalLink className="h-4 w-4 mr-1" />
-              e-Tax Web版を開く
+              e-Tax マイページを開く (内容確認)
+            </Button>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                const url =
+                  "https://www.keisan.nta.go.jp/kyoutu/ky/sm/top#bsctrl";
+                try {
+                  const { open } = await import("@tauri-apps/plugin-shell");
+                  await open(url);
+                } catch {
+                  window.open(url, "_blank");
+                }
+              }}
+            >
+              <ExternalLink className="h-4 w-4 mr-1" />
+              作成コーナーを開く (本送信)
             </Button>
             {taxReturn && taxReturn.status !== "submitted" && (
               <Button variant="outline" onClick={markSubmitted}>
