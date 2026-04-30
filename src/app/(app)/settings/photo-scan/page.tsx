@@ -32,6 +32,10 @@ import {
   type LaunchAgentStatus,
   type ScanLogRow,
 } from "@/lib/photo-scanner";
+import {
+  getAutoJournalMode,
+  setAutoJournalMode,
+} from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
 
 export default function PhotoScanSettingsPage() {
@@ -43,6 +47,7 @@ export default function PhotoScanSettingsPage() {
   const [scheduleTime, setScheduleTime] = useState<string>("21:00");
   const [agentBusy, setAgentBusy] = useState(false);
   const [logs, setLogs] = useState<ScanLogRow[]>([]);
+  const [autoJournal, setAutoJournalState] = useState(false);
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
@@ -51,6 +56,7 @@ export default function PhotoScanSettingsPage() {
     setAgent(a);
     if (a.time) setScheduleTime(a.time);
     setLogs(await recentScanLog(5));
+    setAutoJournalState(await getAutoJournalMode());
   };
 
   const handleScheduleEnable = async () => {
@@ -314,6 +320,42 @@ export default function PhotoScanSettingsPage() {
               plist: {agent.plist_path}
             </p>
           )}
+        </CardContent>
+      </Card>
+
+      {/* 自動仕訳モード (Phase 4) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">AI 自動仕訳モード</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            受信箱で「領収書」状態になった写真を、毎日のスキャン後に自動で
+            Claude OCR にかけて仕訳まで完了させます。
+            <strong className="text-foreground"> Claude API への画像送信が発生する</strong>
+            ため、ライセンスキー (有料プラン) が必要です。
+          </p>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            OFF の場合は受信箱に積まれた領収書を見て、ユーザがまとめて
+            「領収書をすべて自動仕訳」ボタンで処理する形になります。
+          </p>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoJournal}
+              onChange={async (e) => {
+                const v = e.target.checked;
+                setAutoJournalState(v);
+                await setAutoJournalMode(v);
+                toast.success(v ? "自動仕訳モードを有効化" : "自動仕訳モードを停止");
+              }}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">毎日のスキャン後に自動で Claude OCR + 仕訳作成</span>
+          </label>
+          <Link href="/settings/ai-ocr-log" className="text-xs text-primary underline">
+            AI OCR の送信履歴を確認 →
+          </Link>
         </CardContent>
       </Card>
 
