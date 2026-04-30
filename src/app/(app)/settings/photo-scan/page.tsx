@@ -24,7 +24,13 @@ import {
   requestAuth,
   scanNow,
   getLastScanUnix,
+  launchAgentStatus,
+  launchAgentInstall,
+  launchAgentUninstall,
+  recentScanLog,
   type AuthStatus,
+  type LaunchAgentStatus,
+  type ScanLogRow,
 } from "@/lib/photo-scanner";
 import { toast } from "@/lib/toast";
 
@@ -33,10 +39,44 @@ export default function PhotoScanSettingsPage() {
   const [lastScan, setLastScan] = useState<number>(0);
   const [requesting, setRequesting] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [agent, setAgent] = useState<LaunchAgentStatus>({ installed: false });
+  const [scheduleTime, setScheduleTime] = useState<string>("21:00");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [logs, setLogs] = useState<ScanLogRow[]>([]);
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
     setLastScan(await getLastScanUnix());
+    const a = await launchAgentStatus();
+    setAgent(a);
+    if (a.time) setScheduleTime(a.time);
+    setLogs(await recentScanLog(5));
+  };
+
+  const handleScheduleEnable = async () => {
+    setAgentBusy(true);
+    try {
+      const next = await launchAgentInstall(scheduleTime);
+      setAgent(next);
+      toast.success(`毎日 ${scheduleTime} に自動スキャンを設定しました`);
+    } catch (e) {
+      toast.error(`設定に失敗: ${(e as Error).message}`);
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
+  const handleScheduleDisable = async () => {
+    setAgentBusy(true);
+    try {
+      const next = await launchAgentUninstall();
+      setAgent(next);
+      toast.success("自動スキャンを停止しました");
+    } catch (e) {
+      toast.error(`停止に失敗: ${(e as Error).message}`);
+    } finally {
+      setAgentBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -215,20 +255,105 @@ export default function PhotoScanSettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Phase 3 placeholder */}
-      <Card className="border-dashed">
+      {/* 毎日自動スキャン (LaunchAgent) */}
+      <Card>
         <CardHeader>
-          <CardTitle className="text-base text-muted-foreground">
-            毎日決まった時間に自動スキャン (準備中)
-          </CardTitle>
+          <CardTitle className="text-lg">毎日決まった時間に自動スキャン</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            macOS LaunchAgent を使った定期スキャン (例: 毎日 21:00) は次の
-            アップデートで提供予定です。それまでは「今すぐスキャン」をお使いください。
+            macOS の LaunchAgent に登録します。アプリを閉じていても、毎日指定時間
+            になると裏でアプリが立ち上がってスキャンを実行 → 通知センターに結果が
+            表示されます。
           </p>
+
+          <div className="flex items-center gap-3">
+            <label className="text-sm">毎日</label>
+            <input
+              type="time"
+              value={scheduleTime}
+              onChange={(e) => setScheduleTime(e.target.value)}
+              disabled={agent.installed}
+              className="border rounded px-2 py-1 text-sm w-28"
+            />
+            <span className="text-sm">に実行</span>
+          </div>
+
+          <div className="flex items-center gap-3 pt-2">
+            {agent.installed ? (
+              <>
+                <div className="flex items-center gap-2 text-sm text-green-700">
+                  <CheckCircle2 className="h-4 w-4" />
+                  有効 (毎日 {agent.time})
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={agentBusy}
+                  onClick={handleScheduleDisable}
+                >
+                  停止する
+                </Button>
+              </>
+            ) : (
+              <Button
+                disabled={agentBusy || !isAuthorized}
+                onClick={handleScheduleEnable}
+              >
+                {agentBusy ? "登録中..." : "毎日 " + scheduleTime + " で自動化を有効化"}
+              </Button>
+            )}
+          </div>
+          {!isAuthorized && (
+            <p className="text-xs text-amber-700">
+              ※ 写真へのアクセス許可が必要です。先に上のセクションで許可してください。
+            </p>
+          )}
+          {agent.plist_path && (
+            <p className="text-[11px] text-muted-foreground font-mono break-all">
+              plist: {agent.plist_path}
+            </p>
+          )}
         </CardContent>
       </Card>
+
+      {/* 直近のスキャンログ */}
+      {logs.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">直近のスキャン履歴</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2 text-sm">
+              {logs.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex items-start gap-3 p-2 rounded border bg-card"
+                >
+                  <div className="flex-1">
+                    <div className="text-xs text-muted-foreground">
+                      {new Date(log.started_at).toLocaleString("ja-JP")} ·{" "}
+                      <span className="font-mono">{log.trigger}</span>
+                    </div>
+                    <div className="text-sm mt-0.5">
+                      {log.scanned_count} 枚スキャン / 領収書 {log.receipt_count} 枚
+                      {log.imported_count > 0 && ` / 自動仕訳 ${log.imported_count} 件`}
+                      {log.error && (
+                        <span className="text-red-600 ml-2">エラー</span>
+                      )}
+                    </div>
+                    {log.error && (
+                      <div className="text-[11px] text-red-700 mt-1 line-clamp-2">
+                        {log.error}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
