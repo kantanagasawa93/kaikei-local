@@ -3,15 +3,21 @@
  * 実データの e-Tax XTX (RKO0010 / RSH0010) を生成。
  *
  * 入力:
- *   ~/Downloads/仕訳帳 freee汎用形式 （2025年01月~2025年12月）.csv
- *   ~/Downloads/試算表：損益計算書_EatScene（…）.csv
- *   ~/Downloads/試算表：貸借対照表_EatScene（…）.csv
+ *   ~/Downloads/仕訳帳 freee汎用形式 （YYYY年01月~YYYY年12月）.csv
+ *   ~/Downloads/試算表：損益計算書_…（…）.csv
+ *   ~/Downloads/試算表：貸借対照表_…（…）.csv
  *
  * 出力:
  *   ~/Desktop/RKO0010_real.xtx
  *   ~/Desktop/RSH0010_real.xtx (消費税: 必要なら)
  *
- * 納税者情報はダミー (EatScene 事業所のサンプル). 実申告には差し替え必要。
+ * 納税者情報・会計年度は設定ファイルから読み込む:
+ *   優先順位: --config=<path> > ./etax-config.json > ~/.kaikei/etax-config.json
+ *   存在しない場合はテンプレを書き出して exit(1)。
+ *
+ * CLI:
+ *   --year=2025      会計年度を上書き
+ *   --config=path    設定ファイルパスを明示
  */
 
 import fs from "node:fs";
@@ -23,26 +29,84 @@ import { buildConsumptionTaxStandardXtx } from "../src/lib/etax/rsh0010.ts";
 const HOME = os.homedir();
 const DOWNLOADS = path.join(HOME, "Downloads");
 const DESKTOP = path.join(HOME, "Desktop");
-const PL_PATH = path.join(DOWNLOADS, "試算表：損益計算書_EatScene（期間:2025年01月～2025年12月、表示単位:円）.csv".replace(":", "："));
-const BS_PATH = path.join(DOWNLOADS, "試算表：貸借対照表_EatScene（期間:2025年01月～2025年12月、表示単位:円）.csv".replace(":", "："));
-const JOURNAL_PATH = path.join(DOWNLOADS, "仕訳帳 freee汎用形式 （2025年01月~2025年12月）.csv");
 
-// PL/BS のファイル名はコロンが特殊。実際の名前で探す
-function findFile(prefix) {
-  const files = fs.readdirSync(DOWNLOADS);
-  return files.find((f) => f.startsWith(prefix));
+// ──────────────────────────────────────────────────────────
+// CLI / 設定ファイル
+// ──────────────────────────────────────────────────────────
+const argv = process.argv.slice(2);
+const arg = (k) => {
+  const a = argv.find((x) => x.startsWith(`--${k}=`));
+  return a ? a.slice(k.length + 3) : null;
+};
+
+const CONFIG_TEMPLATE = {
+  fiscalYear: new Date().getFullYear() - 1,
+  taxpayer: {
+    zeimusho_cd: "00000",
+    zeimusho_nm: "(税務署名)",
+    name: "(氏名)",
+    name_kana: "(セイ メイ)",
+    birthday_wareki: { era: "平成", yy: 1, mm: 1, dd: 1 },
+    postal_code: "0000000",
+    address: "(住所)",
+    phone: "00000000000",
+    yago: "(屋号)",
+    shokugyo: "個人事業主",
+    jigyo_naiyo: "(事業内容)",
+    riyosha_shikibetsu_bango: "0000000000000000",
+  },
+};
+
+function resolveConfigPath() {
+  const explicit = arg("config");
+  if (explicit) return path.resolve(explicit);
+  const cwd = path.resolve("etax-config.json");
+  if (fs.existsSync(cwd)) return cwd;
+  return path.join(HOME, ".kaikei", "etax-config.json");
 }
-const plName = findFile("試算表：損益計算書");
-const bsName = findFile("試算表：貸借対照表");
-const plPath = plName ? path.join(DOWNLOADS, plName) : null;
-const bsPath = bsName ? path.join(DOWNLOADS, bsName) : null;
 
-if (!plPath || !bsPath) {
-  console.error("PL/BS CSV not found in Downloads");
+const configPath = resolveConfigPath();
+if (!fs.existsSync(configPath)) {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(CONFIG_TEMPLATE, null, 2) + "\n");
+  console.error("⚠️  設定ファイルが見つかりませんでした。テンプレを生成しました:");
+  console.error("    " + configPath);
+  console.error("    値を埋めて再実行してください。");
   process.exit(1);
 }
-if (!fs.existsSync(JOURNAL_PATH)) {
-  console.error("Journal CSV not found:", JOURNAL_PATH);
+
+const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+const fiscalYear = Number(arg("year")) || Number(config.fiscalYear) || new Date().getFullYear() - 1;
+if (!config.taxpayer) {
+  console.error("⚠️  config.taxpayer が未定義です:", configPath);
+  process.exit(1);
+}
+
+console.log(`[gen_real_xtx] config: ${configPath}`);
+console.log(`[gen_real_xtx] fiscal year: ${fiscalYear}`);
+
+const PERIOD_START = `${fiscalYear}-01-01`;
+const PERIOD_END = `${fiscalYear}-12-31`;
+
+// PL/BS/仕訳帳 のファイル名にはコロンや全角括弧が混じるため、prefix + 年で探す
+function findFile(prefix, mustInclude) {
+  const files = fs.readdirSync(DOWNLOADS);
+  return files.find((f) => f.startsWith(prefix) && (!mustInclude || f.includes(mustInclude)));
+}
+const yearStr = String(fiscalYear);
+const plName = findFile("試算表：損益計算書", yearStr);
+const bsName = findFile("試算表：貸借対照表", yearStr);
+const journalName = findFile("仕訳帳", yearStr);
+const plPath = plName ? path.join(DOWNLOADS, plName) : null;
+const bsPath = bsName ? path.join(DOWNLOADS, bsName) : null;
+const journalPath = journalName ? path.join(DOWNLOADS, journalName) : null;
+
+if (!plPath || !bsPath) {
+  console.error(`PL/BS CSV (${yearStr}) not found in ${DOWNLOADS}`);
+  process.exit(1);
+}
+if (!journalPath) {
+  console.error(`Journal CSV (${yearStr}) not found in ${DOWNLOADS}`);
   process.exit(1);
 }
 
@@ -151,7 +215,7 @@ for (const r of bsRows) {
 // ──────────────────────────────────────────────────────────
 // 仕訳帳 → 月別売上仕入
 // ──────────────────────────────────────────────────────────
-const journalText = fs.readFileSync(JOURNAL_PATH, "utf-8");
+const journalText = fs.readFileSync(journalPath, "utf-8");
 const journalRows = parseCSV(journalText);
 console.log("Journal rows:", journalRows.length);
 
@@ -219,13 +283,13 @@ const expenseMap = {
 // XTX 入力データ構築
 // ──────────────────────────────────────────────────────────
 const blue = {
-  jigyo_kikan_jiko_from: "2025-01-01",
-  jigyo_kikan_itaru_to: "2025-12-31",
+  jigyo_kikan_jiko_from: PERIOD_START,
+  jigyo_kikan_itaru_to: PERIOD_END,
   uriage: uriage,
   shiire: shiire,
   monthly: monthly,
   bs: {
-    kimatsu_date: "2025-12-31",
+    kimatsu_date: PERIOD_END,
     genkin_kimatsu: bsAccounts["現金"] || 0,
     sonota_yokin_kimatsu: (bsAccounts["西日本シティ（API）"] || 0) + (bsAccounts["楽天"] || 0) + (bsAccounts["モバイルSuica"] || 0),
     urikake_kimatsu: bsAccounts["売掛金"] || 0,
@@ -280,29 +344,16 @@ const income = {
   aoiro_tokubetsu_kojo: aoiro_kojo,
 };
 
+// 設定ファイル由来の納税者情報。sakuseiDay は今日の日付 (config に明示があれば優先)。
+const sakuseiDay =
+  config.sakuseiDay || new Date().toISOString().slice(0, 10);
+
 const ctx = {
-  fiscalYear: 2025,
-  sakuseiDay: "2026-04-23",
-  softName: "kaikei",
-  vendorName: "Personal",
-  taxpayer: {
-    // 香椎税務署 (福岡県)
-    zeimusho_cd: "10107",
-    zeimusho_nm: "香椎",
-    // 申告者本人
-    name: "永澤幹太",
-    name_kana: "ナガサワ カンタ",
-    // 生年月日: 1993年1月29日 = 平成5年1月29日
-    birthday_wareki: { era: "平成", yy: 5, mm: 1, dd: 29 },
-    postal_code: "8130045", // 福岡市東区みどりが丘
-    address: "福岡県福岡市東区みどりが丘3-12-10",
-    phone: "08017746358",
-    yago: "EatScene",
-    shokugyo: "個人事業主",
-    jigyo_naiyo: "飲食",
-    // 利用者識別番号 (16桁)
-    riyosha_shikibetsu_bango: "1737122600932098",
-  },
+  fiscalYear,
+  sakuseiDay,
+  softName: config.softName || "kaikei",
+  vendorName: config.vendorName || "Personal",
+  taxpayer: config.taxpayer,
 };
 
 const r = buildShotokuShinkokuXtx(ctx, { income, blue });
@@ -317,8 +368,8 @@ if (uriage > 0) {
   const kojo_zeigaku = Math.floor((shiire + totalExpense * 0.5) / 1.1 * 0.078);
   const sashihiki_zei = Math.max(0, shohizei - kojo_zeigaku);
   const cons = buildConsumptionTaxStandardXtx(ctx, {
-    kazei_from: "2025-01-01",
-    kazei_to: "2025-12-31",
+    kazei_from: PERIOD_START,
+    kazei_to: PERIOD_END,
     kazei_hyojun,
     shohizei,
     kojo_zeigaku,

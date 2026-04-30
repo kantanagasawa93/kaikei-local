@@ -51,3 +51,7 @@ next-env.d.ts
 # (依存 playwright が package.json に無く、各自の手元で都度書き捨てたもの。
 # 再利用する場合は scripts/ に移して deps を整理してから track する)
 /kaikei_*.mjs
+
+# scripts/gen_real_xtx.mjs が読み込む個人情報設定 (氏名・住所・利用者識別番号など)。
+# デフォルト位置は ~/.kaikei/etax-config.json だが、cwd 直下に置く運用も許容している。
+/etax-config.json
