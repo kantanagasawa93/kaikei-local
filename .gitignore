@@ -46,3 +46,8 @@ next-env.d.ts
 
 # ローカル Claude 設定
 /.claude/
+
+# プロジェクトルート直下の Playwright アドホック調査スクリプト
+# (依存 playwright が package.json に無く、各自の手元で都度書き捨てたもの。
+# 再利用する場合は scripts/ に移して deps を整理してから track する)
+/kaikei_*.mjs
