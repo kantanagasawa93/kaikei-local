@@ -35,6 +35,8 @@ import {
   type AuthStatus,
   type InboxRow,
 } from "@/lib/photo-scanner";
+import { autoJournalizeAllReceipts, getAutoJournalMode } from "@/lib/auto-journal";
+import { Sparkles } from "lucide-react";
 import { toast } from "@/lib/toast";
 
 export default function InboxPage() {
@@ -43,15 +45,47 @@ export default function InboxPage() {
   const [auth, setAuth] = useState<AuthStatus>("unknown");
   const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState<InboxRow["state"] | "all">("candidate");
+  const [autoMode, setAutoMode] = useState(false);
+  const [journalizing, setJournalizing] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
     setItems(await listInbox(filter === "all" ? undefined : filter));
+    setAutoMode(await getAutoJournalMode());
   };
 
   useEffect(() => {
     void refresh();
   }, [filter]);
+
+  const handleJournalizeAll = async () => {
+    if (journalizing) return;
+    setJournalizing(true);
+    setProgress({ done: 0, total: 0 });
+    try {
+      const result = await autoJournalizeAllReceipts((done, total) =>
+        setProgress({ done, total })
+      );
+      if (result.imported > 0) {
+        toast.success(
+          `${result.imported} 件を自動仕訳しました${
+            result.failed > 0 ? ` (失敗 ${result.failed} 件)` : ""
+          }`
+        );
+      } else if (result.total === 0) {
+        toast.info("領収書状態の写真がありません");
+      } else {
+        toast.error(`全 ${result.failed} 件失敗: ${result.errors[0] ?? ""}`);
+      }
+      await refresh();
+    } catch (e) {
+      toast.error(`自動仕訳に失敗: ${(e as Error).message}`);
+    } finally {
+      setJournalizing(false);
+      setProgress(null);
+    }
+  };
 
   const handleScan = async () => {
     if (scanning) return;
@@ -113,6 +147,19 @@ export default function InboxPage() {
           <Button onClick={handleScan} disabled={scanning || !isAuthorized}>
             <RefreshCw className={`h-4 w-4 mr-1 ${scanning ? "animate-spin" : ""}`} />
             {scanning ? "スキャン中..." : "今すぐスキャン"}
+          </Button>
+          <Button
+            variant="default"
+            onClick={handleJournalizeAll}
+            disabled={journalizing}
+            title="state=領収書 の写真を Claude OCR にかけて、receipts/journals を自動生成"
+          >
+            <Sparkles className={`h-4 w-4 mr-1 ${journalizing ? "animate-pulse" : ""}`} />
+            {journalizing
+              ? progress
+                ? `仕訳化中 ${progress.done}/${progress.total}`
+                : "仕訳化中..."
+              : "領収書をすべて自動仕訳"}
           </Button>
         </div>
       </div>
