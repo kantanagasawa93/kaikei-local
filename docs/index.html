@@ -295,6 +295,22 @@
       justify-content: center;
       font-size: 14px;
     }
+    /* SVG icon sizing per container (icons inherit currentColor) */
+    .trust-icon svg { width: 16px; height: 16px; }
+    .why-icon svg { width: 32px; height: 32px; }
+    .feature-icon svg { width: 22px; height: 22px; }
+    /* Inline icons used in body text (lists, headings) */
+    .ic {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      vertical-align: -0.15em;
+      flex-shrink: 0;
+    }
+    .ic-lg { width: 1.15em; height: 1.15em; vertical-align: -0.2em; }
+    .ic-success { color: #10b981; }
+    .ic-warn { color: #f97316; }
+    .ic-blue { color: #2563eb; }
 
     /* ===== CONTAINER ===== */
     .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
@@ -885,15 +901,15 @@
       基本機能ずっと無料
     </div>
     <div class="trust-item">
-      <span class="trust-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</span>
+      <span class="trust-icon" style="background:#eff6ff;color:#3b82f6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
       完全オフライン保存
     </div>
     <div class="trust-item">
-      <span class="trust-icon" style="background:#fff7ed;color:#f97316;">&#9989;</span>
+      <span class="trust-icon" style="background:#fff7ed;color:#f97316;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></span>
       e-Tax 実機検証済み
     </div>
     <div class="trust-item">
-      <span class="trust-icon" style="background:#ede9fe;color:#8b5cf6;">&#128196;</span>
+      <span class="trust-icon" style="background:#ede9fe;color:#8b5cf6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
       オープンソース
     </div>
   </div>
@@ -957,7 +973,7 @@
     <p class="section-lead">freee や マネーフォワードのようなクラウドサービスとは、設計思想がまるで違います。</p>
     <div class="why-grid">
       <div class="why-card">
-        <div class="why-icon" style="background:#eff6ff;color:#2563eb;">&#128274;</div>
+        <div class="why-icon" style="background:#eff6ff;color:#2563eb;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
         <h3>データはあなたのMacにだけ</h3>
         <p>SQLite ファイルとしてローカルに保存。クラウドに送信しないので、サービス停止・データ漏洩・規約変更でデータが消えることがありません。</p>
       </div>
@@ -967,7 +983,7 @@
         <p>仕訳から青色申告決算書、e-Tax XTX 出力まで全部無料。月額 1,000 円 × 数年というクラウドの累積コストがかかりません。</p>
       </div>
       <div class="why-card">
-        <div class="why-icon" style="background:#fff7ed;color:#f97316;">&#9889;</div>
+        <div class="why-icon" style="background:#fff7ed;color:#f97316;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
         <h3>Mac ネイティブで軽い</h3>
         <p>Tauri ベースの 32MB ネイティブアプリ。Web アプリのようなページ遷移待ちがなく、オフラインでも瞬時に開く。M1/M2/M3/M4 にネイティブ対応。</p>
       </div>
@@ -981,7 +997,7 @@
     <span class="section-eyebrow">For foreign residents</span>
     <h2>日本在住の外国人の方も使えます<br><small style="font-size:60%;font-weight:500;color:var(--muted);letter-spacing:0;">For foreign residents in Japan</small></h2>
     <div class="fr-card">
-      <h3>🇯🇵 日本での確定申告にそのまま使えます</h3>
+      <h3>日本での確定申告にそのまま使えます</h3>
       <p>
         外国籍の個人事業主・フリーランスの方も、日本での確定申告 (e-Tax) に対応した会計データを KAIKEI LOCAL で生成できます。利用者識別番号は税務署で英語フォーム提出可能です。
       </p>
@@ -989,11 +1005,11 @@
         Foreign residents running their own business or freelancing in Japan can use KAIKEI LOCAL to prepare their personal income tax return. The app generates standard e-Tax XTX files (RKO0010 / RSH0010) accepted by the National Tax Agency — same format used by Japanese citizens.
       </p>
       <ul>
-        <li>✅ 国税庁 e-Tax 仕様の XTX を生成 (RKO0010 / RSH0010)</li>
-        <li>✅ 65万円青色申告控除に対応 (複式簿記)</li>
-        <li>✅ Generates NTA-compliant XTX files for both 所得税 and 消費税</li>
-        <li>🚧 英語 UI / ローマ字氏名→カタカナ自動変換 / 在留カード番号フィールドは順次追加予定</li>
-        <li>🚧 Planned: English UI, Romaji-to-Katakana auto-conversion, Residence Card field</li>
+        <li><svg class="ic ic-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>国税庁 e-Tax 仕様の XTX を生成 (RKO0010 / RSH0010)</li>
+        <li><svg class="ic ic-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>65万円青色申告控除に対応 (複式簿記)</li>
+        <li><svg class="ic ic-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>Generates NTA-compliant XTX files for both 所得税 and 消費税</li>
+        <li><svg class="ic ic-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>英語 UI / ローマ字氏名→カタカナ自動変換 / 在留カード番号フィールドは順次追加予定</li>
+        <li><svg class="ic ic-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Planned: English UI, Romaji-to-Katakana auto-conversion, Residence Card field</li>
       </ul>
       <div class="fr-actions">
         <a href="en/" class="fr-cta primary">Read in English →</a>
@@ -1011,7 +1027,7 @@
     <p class="section-lead">青色申告 65 万円控除に必要な複式簿記から、インボイス対応の請求書発行まで。</p>
     <div class="features-grid">
       <div class="feature-card">
-        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
+        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
         <h3>完全オフライン</h3>
         <p>仕訳、領収書、請求書...全てMacのローカルに保存。クラウドへのデータ送信は一切なし。あなたの財務データは、あなただけのもの。</p>
         <div class="feature-shot"><img src="assets/screenshots/local-storage.png" alt="ローカル保存設定画面" loading="lazy"></div>
@@ -1022,24 +1038,24 @@
         <p>仕訳・領収書管理・青色申告決算書・所得税/消費税計算・e-Tax 用 XTX 出力まで、すべて無料で利用可能。サブスクも買い切り料金もありません。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128247;</div>
+        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></div>
         <h3>スマホで撮影 → 即取込</h3>
         <p>アプリが表示するQRコードをスマホで読み取り、写真を撮って送信。同じWi-Fi内でLAN完結。スマホ側のアプリインストールは不要です。</p>
         <div class="feature-shot"><img src="assets/screenshots/phone-capture.png" alt="スマホ撮影連携画面" loading="lazy"></div>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128218;</div>
+        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
         <h3>青色申告 65 万円控除対応</h3>
         <p>複式簿記の仕訳帳、月次推移の損益計算書・貸借対照表、家事按分、固定資産台帳、減価償却まで。e-Tax 提出に対応した青色申告決算書を生成。</p>
         <div class="feature-shot"><img src="assets/screenshots/blue-return.png" alt="青色申告決算書画面" loading="lazy"></div>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#9889;</div>
+        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
         <h3>自動仕訳ルール</h3>
         <p>銀行・クレカのCSVを取り込むと、登録したルールで勘定科目を自動推測。「Apple→通信費」のように使うほど正答率が上がる学習型エンジン。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#128196;</div>
+        <div class="feature-icon" style="background:#fff7ed;color:#f97316;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>
         <h3>適格請求書 (インボイス)</h3>
         <p>登録番号・税率ごとの税額計算に対応した PDF を出力。取引先マスタ連携、源泉徴収にも対応。発注書・領収書も同じテンプレート系で発行可能。</p>
         <div class="feature-shot"><img src="assets/screenshots/invoice.png" alt="適格請求書発行画面" loading="lazy"></div>
@@ -1157,7 +1173,7 @@
       標準的なヘッダ (日付/摘要/入金/出金/残高) なら汎用パーサで取り込めます。
     </p>
 
-    <h3 class="bank-section-label">🏦 銀行 <span class="count">25 行</span></h3>
+    <h3 class="bank-section-label"><svg class="ic ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></svg>銀行 <span class="count">25 行</span></h3>
     <div class="bank-grid" style="margin-bottom:32px;">
       <div class="bank-chip" style="--brand:#003f8e;"><span class="bank-bar"></span>みずほ銀行</div>
       <div class="bank-chip" style="--brand:#c8102e;"><span class="bank-bar"></span>三菱UFJ銀行</div>
@@ -1186,7 +1202,7 @@
       <div class="bank-chip" style="--brand:#e50012;"><span class="bank-bar"></span>東邦銀行</div>
     </div>
 
-    <h3 class="bank-section-label">💳 クレジットカード <span class="count">12 社</span></h3>
+    <h3 class="bank-section-label"><svg class="ic ic-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>クレジットカード <span class="count">12 社</span></h3>
     <div class="bank-grid">
       <div class="bank-chip" style="--brand:#bf0000;"><span class="bank-bar"></span>楽天カード</div>
       <div class="bank-chip" style="--brand:#1e8b4e;"><span class="bank-bar"></span>三井住友カード</div>
@@ -1217,32 +1233,32 @@
     <p class="section-lead">財務データを預ける以上、信頼の根拠は明示しておくべきだと考えています。</p>
     <div class="features-grid">
       <div class="feature-card">
-        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
+        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
         <h3>完全オフライン動作</h3>
         <p>仕訳・領収書・請求書・確定申告データはすべて Mac のローカル SQLite ファイルに保存。クラウドへのバックアップ送信も一切ありません。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">&#128737;&#65039;</div>
+        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
         <h3>データは自分のもの</h3>
         <p>~/Library/Application Support/dev.kaikei.app/ にファイルとして存在。バックアップの ZIP 化、Finder からの直接アクセス、他 Mac への移行も自由。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128257;</div>
+        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></div>
         <h3>日次自動バックアップ</h3>
         <p>アプリ起動時に DB を snapshots/ に自動保存。直近 7 日分保持。復元時も自動で pre-restore スナップショットを作成するので、失敗時に安全に戻せます。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#128196;</div>
+        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></div>
         <h3>オープンソース</h3>
         <p><a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub で全コードを公開</a>。データの取り扱いも第三者が検証可能。隠れた外部送信はありません。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128269;</div>
+        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
         <h3>AI 送信は明示同意制</h3>
         <p>AI 読み取り機能の画像送信は初回利用時に明示同意ダイアログを表示。送信先・内容・保存ポリシーを開示。同意しない場合はオフライン OCR が自動で動作。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#9989;</div>
+        <div class="feature-icon" style="background:#fff7ed;color:#f97316;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
         <h3>e-Tax 実機で検証済み</h3>
         <p>令和 7 年分 (2025 年分) の所得税申告 XTX は e-Tax マイページの「データ内容確認」機能でパース・帳票表示まで通過確認済み。</p>
       </div>
@@ -1254,7 +1270,7 @@
 <section id="ai-plan" style="background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);">
   <div class="container">
     <span class="section-eyebrow">Optional</span>
-    <h2>✨ AI 読み取りプラン</h2>
+    <h2><svg class="ic ic-blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right:6px;vertical-align:-0.18em;"><path d="M12 3l1.7 4.6L18 9l-4.3 1.4L12 15l-1.7-4.6L6 9l4.3-1.4z"/><path d="M19 14l.7 1.9L21 16.5l-1.3.5L19 19l-.7-1.9L17 16.5l1.3-.6z" opacity=".7"/></svg>AI 読み取りプラン</h2>
     <p class="section-lead">
       領収書の写真を入れるだけで、店名・金額・日付を AI が自動で読み取る追加機能。<br>
       面倒な手入力から解放されます。基本機能は無料のままご利用いただけます。
@@ -1339,7 +1355,7 @@
   <div class="hero-price-note">基本機能ずっと無料 / AI 読み取りのみ任意の有料プラン</div>
   <div class="cta-actions">
     <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="hero-cta">
-      ⬇︎ Mac 版をダウンロード (.dmg)
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right:8px;vertical-align:-0.18em;"><path d="M12 5v14M5 12l7 7 7-7"/></svg>Mac 版をダウンロード (.dmg)
     </a>
     <a href="install.html" class="hero-cta hero-cta-secondary">
       開き方ガイド →
