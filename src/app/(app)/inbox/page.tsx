@@ -59,7 +59,10 @@ export default function InboxPage() {
     try {
       const result = await scanNow("manual");
       if (result.newPhotos > 0) {
-        toast.success(`新規 ${result.newPhotos} 枚を取り込みました`);
+        const receiptMsg = result.receiptCount > 0
+          ? ` (うち領収書 ${result.receiptCount} 枚)`
+          : "";
+        toast.success(`新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}`);
       } else if (result.scanned === 0) {
         toast.info("新規の写真はありませんでした");
       } else {

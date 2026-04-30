@@ -4,6 +4,9 @@ mod migrations;
 #[cfg(target_os = "macos")]
 mod photos;
 
+#[cfg(target_os = "macos")]
+mod vision;
+
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -51,6 +54,25 @@ async fn photos_request_authorization() -> String {
     #[cfg(not(target_os = "macos"))]
     {
         "unsupported".to_string()
+    }
+}
+
+/// Vision.framework で画像のテキストを認識して返す。完全ローカル、ネット送信なし。
+/// 結果: { lines: string[], joined: string, language: "ja"|"en" }
+#[tauri::command]
+async fn vision_recognize_text(file_path: String) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let result =
+            tokio::task::spawn_blocking(move || vision::recognize_text(&file_path))
+                .await
+                .map_err(|e| format!("join: {}", e))??;
+        Ok(serde_json::to_value(result).unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = file_path;
+        Err("vision OCR is only supported on macOS".into())
     }
 }
 
@@ -284,6 +306,7 @@ pub fn run() {
             photos_authorization_status,
             photos_request_authorization,
             photos_scan_recent,
+            vision_recognize_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
