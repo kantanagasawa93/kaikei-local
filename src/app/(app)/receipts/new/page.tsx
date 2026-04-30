@@ -17,8 +17,10 @@ import {
   hasAiOcrConsent,
   setAiOcrConsent,
 } from "@/lib/ai-ocr";
+import { compressImageForOcr } from "@/lib/image-compression";
 import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
 import { supabase } from "@/lib/supabase";
+import { toast } from "@/lib/toast";
 import type { OcrResult } from "@/types";
 import { ArrowLeft, Sparkles, Save, Zap } from "lucide-react";
 import Link from "next/link";
@@ -65,27 +67,38 @@ export default function NewReceiptPage() {
   };
 
   const runOcr = async (file: File) => {
-    setSelectedFile(file);
     setIsProcessing(true);
     setError(null);
 
     try {
+      // アップロード前に画像を縮小 (長辺 1600px / JPEG q=0.85)。
+      // 4MB の iPhone 写真が ~300KB になるため OCR と Storage の両方が高速化する。
+      // Storage にも縮小版を保存するので、ここで selectedFile も差し替える。
+      const compressed = await compressImageForOcr(file);
+      const workFile = compressed.file;
+      setSelectedFile(workFile);
+      if (compressed.compressed) {
+        const before = (compressed.originalBytes / 1024).toFixed(0);
+        const after = (compressed.resultBytes / 1024).toFixed(0);
+        console.log(`[ocr] image compressed: ${before}KB → ${after}KB`);
+      }
+
       let result: OcrResult;
 
       if (useAiOcr && hasApiKey) {
         // Claude API で高精度読み取り
         const apiKey = await getApiKey();
         if (apiKey) {
-          const { base64, mediaType } = await fileToBase64(file);
+          const { base64, mediaType } = await fileToBase64(workFile);
           const r = await ocrWithClaude(base64, mediaType, apiKey);
           if (r.usage) setOcrUsage(r.usage);
           result = r;
         } else {
-          result = await processReceiptImage(file);
+          result = await processReceiptImage(workFile);
         }
       } else {
         // 従来の Tesseract OCR
-        result = await processReceiptImage(file);
+        result = await processReceiptImage(workFile);
       }
 
       setOcrResult(result);
@@ -105,131 +118,167 @@ export default function NewReceiptPage() {
     }
   };
 
-  const handleSave = async () => {
+  /**
+   * 楽観的 UI: クリック直後に画面遷移し、Storage アップロード + DB 書込みは
+   * バックグラウンドで継続する。完了/失敗は toast で通知する。
+   *
+   * 体感的に「保存ボタンを押したら一覧に戻ってる」状態を作る。リスト側は
+   * 自動再フェッチしないので、トーストで成功を伝えるのが UX 的に重要。
+   *
+   * 失敗時はトーストにエラー内容を出す。再アップロードは一覧から手動で。
+   */
+  const handleSave = () => {
     if (!selectedFile) return;
+    if (isSaving) return;
     setIsSaving(true);
 
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("認証が必要です");
+    // 遷移前にスナップショットを取る (コンポーネント unmount 後でも参照されるため)
+    const snapshot = {
+      file: selectedFile,
+      ocrText: ocrResult?.raw_text || null,
+      vendorName: vendorName || null,
+      amount: amount ? parseInt(amount, 10) : null,
+      date: date || null,
+      accountCode: accountCode || null,
+      accountName: accountName || null,
+    };
 
-      // 画像をSupabase Storageにアップロード
-      const fileName = `${user.id}/${Date.now()}-${selectedFile.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("receipts")
-        .upload(fileName, selectedFile);
+    toast.info("領収書を保存中...");
+    router.push("/receipts");
 
-      if (uploadError) throw uploadError;
+    // fire-and-forget. unmount 後も module-level supabase client + window-event toast で完結する。
+    void (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("認証が必要です");
 
-      const { data: urlData } = supabase.storage
-        .from("receipts")
-        .getPublicUrl(fileName);
+        const fileName = `${user.id}/${Date.now()}-${snapshot.file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from("receipts")
+          .upload(fileName, snapshot.file);
+        if (uploadError) throw uploadError;
 
-      // 領収書レコードを保存
-      const { error: insertError } = await supabase.from("receipts").insert({
-        user_id: user.id,
-        image_url: urlData.publicUrl,
-        ocr_text: ocrResult?.raw_text || null,
-        vendor_name: vendorName || null,
-        amount: amount ? parseInt(amount, 10) : null,
-        date: date || null,
-        account_code: accountCode || null,
-        account_name: accountName || null,
-        status: "processed",
-      });
+        const { data: urlData } = supabase.storage
+          .from("receipts")
+          .getPublicUrl(fileName);
 
-      if (insertError) throw insertError;
-
-      router.push("/receipts");
-    } catch (error) {
-      console.error("保存に失敗しました:", error);
-      setError("保存に失敗しました。もう一度お試しください。");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleSaveAndCreateJournal = async () => {
-    if (!selectedFile) return;
-    setIsSaving(true);
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("認証が必要です");
-
-      const fileName = `${user.id}/${Date.now()}-${selectedFile.name}`;
-      await supabase.storage.from("receipts").upload(fileName, selectedFile);
-
-      const { data: urlData } = supabase.storage
-        .from("receipts")
-        .getPublicUrl(fileName);
-
-      // 領収書を保存
-      const { data: receipt, error: insertError } = await supabase
-        .from("receipts")
-        .insert({
+        const { error: insertError } = await supabase.from("receipts").insert({
           user_id: user.id,
           image_url: urlData.publicUrl,
-          ocr_text: ocrResult?.raw_text || null,
-          vendor_name: vendorName || null,
-          amount: amount ? parseInt(amount, 10) : null,
-          date: date || null,
-          account_code: accountCode || null,
-          account_name: accountName || null,
-          status: "confirmed",
-        })
-        .select()
-        .single();
+          ocr_text: snapshot.ocrText,
+          vendor_name: snapshot.vendorName,
+          amount: snapshot.amount,
+          date: snapshot.date,
+          account_code: snapshot.accountCode,
+          account_name: snapshot.accountName,
+          status: "processed",
+        });
+        if (insertError) throw insertError;
 
-      if (insertError) throw insertError;
+        toast.success("領収書を保存しました");
+      } catch (error) {
+        console.error("保存に失敗しました:", error);
+        toast.error(
+          `保存に失敗しました: ${(error as Error).message ?? "不明なエラー"}`
+        );
+      }
+    })();
+  };
 
-      // 仕訳を自動作成
-      const journalDate = date || new Date().toISOString().split("T")[0];
-      const amountNum = amount ? parseInt(amount, 10) : 0;
+  const handleSaveAndCreateJournal = () => {
+    if (!selectedFile) return;
+    if (isSaving) return;
+    setIsSaving(true);
 
-      const { data: journal, error: journalError } = await supabase
-        .from("journals")
-        .insert({
-          user_id: user.id,
-          date: journalDate,
-          description: `${vendorName || "不明"} - ${accountName || "経費"}`,
-          receipt_id: receipt.id,
-        })
-        .select()
-        .single();
+    const snapshot = {
+      file: selectedFile,
+      ocrText: ocrResult?.raw_text || null,
+      vendorName: vendorName || null,
+      amountStr: amount,
+      date: date || null,
+      accountCode: accountCode || null,
+      accountName: accountName || null,
+    };
 
-      if (journalError) throw journalError;
+    toast.info("仕訳を作成中...");
+    router.push("/journals");
 
-      // 仕訳明細（借方: 経費、貸方: 現金）
-      const taxAmount = Math.floor((amountNum * 10) / 110);
-      await supabase.from("journal_lines").insert([
-        {
-          journal_id: journal.id,
-          account_code: accountCode || "699",
-          account_name: accountName || "雑費",
-          debit_amount: amountNum,
-          credit_amount: 0,
-          tax_code: "P10",
-          tax_amount: taxAmount,
-        },
-        {
-          journal_id: journal.id,
-          account_code: "100",
-          account_name: "現金",
-          debit_amount: 0,
-          credit_amount: amountNum,
-          tax_code: "OUT",
-          tax_amount: 0,
-        },
-      ]);
+    void (async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error("認証が必要です");
 
-      router.push("/journals");
-    } catch (error) {
-      console.error("保存に失敗しました:", error);
-      setError("保存に失敗しました。もう一度お試しください。");
-    } finally {
-      setIsSaving(false);
-    }
+        const fileName = `${user.id}/${Date.now()}-${snapshot.file.name}`;
+        await supabase.storage.from("receipts").upload(fileName, snapshot.file);
+
+        const { data: urlData } = supabase.storage
+          .from("receipts")
+          .getPublicUrl(fileName);
+
+        const amountNum = snapshot.amountStr ? parseInt(snapshot.amountStr, 10) : 0;
+
+        const { data: receipt, error: insertError } = await supabase
+          .from("receipts")
+          .insert({
+            user_id: user.id,
+            image_url: urlData.publicUrl,
+            ocr_text: snapshot.ocrText,
+            vendor_name: snapshot.vendorName,
+            amount: snapshot.amountStr ? amountNum : null,
+            date: snapshot.date,
+            account_code: snapshot.accountCode,
+            account_name: snapshot.accountName,
+            status: "confirmed",
+          })
+          .select()
+          .single();
+        if (insertError) throw insertError;
+
+        const journalDate = snapshot.date || new Date().toISOString().split("T")[0];
+
+        const { data: journal, error: journalError } = await supabase
+          .from("journals")
+          .insert({
+            user_id: user.id,
+            date: journalDate,
+            description: `${snapshot.vendorName || "不明"} - ${snapshot.accountName || "経費"}`,
+            receipt_id: receipt.id,
+          })
+          .select()
+          .single();
+        if (journalError) throw journalError;
+
+        const taxAmount = Math.floor((amountNum * 10) / 110);
+        const { error: linesError } = await supabase.from("journal_lines").insert([
+          {
+            journal_id: journal.id,
+            account_code: snapshot.accountCode || "699",
+            account_name: snapshot.accountName || "雑費",
+            debit_amount: amountNum,
+            credit_amount: 0,
+            tax_code: "P10",
+            tax_amount: taxAmount,
+          },
+          {
+            journal_id: journal.id,
+            account_code: "100",
+            account_name: "現金",
+            debit_amount: 0,
+            credit_amount: amountNum,
+            tax_code: "OUT",
+            tax_amount: 0,
+          },
+        ]);
+        if (linesError) throw linesError;
+
+        toast.success("仕訳を作成しました");
+      } catch (error) {
+        console.error("保存に失敗しました:", error);
+        toast.error(
+          `保存に失敗しました: ${(error as Error).message ?? "不明なエラー"}`
+        );
+      }
+    })();
   };
 
   return (
