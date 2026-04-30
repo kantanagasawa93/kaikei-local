@@ -101,6 +101,33 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ストリーミングモードは ?stream=1 で有効化。クライアントが部分的に
+  // フィールドを表示できるよう、Claude の text_delta を SSE で再エミットする。
+  const isStream = req.nextUrl.searchParams.get("stream") === "1";
+
+  const claudeBody = {
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    system: SYSTEM_PROMPT,
+    stream: isStream,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: body.media_type,
+              data: body.image,
+            },
+          },
+          { type: "text", text: "この領収書の内容を読み取ってください。" },
+        ],
+      },
+    ],
+  };
+
   try {
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -109,27 +136,7 @@ export async function POST(req: NextRequest) {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: body.media_type,
-                  data: body.image,
-                },
-              },
-              { type: "text", text: "この領収書の内容を読み取ってください。" },
-            ],
-          },
-        ],
-      }),
+      body: JSON.stringify(claudeBody),
     });
 
     if (!anthropicRes.ok) {
@@ -141,23 +148,103 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const data = await anthropicRes.json();
-    const text = data.content?.[0]?.text || "";
+    if (!isStream) {
+      // 既存の非ストリーミング経路 (後方互換)
+      const data = await anthropicRes.json();
+      const text = data.content?.[0]?.text || "";
+      let parsed: Record<string, unknown> = {};
+      try {
+        const match = text.match(/\{[\s\S]*\}/);
+        parsed = match ? JSON.parse(match[0]) : {};
+      } catch {}
+      return NextResponse.json(
+        {
+          ...parsed,
+          usage: { used: usage.used, limit: usage.limit },
+        },
+        { headers: corsHeaders() }
+      );
+    }
 
-    // JSON抽出
-    let parsed: any = {};
-    try {
-      const match = text.match(/\{[\s\S]*\}/);
-      parsed = match ? JSON.parse(match[0]) : {};
-    } catch {}
+    // SSE ストリーミング経路。Anthropic からの text_delta を抜き出して
+    // クライアントに `event: chunk` として再送、最後に `event: done` で usage を流す。
+    if (!anthropicRes.body) {
+      return NextResponse.json(
+        { error: "ストリーム取得に失敗しました" },
+        { status: 502, headers: corsHeaders() }
+      );
+    }
 
-    return NextResponse.json(
-      {
-        ...parsed,
-        usage: { used: usage.used, limit: usage.limit },
+    const upstream = anthropicRes.body;
+    const usageSnapshot = { used: usage.used, limit: usage.limit };
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder();
+        const reader = upstream.getReader();
+        let buf = "";
+
+        const send = (event: string, data: unknown) => {
+          controller.enqueue(
+            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          );
+        };
+
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+
+            // SSE は \n\n でイベント区切り
+            const events = buf.split("\n\n");
+            buf = events.pop() || "";
+
+            for (const evt of events) {
+              const lines = evt.split("\n");
+              const eventType = lines
+                .find((l) => l.startsWith("event:"))
+                ?.slice(6)
+                .trim();
+              const dataLine = lines
+                .find((l) => l.startsWith("data:"))
+                ?.slice(5)
+                .trim();
+              if (!eventType || !dataLine) continue;
+
+              if (eventType === "content_block_delta") {
+                try {
+                  const parsed = JSON.parse(dataLine);
+                  if (parsed.delta?.type === "text_delta") {
+                    send("chunk", { text: parsed.delta.text as string });
+                  }
+                } catch {
+                  /* ignore malformed delta */
+                }
+              } else if (eventType === "error") {
+                send("error", { error: "AI 読み取りに失敗しました" });
+              }
+            }
+          }
+          send("done", { usage: usageSnapshot });
+        } catch (e) {
+          console.error("stream error:", e);
+          send("error", { error: "ストリーム中にエラーが発生しました" });
+        } finally {
+          controller.close();
+        }
       },
-      { headers: corsHeaders() }
-    );
+    });
+
+    return new Response(stream, {
+      headers: {
+        ...corsHeaders(),
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no", // Vercel/Nginx でのバッファ抑制
+      },
+    });
   } catch (e) {
     console.error("OCR error:", e);
     return NextResponse.json(
