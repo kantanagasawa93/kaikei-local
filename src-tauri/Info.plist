@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Tauri 2 がアプリの Info.plist にマージする追加キー。
+    productName / version / identifier 等は tauri.conf.json から自動生成されるので、
+    ここでは「マージしたい」プライバシー説明だけを書く。
+  -->
+
+  <!--
+    写真自動取込 (Phase 1〜)
+    macOS の標準同意ダイアログに表示される説明文。プライバシーマニフェスト
+    必須キーなので、未設定だと PHPhotoLibrary.requestAuthorization が
+    失敗する。
+  -->
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>領収書の写真を自動で見つけて仕訳に取り込むため、写真ライブラリへのアクセスを許可してください。画像は Mac 上だけで処理され、お客様の同意なしに外部へ送信されません。</string>
+
+  <!--
+    AI OCR を使う場合の Apple Events / Photos 操作の補助説明。
+    現状 AppleScript は使っていないが、将来 LaunchAgent からの起動時の
+    アクセス確認で求められる場合に備えて記載。
+  -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>定期スキャン (LaunchAgent) の登録時に macOS の自動化機能を使います。</string>
+</dict>
+</plist>

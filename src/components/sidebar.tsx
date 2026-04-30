@@ -23,6 +23,7 @@ import {
   Smartphone,
   FileSignature,
   Settings as SettingsIcon,
+  Inbox,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ import { Separator } from "@/components/ui/separator";
 
 const navigation = [
   { name: "ダッシュボード", href: "/dashboard", icon: LayoutDashboard },
+  { name: "受信箱", href: "/inbox", icon: Inbox },
   { name: "領収書", href: "/receipts", icon: Receipt },
   { name: "スマホ取込", href: "/phone-upload", icon: Smartphone },
   { name: "仕訳帳", href: "/journals", icon: BookOpen },
