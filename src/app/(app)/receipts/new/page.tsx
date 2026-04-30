@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { processReceiptImage } from "@/lib/ocr";
 import {
   ocrWithClaude,
+  ocrWithClaudeStream,
   fileToBase64,
   getApiKey,
   hasAiOcrConsent,
@@ -90,9 +91,29 @@ export default function NewReceiptPage() {
         const apiKey = await getApiKey();
         if (apiKey) {
           const { base64, mediaType } = await fileToBase64(workFile);
-          const r = await ocrWithClaude(base64, mediaType, apiKey);
-          if (r.usage) setOcrUsage(r.usage);
-          result = r;
+          // ストリーミングを優先。途中で取れたフィールドはその場でフォームに反映する。
+          // ストリームが落ちた場合は非ストリーミングにフォールバック。
+          try {
+            const r = await ocrWithClaudeStream(
+              base64,
+              mediaType,
+              apiKey,
+              (partial) => {
+                if (partial.vendor_name !== undefined) setVendorName(partial.vendor_name);
+                if (partial.amount !== undefined && partial.amount !== null) {
+                  setAmount(String(partial.amount));
+                }
+                if (partial.date !== undefined) setDate(partial.date);
+              }
+            );
+            if (r.usage) setOcrUsage(r.usage);
+            result = r;
+          } catch (streamErr) {
+            console.warn("[ocr] streaming failed, falling back:", streamErr);
+            const r = await ocrWithClaude(base64, mediaType, apiKey);
+            if (r.usage) setOcrUsage(r.usage);
+            result = r;
+          }
         } else {
           result = await processReceiptImage(workFile);
         }

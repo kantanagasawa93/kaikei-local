@@ -4,6 +4,7 @@
  */
 
 import { suggestAccount } from "@/lib/accounts";
+import { extractOcrFields, type PartialOcrFields } from "@/lib/partial-json";
 import type { OcrResult } from "@/types";
 
 // デフォルトのAPIベース（独自ドメインが紐付くまでは Vercel のURL）
@@ -67,6 +68,124 @@ export async function ocrWithClaude(
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
     usage: json.usage,
+  };
+}
+
+/**
+ * ストリーミング版 OCR。完了済みフィールドが取れる度に onPartial が呼ばれる。
+ * Claude の text_delta を SSE で受け、partial-json で正規表現抽出する。
+ *
+ * UI 体感: 「保存」を押すまでに金額・店名・日付が見え始めるので、
+ * 全部届くのを待たずにユーザがフォーム調整に入れる。
+ */
+export async function ocrWithClaudeStream(
+  imageBase64: string,
+  mediaType: string,
+  licenseKey: string,
+  onPartial?: (partial: PartialOcrFields) => void
+): Promise<OcrResult & { usage?: { used: number; limit: number } }> {
+  const base = await getApiBase();
+  const response = await fetch(`${base}/api/ocr?stream=1`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-License-Key": licenseKey,
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      image: imageBase64,
+      media_type: mediaType,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: "unknown" }));
+    throw new Error(err.error || `API error (${response.status})`);
+  }
+  if (!response.body) {
+    throw new Error("ストリーム未対応のレスポンスでした");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let accumulated = "";
+  let usage: { used: number; limit: number } | undefined;
+  let lastEmitted = "";
+  let serverError: string | null = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    const events = buf.split("\n\n");
+    buf = events.pop() || "";
+
+    for (const evt of events) {
+      const lines = evt.split("\n");
+      const eventType = lines.find((l) => l.startsWith("event:"))?.slice(6).trim();
+      const dataLine = lines.find((l) => l.startsWith("data:"))?.slice(5).trim();
+      if (!eventType || !dataLine) continue;
+
+      let payload: { text?: string; usage?: { used: number; limit: number }; error?: string } = {};
+      try {
+        payload = JSON.parse(dataLine);
+      } catch {
+        continue;
+      }
+
+      if (eventType === "chunk" && typeof payload.text === "string") {
+        accumulated += payload.text;
+        if (onPartial) {
+          const partial = extractOcrFields(accumulated);
+          const sig = JSON.stringify(partial);
+          if (sig !== lastEmitted) {
+            lastEmitted = sig;
+            onPartial(partial);
+          }
+        }
+      } else if (eventType === "done") {
+        usage = payload.usage;
+      } else if (eventType === "error") {
+        serverError = payload.error || "ストリームでエラーが発生しました";
+      }
+    }
+  }
+
+  if (serverError) throw new Error(serverError);
+
+  // 蓄積テキストから最終 JSON を抽出
+  let finalParsed: Record<string, unknown> = {};
+  try {
+    const match = accumulated.match(/\{[\s\S]*\}/);
+    if (match) finalParsed = JSON.parse(match[0]);
+  } catch {
+    // パース失敗。partial が取れていれば最低限の result を返す。
+  }
+
+  const items = Array.isArray(finalParsed.items) ? (finalParsed.items as string[]) : [];
+  const combinedText = [
+    (finalParsed.vendor_name as string) || "",
+    ...items,
+    (finalParsed.raw_text as string) || "",
+  ].join(" ");
+  const suggested = suggestAccount(combinedText);
+
+  const amountRaw = finalParsed.amount;
+  return {
+    raw_text: (finalParsed.raw_text as string) || "",
+    vendor_name: (finalParsed.vendor_name as string) || null,
+    amount:
+      typeof amountRaw === "number"
+        ? amountRaw
+        : amountRaw
+          ? Number(amountRaw)
+          : null,
+    date: (finalParsed.date as string) || null,
+    suggested_account_code: suggested?.code || null,
+    suggested_account_name: suggested?.name || null,
+    usage,
   };
 }
 
