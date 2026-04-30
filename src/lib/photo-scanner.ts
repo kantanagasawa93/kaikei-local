@@ -16,6 +16,7 @@
  */
 
 import { db } from "@/lib/localDb";
+import { classifyReceipt } from "@/lib/receipt-classifier";
 
 export interface ScannedPhoto {
   asset_id: string;
@@ -93,6 +94,7 @@ export async function setLastScanUnix(unix: number): Promise<void> {
 export interface ScanResult {
   scanned: number;
   newPhotos: number;
+  receiptCount: number;
   errors: string[];
 }
 
@@ -146,6 +148,7 @@ export async function scanNow(
   }
 
   let newPhotos = 0;
+  let receiptCount = 0;
   for (const photo of scanned) {
     try {
       // 既存の asset_id があるかチェック
@@ -156,6 +159,23 @@ export async function scanNow(
         .single();
       if (existing) continue;
 
+      // Vision OCR + 領収書スコアリング (完全ローカル)
+      let ocrText: string | null = null;
+      let score: number | null = null;
+      let initialState: "candidate" | "receipt" | "not_receipt" = "candidate";
+      try {
+        const visionRes = await invoke<{ lines: string[]; joined: string; language: string }>(
+          "vision_recognize_text",
+          { filePath: photo.file_path }
+        );
+        ocrText = visionRes.joined;
+        const cls = classifyReceipt(ocrText);
+        score = cls.score;
+        initialState = cls.state;
+      } catch (e) {
+        console.warn(`vision OCR failed for ${photo.asset_id}:`, e);
+      }
+
       await db.from("photo_inbox").insert({
         id: crypto.randomUUID(),
         source_asset_id: photo.asset_id,
@@ -164,10 +184,12 @@ export async function scanNow(
         width: photo.width,
         height: photo.height,
         file_path: photo.file_path,
-        state: "candidate",
-        receipt_score: null,
+        ocr_text: ocrText,
+        state: initialState,
+        receipt_score: score,
       });
       newPhotos++;
+      if (initialState === "receipt") receiptCount++;
     } catch (e) {
       errors.push(`${photo.asset_id}: ${(e as Error).message}`);
     }
@@ -187,13 +209,13 @@ export async function scanNow(
     .update({
       finished_at: new Date().toISOString(),
       scanned_count: scanned.length,
-      receipt_count: 0, // Phase 2 で更新
+      receipt_count: receiptCount,
       imported_count: 0, // Phase 4 で更新
       error: errors.length > 0 ? errors.join("; ").slice(0, 500) : null,
     })
     .eq("id", logId);
 
-  return { scanned: scanned.length, newPhotos, errors };
+  return { scanned: scanned.length, newPhotos, receiptCount, errors };
 }
 
 export interface InboxRow {
