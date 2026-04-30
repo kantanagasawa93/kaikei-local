@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KAIKEI LOCAL - Offline accounting for self-employed people in Japan</title>
+  <meta name="description" content="Offline-first Mac app for self-employed people in Japan to file their personal income tax return (Kakutei Shinkoku / e-Tax). Always free for core features. Your data stays on your Mac.">
+  <link rel="icon" type="image/png" href="../favicon.png">
+  <link rel="apple-touch-icon" href="../apple-touch-icon.png">
+  <link rel="alternate" hreflang="ja" href="../">
+  <link rel="alternate" hreflang="en" href="./">
+  <!-- Open Graph / Twitter Card -->
+  <meta property="og:title" content="KAIKEI LOCAL - Offline accounting for Japan tax filing">
+  <meta property="og:description" content="Offline Mac app for filing your personal income tax return in Japan. Always free for core features. Data stays on your Mac.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://kantanagasawa93.github.io/kaikei-local/en/">
+  <meta property="og:image" content="https://kantanagasawa93.github.io/kaikei-local/og-image.png">
+  <meta property="og:site_name" content="KAIKEI LOCAL">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:locale:alternate" content="ja_JP">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="KAIKEI LOCAL - Offline accounting for Japan tax filing">
+  <meta name="twitter:description" content="Offline Mac app for filing your personal income tax return in Japan. Always free for core features.">
+  <meta name="twitter:image" content="https://kantanagasawa93.github.io/kaikei-local/og-image.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #fafafa;
+      --fg: #111;
+      --muted: #666;
+      --muted-strong: #444;
+      --accent: #0f172a;
+      --blue: #2563eb;
+      --blue-soft: #eff6ff;
+      --green: #10b981;
+      --card: #fff;
+      --border: #e5e5e5;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.06);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04);
+      --shadow-lg: 0 24px 60px -12px rgba(0,0,0,0.25), 0 8px 24px -8px rgba(0,0,0,0.15);
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.7;
+      font-size: 16px;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    img { display: block; max-width: 100%; height: auto; }
+
+    /* HEADER */
+    .site-header {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+    }
+    .site-header-inner {
+      max-width: 1120px; margin: 0 auto;
+      padding: 12px 24px;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .site-logo {
+      font-weight: 900; font-size: 16px; letter-spacing: -0.01em; color: var(--fg);
+    }
+    .site-logo:hover { text-decoration: none; }
+    .site-logo .logo-mark {
+      display: inline-block; width: 8px; height: 8px;
+      background: var(--blue); border-radius: 2px;
+      margin-right: 8px; transform: translateY(-1px);
+    }
+    .site-nav { display: flex; gap: 24px; align-items: center; }
+    .site-nav a {
+      color: var(--muted-strong); font-size: 13px; font-weight: 500;
+    }
+    .site-nav a:hover { color: var(--fg); text-decoration: none; }
+    .header-cta {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--fg); color: #fff;
+      padding: 8px 18px; border-radius: 8px;
+      font-size: 13px; font-weight: 700;
+      transition: background 0.15s;
+    }
+    .header-cta:hover { background: var(--accent); text-decoration: none; }
+    .lang-switch {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px; font-weight: 600; color: var(--muted-strong);
+      background: rgba(0,0,0,0.04); border-radius: 6px; padding: 4px;
+    }
+    .lang-switch a {
+      padding: 3px 9px; border-radius: 4px; color: var(--muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .lang-switch a:hover { text-decoration: none; color: var(--fg); }
+    .lang-switch a.active {
+      background: #fff; color: var(--fg);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    }
+
+    /* HERO */
+    .hero {
+      background: linear-gradient(135deg, #0f172a 0%, #16213e 50%, #0f3460 100%);
+      color: #fff; padding: 72px 24px 88px; overflow: hidden;
+    }
+    .hero-inner {
+      max-width: 1120px; margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+      gap: 56px; align-items: center;
+    }
+    .hero-copy { text-align: left; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 100px;
+      padding: 5px 14px 5px 6px;
+      font-size: 12px; font-weight: 500;
+      margin-bottom: 24px; letter-spacing: 0.3px;
+    }
+    .hero-badge .badge-pill {
+      background: #60a5fa; color: #0f172a;
+      padding: 2px 8px; border-radius: 100px;
+      font-size: 10px; font-weight: 700;
+    }
+    .hero h1 {
+      font-size: clamp(32px, 4.4vw, 50px);
+      font-weight: 900; line-height: 1.18;
+      margin-bottom: 18px; letter-spacing: -0.025em;
+    }
+    .hero h1 span { color: #60a5fa; }
+    .hero-lead {
+      font-size: 17px; opacity: 0.82;
+      max-width: 540px; margin-bottom: 28px; line-height: 1.7;
+    }
+    .hero-price-row {
+      display: flex; align-items: baseline; gap: 12px;
+      margin-bottom: 24px;
+    }
+    .hero-price { font-size: 44px; font-weight: 900; line-height: 1; letter-spacing: -0.03em; }
+    .hero-price-note { font-size: 13px; opacity: 0.65; line-height: 1.5; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+    .hero-cta {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: #fff; color: var(--accent);
+      padding: 14px 28px; border-radius: 10px;
+      font-size: 15px; font-weight: 700;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    }
+    .hero-cta:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+      text-decoration: none;
+    }
+    .hero-cta-secondary {
+      background: rgba(255,255,255,0.1); color: #fff;
+      border: 1px solid rgba(255,255,255,0.2); box-shadow: none;
+    }
+    .hero-cta-secondary:hover { background: rgba(255,255,255,0.18); box-shadow: none; }
+    .hero-sub { font-size: 12px; opacity: 0.55; line-height: 1.7; }
+    .hero-sub a { color: #93c5fd; }
+
+    .hero-shot {
+      position: relative;
+      transform: perspective(1200px) rotateY(-3deg) rotateX(2deg);
+      transform-origin: center;
+    }
+    .browser-frame {
+      background: #1e293b; border-radius: 12px;
+      box-shadow: var(--shadow-lg); overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .browser-bar {
+      background: #0f172a; padding: 10px 14px;
+      display: flex; align-items: center; gap: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .browser-bar .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+    .browser-bar .dot-r { background: #ff5f57; }
+    .browser-bar .dot-y { background: #febc2e; }
+    .browser-bar .dot-g { background: #28c840; }
+    .browser-bar .browser-title {
+      flex: 1; text-align: center;
+      font-size: 11px; color: rgba(255,255,255,0.4); letter-spacing: 0.4px;
+    }
+    .browser-frame img { width: 100%; display: block; }
+
+    /* TRUST BAR */
+    .trust-bar { background: #fff; border-bottom: 1px solid var(--border); padding: 22px 24px; }
+    .trust-bar-inner {
+      max-width: 1120px; margin: 0 auto;
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 24px; align-items: center;
+    }
+    .trust-item {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; color: var(--muted-strong); font-weight: 500;
+    }
+    .trust-icon {
+      width: 28px; height: 28px; flex-shrink: 0;
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
+
+    /* CONTAINER + SECTION */
+    .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+    .container-narrow { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+    section { padding: 64px 0; }
+    .section-eyebrow {
+      display: block; text-align: center;
+      font-size: 12px; font-weight: 700; color: var(--blue);
+      letter-spacing: 0.12em; text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    section h2 {
+      font-size: clamp(24px, 3.5vw, 34px);
+      font-weight: 900; text-align: center;
+      margin-bottom: 12px; letter-spacing: -0.02em; line-height: 1.3;
+    }
+    .section-lead {
+      text-align: center; color: var(--muted);
+      font-size: 15px; max-width: 680px;
+      margin: 0 auto 40px; line-height: 1.7;
+    }
+
+    /* WHY */
+    .why-section { background: #fff; }
+    .why-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+    .why-card { text-align: center; padding: 8px; }
+    .why-icon {
+      width: 64px; height: 64px; margin: 0 auto 20px;
+      border-radius: 18px; display: flex; align-items: center; justify-content: center;
+      font-size: 30px; background: var(--blue-soft); color: var(--blue);
+    }
+    .why-card h3 { font-size: 19px; font-weight: 800; margin-bottom: 10px; letter-spacing: -0.01em; }
+    .why-card p { font-size: 14.5px; color: var(--muted-strong); line-height: 1.75; }
+
+    /* STEP FLOW */
+    .step-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .step-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 24px; display: flex; flex-direction: column; gap: 16px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .step-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+    .step-number {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; border-radius: 50%;
+      background: var(--blue); color: #fff; font-weight: 800; font-size: 14px;
+      flex-shrink: 0;
+    }
+    .step-card h3 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+    .step-card p { font-size: 13.5px; color: var(--muted); line-height: 1.7; }
+    .step-shot {
+      margin-top: auto; border-radius: 10px; overflow: hidden;
+      border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+      aspect-ratio: 16 / 10; background: #f5f5f5;
+    }
+    .step-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+
+    /* FEATURES */
+    .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+    .feature-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 28px; transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .feature-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: 11px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 14px;
+    }
+    .feature-card h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.01em; }
+    .feature-card p { font-size: 14px; color: var(--muted); line-height: 1.7; }
+    .feature-shot {
+      margin-top: 16px; border-radius: 8px; overflow: hidden;
+      border: 1px solid var(--border); aspect-ratio: 16 / 10; background: #f5f5f5;
+    }
+    .feature-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+
+    /* TAX-FILING GUIDE */
+    .guide-section { background: #fff8f0; }
+    .guide-card {
+      background: #fff; border: 1px solid #fde2c1; border-radius: 16px;
+      padding: 36px; box-shadow: var(--shadow-sm);
+    }
+    .guide-card h3 {
+      font-size: 17px; font-weight: 700; margin: 0 0 12px;
+      letter-spacing: -0.01em;
+    }
+    .guide-card h3:not(:first-child) { margin-top: 24px; }
+    .guide-card p { color: var(--muted-strong); font-size: 14.5px; line-height: 1.8; margin-bottom: 12px; }
+    .guide-card ol, .guide-card ul {
+      margin: 8px 0 0 20px; color: var(--muted-strong);
+      font-size: 14px; line-height: 1.8;
+    }
+    .guide-card li { margin-bottom: 6px; }
+    .guide-card .term {
+      font-family: 'SF Mono', Menlo, monospace; font-size: 13px;
+      background: #f5f5f5; padding: 1px 6px; border-radius: 4px;
+      color: var(--accent);
+    }
+
+    /* COMPARISON */
+    .comparison-wrap {
+      background: var(--card); border-radius: 16px; overflow: hidden;
+      border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+    }
+    .comparison-table { width: 100%; border-collapse: collapse; }
+    .comparison-table th, .comparison-table td {
+      padding: 14px 16px; text-align: left;
+      border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: middle;
+    }
+    .comparison-table thead th {
+      background: var(--accent); color: #fff;
+      font-weight: 700; font-size: 13px;
+    }
+    .comparison-table thead th.col-self { background: var(--blue); }
+    .comparison-table tr:last-child td { border-bottom: none; }
+    .comparison-table .col-self,
+    .comparison-table tbody td.cell-self {
+      background: #eff6ff; font-weight: 600; color: var(--accent);
+    }
+    .comparison-footnote {
+      margin-top: 14px; font-size: 11px; color: var(--muted); line-height: 1.7;
+    }
+
+    /* FAQ */
+    .faq-list { max-width: 760px; margin: 0 auto; }
+    .faq-item { border-bottom: 1px solid var(--border); padding: 22px 0; }
+    .faq-item:last-child { border-bottom: none; }
+    .faq-q { font-weight: 700; font-size: 15.5px; margin-bottom: 8px; letter-spacing: -0.01em; }
+    .faq-a { font-size: 14px; color: var(--muted-strong); line-height: 1.75; }
+
+    /* AI PLAN */
+    .ai-plan-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; max-width: 720px; margin: 0 auto; }
+    .ai-plan-card { background: #fff; border: 1px solid var(--border); border-radius: 16px; padding: 28px; text-align: center; }
+    .ai-plan-card.featured { border: 2px solid var(--blue); position: relative; }
+    .ai-plan-card .ribbon {
+      position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+      background: var(--blue); color: #fff;
+      font-size: 11px; padding: 4px 14px; border-radius: 100px;
+      font-weight: 700; letter-spacing: 0.04em;
+    }
+    .ai-plan-name { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .ai-plan-price { font-size: 36px; font-weight: 900; letter-spacing: -0.03em; margin-bottom: 4px; }
+    .ai-plan-price small { font-size: 14px; font-weight: 400; color: var(--muted); }
+    .ai-plan-quota { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+    .ai-plan-cta {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 10px 22px; border-radius: 8px;
+      font-size: 13px; font-weight: 700; transition: transform 0.15s;
+    }
+    .ai-plan-cta:hover { transform: translateY(-1px); text-decoration: none; }
+    .ai-plan-cta.primary { background: var(--blue); color: #fff; }
+    .ai-plan-cta.outline { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+
+    /* CTA */
+    .cta-section {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #fff; text-align: center; padding: 72px 24px;
+    }
+    .cta-section h2 { color: #fff; margin-bottom: 12px; }
+    .cta-section .section-lead { color: rgba(255,255,255,0.65); margin-bottom: 32px; }
+    .cta-section .hero-price { margin-bottom: 4px; }
+    .cta-section .hero-price-note { color: rgba(255,255,255,0.55); margin-bottom: 28px; }
+    .cta-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-bottom: 16px; }
+
+    /* FOOTER */
+    footer { text-align: center; padding: 32px 24px; font-size: 12px; color: var(--muted); }
+    footer a { color: var(--muted); }
+
+    /* INLINE CTA */
+    .inline-cta { display: flex; justify-content: center; margin-top: 36px; }
+    .inline-cta a {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--fg); color: #fff;
+      padding: 10px 22px; border-radius: 8px;
+      font-size: 13px; font-weight: 700;
+    }
+    .inline-cta a:hover { text-decoration: none; opacity: 0.9; }
+
+    /* RESPONSIVE */
+    @media (max-width: 960px) {
+      .hero-inner { grid-template-columns: 1fr; gap: 40px; }
+      .hero-copy { text-align: center; }
+      .hero-badge { margin-left: auto; margin-right: auto; }
+      .hero-price-row { justify-content: center; }
+      .hero-actions { justify-content: center; }
+      .hero-shot { transform: none; max-width: 600px; margin: 0 auto; }
+      .step-flow { grid-template-columns: 1fr; }
+      .why-grid { grid-template-columns: 1fr; gap: 24px; }
+      .trust-bar-inner { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    }
+    @media (max-width: 640px) {
+      .hero { padding: 56px 20px 64px; }
+      .hero-price { font-size: 36px; }
+      section { padding: 48px 0; }
+      section h2 { font-size: 22px; }
+      .comparison-table th, .comparison-table td { padding: 10px 10px; font-size: 12px; }
+      .site-nav { display: none; }
+      .site-header-inner { padding: 10px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="site-header">
+  <div class="site-header-inner">
+    <a href="#top" class="site-logo"><span class="logo-mark"></span>KAIKEI LOCAL</a>
+    <nav class="site-nav">
+      <a href="#how-it-works">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#guide">For foreigners</a>
+      <a href="#comparison">Comparison</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <span class="lang-switch" aria-label="Language">
+        <a href="../">JA</a>
+        <a href="./" class="active" aria-current="page">EN</a>
+      </span>
+      <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="header-cta">
+        Download
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<div class="hero" id="top">
+  <div class="hero-inner">
+    <div class="hero-copy">
+      <span class="hero-badge">
+        <span class="badge-pill">v0.2</span>
+        Mac app for self-employed in Japan
+      </span>
+      <h1>File your Japan tax return —<br><span>without the subscription.</span></h1>
+      <p class="hero-lead">
+        An offline Mac app that helps self-employed people in Japan prepare their personal income tax return (Kakutei Shinkoku). Your data never leaves your Mac, and the core features are always free.
+      </p>
+      <div class="hero-price-row">
+        <div class="hero-price">¥0</div>
+        <div class="hero-price-note">Always free for core features<br>Optional monthly plan only for AI receipt OCR</div>
+      </div>
+      <div class="hero-actions">
+        <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="hero-cta">
+          Download for Mac (.dmg)
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        </a>
+        <a href="#guide" class="hero-cta hero-cta-secondary">
+          Tax filing guide
+        </a>
+      </div>
+      <div class="hero-sub">
+        macOS 11 (Big Sur) or later · Apple Silicon (M1–M4) ·
+        <a href="../install.html">Install guide</a>
+        <br><strong style="color:#fbbf24;font-weight:600;">Note:</strong> The app's UI is currently Japanese only. English UI is on the roadmap.
+      </div>
+    </div>
+    <div class="hero-shot">
+      <div class="browser-frame">
+        <div class="browser-bar">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="browser-title">KAIKEI LOCAL — Dashboard</span>
+        </div>
+        <img src="../assets/screenshots/dashboard.png" alt="KAIKEI LOCAL dashboard screen" loading="eager">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TRUST BAR -->
+<div class="trust-bar">
+  <div class="trust-bar-inner">
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#f0fdf4;color:#10b981;">¥0</span>
+      Always free (core)
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</span>
+      Fully offline
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#fff7ed;color:#f97316;">&#9989;</span>
+      e-Tax XTX verified
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#ede9fe;color:#8b5cf6;">&#128196;</span>
+      Open source
+    </div>
+  </div>
+</div>
+
+<!-- WHY -->
+<section class="why-section">
+  <div class="container">
+    <span class="section-eyebrow">Why KAIKEI LOCAL</span>
+    <h2>Different from cloud-based services</h2>
+    <p class="section-lead">A different design philosophy from cloud services like freee or MoneyForward. Your data stays on your Mac.</p>
+    <div class="why-grid">
+      <div class="why-card">
+        <div class="why-icon" style="background:#eff6ff;color:#2563eb;">&#128274;</div>
+        <h3>Your data stays on your Mac</h3>
+        <p>Stored as a local SQLite file. No cloud sync. Your financial data won't disappear because of a service shutdown, data breach, or terms-of-service change.</p>
+      </div>
+      <div class="why-card">
+        <div class="why-icon" style="background:#f0fdf4;color:#10b981;">¥0</div>
+        <h3>No subscription, ever</h3>
+        <p>Bookkeeping, blue return forms, and e-Tax XTX export are all free. None of the ¥1,000-per-month-times-many-years pile-up that cloud services bring.</p>
+      </div>
+      <div class="why-card">
+        <div class="why-icon" style="background:#fff7ed;color:#f97316;">&#9889;</div>
+        <h3>Lightweight Mac native</h3>
+        <p>32 MB Tauri-based native app. No web app page transitions. Opens instantly even offline. Native Apple Silicon (M1–M4) support.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how-it-works" style="background:#f5f5f5;">
+  <div class="container">
+    <span class="section-eyebrow">How it works</span>
+    <h2>Three steps from CSV to e-Tax XTX</h2>
+    <p class="section-lead">
+      From importing your bank/credit-card CSV to generating the XTX file accepted by Japan's National Tax Agency e-Tax system — all done locally on your Mac.
+    </p>
+    <div class="step-flow">
+      <div class="step-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="step-number">1</span>
+          <h3>Import bank CSV</h3>
+        </div>
+        <p>30+ Japanese banks (Mizuho, MUFG, SBI, etc.) and 11 credit-card issuers auto-detected. Both Shift_JIS and UTF-8 are recognized.</p>
+        <div class="step-shot">
+          <img src="../assets/screenshots/bank-csv.png" alt="Bank CSV import screen" loading="lazy">
+        </div>
+      </div>
+      <div class="step-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="step-number">2</span>
+          <h3>AI suggests journal entries</h3>
+        </div>
+        <p>Account category is inferred from the transaction description and your past rules. "Apple" → Communications, "JR" → Travel — accuracy improves as you use it.</p>
+        <div class="step-shot">
+          <img src="../assets/screenshots/ai-journal.png" alt="AI journal entry screen" loading="lazy">
+        </div>
+      </div>
+      <div class="step-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="step-number">3</span>
+          <h3>Export e-Tax XTX</h3>
+        </div>
+        <p>Generate XTX files for both Income Tax (RKO0010) and Consumption Tax (RSH0010). Verified to load and render correctly on the e-Tax MyPage "Confirm filed data" screen.</p>
+        <div class="step-shot">
+          <img src="../assets/screenshots/etax.png" alt="e-Tax XTX output screen" loading="lazy">
+        </div>
+      </div>
+    </div>
+    <div class="inline-cta">
+      <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg">
+        Download free
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- TAX-FILING GUIDE FOR FOREIGN RESIDENTS -->
+<section class="guide-section" id="guide">
+  <div class="container-narrow">
+    <span class="section-eyebrow">For foreign residents</span>
+    <h2>Filing your tax return in Japan</h2>
+    <p class="section-lead">A short orientation if you're a foreign resident new to Japan's annual personal income tax return process (Kakutei Shinkoku).</p>
+    <div class="guide-card">
+      <h3>Who needs to file?</h3>
+      <p>If you have business income (self-employed, freelance, sole proprietor) or rental income in Japan, you generally need to file a Kakutei Shinkoku between February 16 and March 15 each year, covering the previous calendar year (Jan 1 – Dec 31).</p>
+
+      <h3>What KAIKEI LOCAL does for you</h3>
+      <ul>
+        <li>Records your business income/expenses (double-entry bookkeeping)</li>
+        <li>Generates the <span class="term">青色申告決算書</span> (Blue Form business statement, ¥650,000 deduction eligible)</li>
+        <li>Calculates Income Tax (所得税) and Consumption Tax (消費税)</li>
+        <li>Outputs the <span class="term">XTX</span> file in NTA's official format (RKO0010 / RSH0010), ready to load on the e-Tax site</li>
+      </ul>
+
+      <h3>What you still need to do yourself</h3>
+      <ol>
+        <li><strong>Get a 利用者識別番号 (User Identification Number)</strong> from your local tax office. The application form is available in English at the NTA. Once obtained, this is what identifies you to e-Tax.</li>
+        <li><strong>Submit the XTX</strong> via either the NTA's web portal (<a href="https://www.keisan.nta.go.jp/" target="_blank" rel="noopener">確定申告書等作成コーナー</a>) or e-Tax software (Windows). You can sign in with My Number Card + smartphone, or with your User ID + password.</li>
+        <li><strong>Keep paper records</strong> of receipts and invoices for 7 years. KAIKEI LOCAL stores receipt photos alongside journal entries to make this easier.</li>
+      </ol>
+
+      <h3>Things to be aware of (foreign-resident specifics)</h3>
+      <ul>
+        <li><strong>Resident vs non-resident:</strong> If you've lived in Japan for 1+ year, you're typically a "resident" for tax purposes. Different rules apply for non-residents — consult a tax professional if unsure.</li>
+        <li><strong>Tax treaties (租税条約):</strong> If your home country has a treaty with Japan, you may be eligible for reduced withholding on certain income. KAIKEI LOCAL doesn't currently have specialized fields for treaty claims — you'd add these manually on the e-Tax site.</li>
+        <li><strong>Foreign tax credit (外国税額控除):</strong> If you've paid tax abroad on the same income, you may be able to credit it against Japanese tax. Currently this requires manual entry on the e-Tax form after loading the XTX.</li>
+        <li><strong>Name in Katakana:</strong> The e-Tax form expects your name in Katakana (フリガナ). KAIKEI LOCAL does not yet auto-convert Romaji to Katakana — you can enter it manually for now.</li>
+      </ul>
+
+      <h3>Roadmap for foreign residents</h3>
+      <ul>
+        <li>🚧 English UI for the app</li>
+        <li>🚧 Romaji-to-Katakana name auto-conversion</li>
+        <li>🚧 Residence card number field</li>
+        <li>🚧 Foreign tax credit form (外国税額控除に関する明細書)</li>
+      </ul>
+
+      <p style="margin-top: 24px;">
+        <a href="mailto:k.nagasawa.pc@gmail.com?subject=KAIKEI%20LOCAL%20%E2%80%94%20English%20UI%20interest&body=I%27m%20a%20foreign%20resident%20in%20Japan%20interested%20in%20the%20English%20version.%20Please%20notify%20me%20when%20it%27s%20available." style="display:inline-block; background:#f97316; color:#fff; padding:12px 22px; border-radius:8px; font-weight:700; font-size:14px;">Notify me when English UI is ready →</a>
+      </p>
+
+      <p style="font-size:12px;color:var(--muted);margin-top:20px;">
+        This page is informational and not tax advice. For complex situations (tax treaty claims, foreign income, multiple residencies), please consult a Japanese tax professional or the National Tax Agency's <a href="https://www.nta.go.jp/english/" target="_blank" rel="noopener">English support page</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="container">
+    <span class="section-eyebrow">Features</span>
+    <h2>Everything you need, in one app.</h2>
+    <p class="section-lead">From the double-entry bookkeeping required for the ¥650,000 blue return deduction to qualified-invoice (Inboisu) PDF output.</p>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
+        <h3>Fully offline</h3>
+        <p>Journal entries, receipts, invoices — all stored locally on your Mac. No cloud sync. Your financial data is yours alone.</p>
+        <div class="feature-shot"><img src="../assets/screenshots/local-storage.png" alt="Local storage settings" loading="lazy"></div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">¥0</div>
+        <h3>Always free (core)</h3>
+        <p>Bookkeeping, receipt management, blue return forms, income/consumption tax calculation, and e-Tax XTX export — all free. No subscription, no one-time fee.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128247;</div>
+        <h3>Snap with your phone, instant import</h3>
+        <p>Scan the in-app QR code with your phone, take a photo, and it's transferred over your Wi-Fi LAN. No phone app installation required.</p>
+        <div class="feature-shot"><img src="../assets/screenshots/phone-capture.png" alt="Phone capture handoff" loading="lazy"></div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128218;</div>
+        <h3>Blue Return ¥650,000 deduction</h3>
+        <p>Double-entry journal, monthly P&amp;L and balance sheet, household-business expense ratio, fixed assets register, depreciation. Generates the e-Tax-compliant Blue Form statement.</p>
+        <div class="feature-shot"><img src="../assets/screenshots/blue-return.png" alt="Blue return form screen" loading="lazy"></div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#9889;</div>
+        <h3>Auto journal rules</h3>
+        <p>Import bank/credit-card CSV and the app suggests account categories from past rules. "Apple → Communications" — accuracy improves with use.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#128196;</div>
+        <h3>Qualified invoices (Inboisu)</h3>
+        <p>PDF output supporting registration number, multi-rate tax calculation, withholding tax, and customer master integration. Same template engine for purchase orders and receipts.</p>
+        <div class="feature-shot"><img src="../assets/screenshots/invoice.png" alt="Qualified invoice screen" loading="lazy"></div>
+      </div>
+    </div>
+    <div class="inline-cta">
+      <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg">
+        Download free
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARISON -->
+<section id="comparison" style="background:#f5f5f5;">
+  <div class="container-narrow">
+    <span class="section-eyebrow">Comparison</span>
+    <h2>Compared to cloud accounting services</h2>
+    <p class="section-lead">A rough comparison with major Japan-focused services that support the Blue Return.<br>Refer to each provider's official site for current pricing.</p>
+    <div class="comparison-wrap">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th class="col-self">KAIKEI LOCAL</th>
+            <th>freee<br><small style="opacity:.7;font-weight:400;">Personal Starter</small></th>
+            <th>MoneyForward<br><small style="opacity:.7;font-weight:400;">Personal Mini</small></th>
+            <th>Yayoi<br><small style="opacity:.7;font-weight:400;">Aoiro Online Self</small></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Annual cost</td>
+            <td class="cell-self">¥0<br><small style="color:var(--muted);font-weight:400;">no subscription</small></td>
+            <td>~¥14,000+<sup>※1</sup></td>
+            <td>~¥10,800+<sup>※2</sup></td>
+            <td>~¥10,800+<sup>※3</sup></td>
+          </tr>
+          <tr>
+            <td>Data storage</td>
+            <td class="cell-self">Local (Mac)</td>
+            <td>Cloud</td>
+            <td>Cloud</td>
+            <td>Cloud</td>
+          </tr>
+          <tr>
+            <td>Offline use</td>
+            <td class="cell-self">Yes</td>
+            <td>No</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td>Blue return ¥650K deduction</td>
+            <td class="cell-self">Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td>Direct e-Tax XTX export</td>
+            <td class="cell-self">Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td>Qualified invoice (Inboisu)</td>
+            <td class="cell-self">Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Separate app</td>
+          </tr>
+          <tr>
+            <td>Bank API auto-sync</td>
+            <td class="cell-self">CSV manual</td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td>App format</td>
+            <td class="cell-self">Mac native (32 MB)</td>
+            <td>Web</td>
+            <td>Web</td>
+            <td>Web</td>
+          </tr>
+          <tr>
+            <td>UI language</td>
+            <td class="cell-self">Japanese (English planned)</td>
+            <td>Japanese</td>
+            <td>Japanese</td>
+            <td>Japanese</td>
+          </tr>
+          <tr>
+            <td>Source code</td>
+            <td class="cell-self">Public</td>
+            <td>Closed</td>
+            <td>Closed</td>
+            <td>Closed</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="comparison-footnote">
+      ※1 freee Personal Starter: ¥11,760+tax/year (annual). Monthly billing equivalent is ~¥17,760/year (April 2026, official site).<br>
+      ※2 MoneyForward Cloud Confirmation Personal Mini: ¥10,800+tax/year (April 2026, official site).<br>
+      ※3 Yayoi Aoiro Online Self plan: ¥10,300+tax/year from year two (year one free; April 2026, official site).<br>
+      Bank API auto-sync is not implemented in KAIKEI LOCAL by design — local-first architecture is at odds with cloud aggregator integrations. CSV import is offered as the alternative.
+    </p>
+  </div>
+</section>
+
+<!-- AI PLAN -->
+<section id="ai-plan" style="background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);">
+  <div class="container">
+    <span class="section-eyebrow">Optional</span>
+    <h2>✨ AI Receipt OCR plan</h2>
+    <p class="section-lead">
+      Drop a photo of a receipt and the AI extracts vendor, amount, and date — saving you from manual entry.<br>
+      Core features remain free regardless.
+    </p>
+    <div class="ai-plan-cards">
+      <div class="ai-plan-card">
+        <div class="ai-plan-name">Monthly</div>
+        <div class="ai-plan-price">¥980<small>/mo</small></div>
+        <div class="ai-plan-quota">Up to 500 receipts/month</div>
+        <a href="mailto:k.nagasawa.pc@gmail.com?subject=KAIKEI%20LOCAL%20AI%20OCR%20Monthly%20pre-registration&body=I'm%20interested%20in%20the%20monthly%20AI%20OCR%20plan.%20Please%20notify%20me%20at%20launch." class="ai-plan-cta outline">Pre-register</a>
+      </div>
+      <div class="ai-plan-card featured">
+        <div class="ribbon">2 months saved</div>
+        <div class="ai-plan-name">Annual</div>
+        <div class="ai-plan-price">¥9,800<small>/yr</small></div>
+        <div class="ai-plan-quota">500/month × 12 months</div>
+        <a href="mailto:k.nagasawa.pc@gmail.com?subject=KAIKEI%20LOCAL%20AI%20OCR%20Annual%20pre-registration&body=I'm%20interested%20in%20the%20annual%20AI%20OCR%20plan.%20Please%20notify%20me%20at%20launch." class="ai-plan-cta primary">Pre-register</a>
+      </div>
+    </div>
+    <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:28px;">
+      The AI OCR plan is currently in pre-launch. Pre-registered users will be notified first when it goes live.<br>
+      Cancel anytime via Stripe. Core features (¥0) are unaffected.
+    </p>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq">
+  <div class="container">
+    <span class="section-eyebrow">FAQ</span>
+    <h2>Frequently asked</h2>
+    <div class="faq-list">
+      <div class="faq-item">
+        <div class="faq-q">Is the app really free?</div>
+        <div class="faq-a">Yes. Bookkeeping, receipts, invoices, blue return forms, income/consumption tax calculation, and e-Tax XTX export are all free. The only paid feature is optional AI receipt OCR.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Is my data really private?</div>
+        <div class="faq-a">Yes. All data — journal entries, receipt images, invoices — is stored as a SQLite file on your Mac. No internet upload. Phone-to-Mac receipt transfer is over your local Wi-Fi LAN only. The source code is on GitHub so a third party can verify there's no hidden network traffic.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Can I file my Japan tax return entirely with this app?</div>
+        <div class="faq-a">The app generates the XTX file accepted by Japan's e-Tax system. You then load it on the official e-Tax site or e-Tax software (Windows-only) and submit. Direct submission from a Mac is not possible because the National Tax Agency hasn't implemented Mac native submission yet — this is a Japan-government limitation, not specific to KAIKEI LOCAL.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Does it work for foreign residents in Japan?</div>
+        <div class="faq-a">Yes. The accounting logic is identical regardless of nationality — the e-Tax XTX format is the same. Two caveats: (1) the UI is currently Japanese only (English planned), and (2) name/address fields expect Japanese-style input (Katakana, Kanji). Romaji-to-Katakana auto-conversion is on the roadmap. See the <a href="#guide">tax filing guide</a> above for details.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">When will English UI be ready?</div>
+        <div class="faq-a">No firm date yet. Pre-register by email and you'll be notified. The current focus is making the Japanese version stable for the 2025 tax year (filing in early 2026); English UI comes after.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Can I migrate from another accounting app?</div>
+        <div class="faq-a">You can import journal CSVs exported from freee, MoneyForward, or Yayoi. Migration is not fully automatic, but key data carries over. Opening balances and fixed assets are entered through a guided wizard.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Windows support?</div>
+        <div class="faq-a">macOS only at the moment. Tauri-based, so Windows is technically possible — we'll prioritize it based on demand.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Can I move data to another Mac?</div>
+        <div class="faq-a">Yes. From Settings, click once to create a backup ZIP including the DB and receipt images. Restore on the new Mac via the same flow.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Updates for tax law changes?</div>
+        <div class="faq-a">Yearly updates aligned with Japan's tax-law revisions. New versions are notified in-app on launch; download the latest DMG from GitHub Releases. Updates are free.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">macOS warns "developer cannot be verified"</div>
+        <div class="faq-a">During the beta we don't yet have Apple notarization. Right-click "KAIKEI LOCAL.app" → "Open" while holding Control. See the <a href="../install.html">install guide</a> for details.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="cta-section" id="download">
+  <h2>Ready to keep your tax data on your Mac?</h2>
+  <p class="section-lead">Lightweight 32 MB app. Install and start using right away.</p>
+  <div class="hero-price">¥0</div>
+  <div class="hero-price-note">Always free for core features / Optional paid plan only for AI OCR</div>
+  <div class="cta-actions">
+    <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="hero-cta">
+      ⬇︎ Download for Mac (.dmg)
+    </a>
+    <a href="../install.html" class="hero-cta hero-cta-secondary">
+      Install guide →
+    </a>
+  </div>
+  <div class="hero-sub" style="margin-top:8px;">
+    macOS 11 (Big Sur) or later / Apple Silicon (M1–M4)<br>
+    <span style="font-size:11px;">※ Intel Mac coming later</span><br>
+    <span style="opacity:.7;font-size:12px;">During the beta, macOS may show a "developer cannot be verified" warning at first launch (see install guide).</span>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>&copy; 2026 KAIKEI LOCAL. All rights reserved.</p>
+  <p style="margin-top:8px;">
+    <a href="../legal.html#privacy">Privacy Policy</a> &middot;
+    <a href="../legal.html#terms">Terms of Use</a> &middot;
+    <a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub</a> &middot;
+    <a href="mailto:k.nagasawa.pc@gmail.com">Contact</a>
+  </p>
+</footer>
+
+</body>
+</html>

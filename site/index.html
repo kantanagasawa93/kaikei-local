@@ -666,6 +666,101 @@
       color: var(--muted);
     }
 
+    /* ===== feature thumbnails ===== */
+    .feature-shot {
+      margin-top: 16px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      aspect-ratio: 16 / 10;
+      background: #f5f5f5;
+    }
+    .feature-shot img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: top;
+    }
+
+    /* ===== language switch ===== */
+    .lang-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted-strong);
+      background: rgba(0,0,0,0.04);
+      border-radius: 6px;
+      padding: 4px;
+    }
+    .lang-switch a {
+      padding: 3px 9px;
+      border-radius: 4px;
+      color: var(--muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .lang-switch a:hover { text-decoration: none; color: var(--fg); }
+    .lang-switch a.active {
+      background: #fff;
+      color: var(--fg);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    }
+
+    /* ===== Foreign residents section ===== */
+    .fr-section { background: #fff8f0; }
+    .fr-card {
+      background: #fff;
+      border: 1px solid #fde2c1;
+      border-radius: 16px;
+      padding: 36px 36px 32px;
+      box-shadow: var(--shadow-sm);
+    }
+    .fr-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      letter-spacing: -0.01em;
+    }
+    .fr-card p {
+      color: var(--muted-strong);
+      font-size: 14.5px;
+      margin-bottom: 14px;
+      line-height: 1.8;
+    }
+    .fr-card ul {
+      list-style: none;
+      padding: 0;
+      margin: 16px 0 0;
+      display: grid;
+      gap: 8px;
+    }
+    .fr-card li {
+      font-size: 13.5px;
+      color: var(--muted-strong);
+      padding-left: 4px;
+      line-height: 1.7;
+    }
+    .fr-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .fr-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: transform 0.15s;
+    }
+    .fr-cta:hover { transform: translateY(-1px); text-decoration: none; }
+    .fr-cta.primary { background: #f97316; color: #fff; }
+    .fr-cta.outline { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+
     /* ===== inline mini CTA ===== */
     .inline-cta {
       display: flex;
@@ -720,14 +815,21 @@
     <nav class="site-nav">
       <a href="#features">機能</a>
       <a href="#comparison">比較</a>
+      <a href="#foreign-residents">For 外国人</a>
       <a href="#ai-plan">AI読み取り</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub</a>
     </nav>
-    <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="header-cta">
-      ダウンロード
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-    </a>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <span class="lang-switch" aria-label="Language">
+        <a href="./" class="active" aria-current="page">JA</a>
+        <a href="en/">EN</a>
+      </span>
+      <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="header-cta">
+        ダウンロード
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </a>
+    </div>
   </div>
 </header>
 
@@ -873,6 +975,34 @@
   </div>
 </section>
 
+<!-- ===== FOREIGN RESIDENTS ===== -->
+<section class="fr-section" id="foreign-residents">
+  <div class="container-narrow">
+    <span class="section-eyebrow">For foreign residents</span>
+    <h2>日本在住の外国人の方も使えます<br><small style="font-size:60%;font-weight:500;color:var(--muted);letter-spacing:0;">For foreign residents in Japan</small></h2>
+    <div class="fr-card">
+      <h3>🇯🇵 日本での確定申告にそのまま使えます</h3>
+      <p>
+        外国籍の個人事業主・フリーランスの方も、日本での確定申告 (e-Tax) に対応した会計データを KAIKEI LOCAL で生成できます。利用者識別番号は税務署で英語フォーム提出可能です。
+      </p>
+      <p style="font-size:13.5px;color:var(--muted);">
+        Foreign residents running their own business or freelancing in Japan can use KAIKEI LOCAL to prepare their personal income tax return. The app generates standard e-Tax XTX files (RKO0010 / RSH0010) accepted by the National Tax Agency — same format used by Japanese citizens.
+      </p>
+      <ul>
+        <li>✅ 国税庁 e-Tax 仕様の XTX を生成 (RKO0010 / RSH0010)</li>
+        <li>✅ 65万円青色申告控除に対応 (複式簿記)</li>
+        <li>✅ Generates NTA-compliant XTX files for both 所得税 and 消費税</li>
+        <li>🚧 英語 UI / ローマ字氏名→カタカナ自動変換 / 在留カード番号フィールドは順次追加予定</li>
+        <li>🚧 Planned: English UI, Romaji-to-Katakana auto-conversion, Residence Card field</li>
+      </ul>
+      <div class="fr-actions">
+        <a href="en/" class="fr-cta primary">Read in English →</a>
+        <a href="mailto:k.nagasawa.pc@gmail.com?subject=KAIKEI%20LOCAL%20English%20UI%20%E5%85%88%E8%A1%8C%E7%99%BB%E9%8C%B2&body=I%27m%20interested%20in%20the%20English%20version.%20Please%20notify%20me%20when%20it%27s%20available." class="fr-cta outline">Notify me when English UI is ready</a>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ===== FEATURES ===== -->
 <section id="features" style="background:#f5f5f5;">
   <div class="container">
@@ -884,6 +1014,7 @@
         <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
         <h3>完全オフライン</h3>
         <p>仕訳、領収書、請求書...全てMacのローカルに保存。クラウドへのデータ送信は一切なし。あなたの財務データは、あなただけのもの。</p>
+        <div class="feature-shot"><img src="assets/screenshots/local-storage.png" alt="ローカル保存設定画面" loading="lazy"></div>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">&yen;0</div>
@@ -894,11 +1025,13 @@
         <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128247;</div>
         <h3>スマホで撮影 → 即取込</h3>
         <p>アプリが表示するQRコードをスマホで読み取り、写真を撮って送信。同じWi-Fi内でLAN完結。スマホ側のアプリインストールは不要です。</p>
+        <div class="feature-shot"><img src="assets/screenshots/phone-capture.png" alt="スマホ撮影連携画面" loading="lazy"></div>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128218;</div>
         <h3>青色申告 65 万円控除対応</h3>
         <p>複式簿記の仕訳帳、月次推移の損益計算書・貸借対照表、家事按分、固定資産台帳、減価償却まで。e-Tax 提出に対応した青色申告決算書を生成。</p>
+        <div class="feature-shot"><img src="assets/screenshots/blue-return.png" alt="青色申告決算書画面" loading="lazy"></div>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#9889;</div>
@@ -909,6 +1042,7 @@
         <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#128196;</div>
         <h3>適格請求書 (インボイス)</h3>
         <p>登録番号・税率ごとの税額計算に対応した PDF を出力。取引先マスタ連携、源泉徴収にも対応。発注書・領収書も同じテンプレート系で発行可能。</p>
+        <div class="feature-shot"><img src="assets/screenshots/invoice.png" alt="適格請求書発行画面" loading="lazy"></div>
       </div>
     </div>
     <div class="inline-cta">
