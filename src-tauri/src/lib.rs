@@ -7,6 +7,15 @@ mod photos;
 #[cfg(target_os = "macos")]
 mod vision;
 
+#[cfg(target_os = "macos")]
+mod classifier;
+
+#[cfg(target_os = "macos")]
+mod scanner;
+
+#[cfg(target_os = "macos")]
+mod launchd;
+
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -126,8 +135,101 @@ fn open_in_finder(path: &std::path::Path) {
 }
 
 
+// ────────────────────────────────────────────────────────────
+// LaunchAgent / 定期スキャン管理コマンド
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn launchd_status() -> serde_json::Value {
+    #[cfg(target_os = "macos")]
+    {
+        serde_json::to_value(launchd::status()).unwrap_or(serde_json::Value::Null)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        serde_json::json!({ "installed": false, "supported": false })
+    }
+}
+
+#[tauri::command]
+fn launchd_install(time: String) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let cfg = launchd::install(&time)?;
+        Ok(serde_json::to_value(cfg).unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = time;
+        Err("LaunchAgent is only supported on macOS".into())
+    }
+}
+
+#[tauri::command]
+fn launchd_uninstall() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let cfg = launchd::uninstall()?;
+        Ok(serde_json::to_value(cfg).unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("LaunchAgent is only supported on macOS".into())
+    }
+}
+
+/// `--auto-scan` 起動時のヘッドレススキャン処理。GUI を立ち上げずに
+/// scanner::run_once() を呼んで通知を出して exit する。
+#[cfg(target_os = "macos")]
+fn run_auto_scan_and_exit() -> ! {
+    use std::path::PathBuf;
+    let app_data = dirs::data_dir()
+        .map(|d| d.join("dev.kaikei.app"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/dev.kaikei.app"));
+
+    eprintln!("[auto-scan] start (app_data={})", app_data.display());
+
+    match scanner::run_once(&app_data) {
+        Ok(s) => {
+            let body = if s.new_photos == 0 {
+                "新規の写真はありませんでした".to_string()
+            } else if s.receipts > 0 {
+                format!(
+                    "新規 {} 枚 (うち領収書 {} 枚) を受信箱に追加しました",
+                    s.new_photos, s.receipts
+                )
+            } else {
+                format!("新規 {} 枚を受信箱に追加しました", s.new_photos)
+            };
+            eprintln!("[auto-scan] {}", body);
+            scanner::post_notification("KAIKEI LOCAL", &body);
+        }
+        Err(e) => {
+            eprintln!("[auto-scan] error: {}", e);
+            scanner::post_notification(
+                "KAIKEI LOCAL — スキャン失敗",
+                &format!("詳細はログを確認してください: {}", e),
+            );
+        }
+    }
+    // launchd 上では即 exit すれば次回まで再実行されない
+    std::process::exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // CLI/LaunchAgent 経由で `--auto-scan` が来た場合は GUI を立ち上げず即スキャン
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--auto-scan") {
+        #[cfg(target_os = "macos")]
+        run_auto_scan_and_exit();
+        #[cfg(not(target_os = "macos"))]
+        {
+            eprintln!("--auto-scan is only supported on macOS");
+            std::process::exit(2);
+        }
+    }
+
     let sql_migrations: Vec<Migration> = vec![
         Migration {
             version: 1,
@@ -307,6 +409,9 @@ pub fn run() {
             photos_request_authorization,
             photos_scan_recent,
             vision_recognize_text,
+            launchd_status,
+            launchd_install,
+            launchd_uninstall,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -249,3 +249,52 @@ export async function setInboxState(
 ): Promise<void> {
   await db.from("photo_inbox").update({ state }).eq("id", id);
 }
+
+// ────────────────────────────────────────────────────────────
+// LaunchAgent (定期スキャン)
+// ────────────────────────────────────────────────────────────
+
+export interface LaunchAgentStatus {
+  installed: boolean;
+  time?: string | null;
+  plist_path?: string | null;
+  last_run?: string | null;
+}
+
+export async function launchAgentStatus(): Promise<LaunchAgentStatus> {
+  try {
+    return await invoke<LaunchAgentStatus>("launchd_status");
+  } catch (e) {
+    console.warn("launchd_status failed:", e);
+    return { installed: false };
+  }
+}
+
+/** time = "HH:MM" */
+export async function launchAgentInstall(time: string): Promise<LaunchAgentStatus> {
+  return await invoke<LaunchAgentStatus>("launchd_install", { time });
+}
+
+export async function launchAgentUninstall(): Promise<LaunchAgentStatus> {
+  return await invoke<LaunchAgentStatus>("launchd_uninstall");
+}
+
+export interface ScanLogRow {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  trigger: "manual" | "schedule" | "launchagent";
+  scanned_count: number;
+  receipt_count: number;
+  imported_count: number;
+  error: string | null;
+}
+
+export async function recentScanLog(limit = 10): Promise<ScanLogRow[]> {
+  const { data } = await db
+    .from("photo_scan_log")
+    .select("*")
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  return (data as ScanLogRow[] | null) ?? [];
+}
