@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KAIKEI LOCAL - 確定申告、もうサブスクはいらない。</title>
-  <meta name="description" content="個人事業主のためのオフライン会計アプリ。基本機能は無料、AI読み取りのみ任意の月額プラン。データは全てMacのローカルに保存。">
+  <meta name="description" content="個人事業主のためのオフライン会計アプリ。基本機能はずっと無料、AI読み取りのみ任意の月額プラン。データは全てMacのローカルに保存。">
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <!-- Open Graph / Twitter Card -->
@@ -27,12 +27,19 @@
       --bg: #fafafa;
       --fg: #111;
       --muted: #666;
-      --accent: #1a1a2e;
-      --blue: #3b82f6;
+      --muted-strong: #444;
+      --accent: #0f172a;
+      --accent-soft: #1a1a2e;
+      --blue: #2563eb;
+      --blue-soft: #eff6ff;
       --green: #10b981;
       --card: #fff;
       --border: #e5e5e5;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.06);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04);
+      --shadow-lg: 0 24px 60px -12px rgba(0,0,0,0.25), 0 8px 24px -8px rgba(0,0,0,0.15);
     }
+    html { scroll-behavior: smooth; }
     body {
       font-family: 'Noto Sans JP', -apple-system, sans-serif;
       background: var(--bg);
@@ -42,48 +49,142 @@
     }
     a { color: var(--blue); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    img { display: block; max-width: 100%; height: auto; }
+
+    /* ===== HEADER ===== */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+    }
+    .site-header-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .site-logo {
+      font-weight: 900;
+      font-size: 16px;
+      letter-spacing: -0.01em;
+      color: var(--fg);
+    }
+    .site-logo:hover { text-decoration: none; }
+    .site-logo .logo-mark {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--blue);
+      border-radius: 2px;
+      margin-right: 8px;
+      transform: translateY(-1px);
+    }
+    .site-nav {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+    .site-nav a {
+      color: var(--muted-strong);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .site-nav a:hover { color: var(--fg); text-decoration: none; }
+    .header-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--fg);
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: background 0.15s;
+    }
+    .header-cta:hover { background: var(--accent); text-decoration: none; }
 
     /* ===== HERO ===== */
     .hero {
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      background: linear-gradient(135deg, #0f172a 0%, #16213e 50%, #0f3460 100%);
       color: #fff;
-      padding: 80px 24px 100px;
-      text-align: center;
+      padding: 72px 24px 88px;
+      overflow: hidden;
     }
+    .hero-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+      gap: 56px;
+      align-items: center;
+    }
+    .hero-copy { text-align: left; }
     .hero-badge {
-      display: inline-block;
-      background: rgba(255,255,255,0.15);
-      border: 1px solid rgba(255,255,255,0.2);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.18);
       border-radius: 100px;
-      padding: 6px 20px;
-      font-size: 13px;
+      padding: 5px 14px 5px 6px;
+      font-size: 12px;
       font-weight: 500;
-      margin-bottom: 32px;
-      letter-spacing: 0.5px;
+      margin-bottom: 24px;
+      letter-spacing: 0.3px;
+    }
+    .hero-badge .badge-pill {
+      background: #60a5fa;
+      color: #0f172a;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 10px;
+      font-weight: 700;
     }
     .hero h1 {
-      font-size: clamp(32px, 5vw, 56px);
+      font-size: clamp(32px, 4.6vw, 52px);
       font-weight: 900;
-      line-height: 1.2;
-      margin-bottom: 20px;
-      letter-spacing: -0.02em;
+      line-height: 1.18;
+      margin-bottom: 18px;
+      letter-spacing: -0.025em;
     }
     .hero h1 span { color: #60a5fa; }
-    .hero p {
-      font-size: 18px;
-      opacity: 0.85;
-      max-width: 600px;
-      margin: 0 auto 40px;
+    .hero-lead {
+      font-size: 17px;
+      opacity: 0.82;
+      max-width: 520px;
+      margin-bottom: 28px;
+      line-height: 1.7;
+    }
+    .hero-price-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 24px;
     }
     .hero-price {
-      font-size: 48px;
+      font-size: 44px;
       font-weight: 900;
-      margin-bottom: 8px;
+      line-height: 1;
+      letter-spacing: -0.03em;
     }
     .hero-price-note {
-      font-size: 14px;
-      opacity: 0.6;
-      margin-bottom: 32px;
+      font-size: 13px;
+      opacity: 0.65;
+      line-height: 1.5;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
     }
     .hero-cta {
       display: inline-flex;
@@ -91,122 +192,424 @@
       gap: 8px;
       background: #fff;
       color: var(--accent);
-      padding: 16px 40px;
-      border-radius: 12px;
-      font-size: 18px;
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-size: 15px;
       font-weight: 700;
       transition: transform 0.15s, box-shadow 0.15s;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
     }
     .hero-cta:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+      transform: translateY(-1px);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.35);
       text-decoration: none;
     }
+    .hero-cta-secondary {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.2);
+      box-shadow: none;
+    }
+    .hero-cta-secondary:hover {
+      background: rgba(255,255,255,0.18);
+      box-shadow: none;
+    }
     .hero-sub {
-      margin-top: 16px;
+      font-size: 12px;
+      opacity: 0.55;
+      line-height: 1.7;
+    }
+    .hero-sub a { color: #93c5fd; }
+
+    /* ヒーロー画像 (Mac風ウィンドウフレーム) */
+    .hero-shot {
+      position: relative;
+      transform: perspective(1200px) rotateY(-3deg) rotateX(2deg);
+      transform-origin: center;
+    }
+    .browser-frame {
+      background: #1e293b;
+      border-radius: 12px;
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .browser-bar {
+      background: #0f172a;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .browser-bar .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .browser-bar .dot-r { background: #ff5f57; }
+    .browser-bar .dot-y { background: #febc2e; }
+    .browser-bar .dot-g { background: #28c840; }
+    .browser-bar .browser-title {
+      flex: 1;
+      text-align: center;
+      font-size: 11px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 0.4px;
+    }
+    .browser-frame img {
+      width: 100%;
+      display: block;
+    }
+
+    /* ===== TRUST BAR ===== */
+    .trust-bar {
+      background: #fff;
+      border-bottom: 1px solid var(--border);
+      padding: 22px 24px;
+    }
+    .trust-bar-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+      align-items: center;
+    }
+    .trust-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       font-size: 13px;
-      opacity: 0.5;
+      color: var(--muted-strong);
+      font-weight: 500;
+    }
+    .trust-item .trust-icon {
+      width: 28px;
+      height: 28px;
+      flex-shrink: 0;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
     }
 
     /* ===== CONTAINER ===== */
-    .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+    .container { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+    .container-narrow { max-width: 960px; margin: 0 auto; padding: 0 24px; }
 
     /* ===== SECTION ===== */
-    section { padding: 80px 0; }
-    section h2 {
-      font-size: 28px;
-      font-weight: 700;
+    section { padding: 64px 0; }
+    section.section-tight { padding: 48px 0; }
+    .section-eyebrow {
+      display: block;
       text-align: center;
-      margin-bottom: 48px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--blue);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    section h2 {
+      font-size: clamp(24px, 3.5vw, 34px);
+      font-weight: 900;
+      text-align: center;
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+      line-height: 1.3;
+    }
+    .section-lead {
+      text-align: center;
+      color: var(--muted);
+      font-size: 15px;
+      max-width: 640px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    /* ===== STEP FLOW ===== */
+    .step-flow {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .step-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .step-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-md);
+    }
+    .step-number {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #fff;
+      font-weight: 800;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .step-card h3 {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .step-card p {
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    .step-shot {
+      margin-top: auto;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      aspect-ratio: 16 / 10;
+      background: #f5f5f5;
+    }
+    .step-shot img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: top;
+    }
+
+    /* ===== WHY KAIKEI ===== */
+    .why-section { background: #fff; }
+    .why-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+    }
+    .why-card {
+      text-align: center;
+      padding: 8px;
+    }
+    .why-icon {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 20px;
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 30px;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+    .why-card h3 {
+      font-size: 19px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      letter-spacing: -0.01em;
+    }
+    .why-card p {
+      font-size: 14.5px;
+      color: var(--muted-strong);
+      line-height: 1.75;
     }
 
     /* ===== FEATURES ===== */
     .features-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 24px;
+      gap: 20px;
     }
     .feature-card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 16px;
-      padding: 32px;
+      padding: 28px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .feature-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
     }
     .feature-icon {
-      width: 48px;
-      height: 48px;
-      border-radius: 12px;
+      width: 44px;
+      height: 44px;
+      border-radius: 11px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 24px;
-      margin-bottom: 16px;
+      font-size: 22px;
+      margin-bottom: 14px;
     }
     .feature-card h3 {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 700;
       margin-bottom: 8px;
+      letter-spacing: -0.01em;
     }
     .feature-card p {
-      font-size: 14px;
-      color: var(--muted);
-      line-height: 1.6;
-    }
-
-    /* ===== COMPARISON ===== */
-    .comparison-table {
-      width: 100%;
-      border-collapse: collapse;
-      background: var(--card);
-      border-radius: 16px;
-      overflow: hidden;
-      border: 1px solid var(--border);
-    }
-    .comparison-table th, .comparison-table td {
-      padding: 16px 20px;
-      text-align: left;
-      border-bottom: 1px solid var(--border);
-      font-size: 14px;
-    }
-    .comparison-table th {
-      background: var(--accent);
-      color: #fff;
-      font-weight: 500;
-    }
-    .comparison-table tr:last-child td { border-bottom: none; }
-    .comparison-table .highlight {
-      background: #eff6ff;
-      font-weight: 600;
-    }
-
-    /* ===== FAQ ===== */
-    .faq-list { max-width: 700px; margin: 0 auto; }
-    .faq-item {
-      border-bottom: 1px solid var(--border);
-      padding: 24px 0;
-    }
-    .faq-item:last-child { border-bottom: none; }
-    .faq-q {
-      font-weight: 700;
-      font-size: 16px;
-      margin-bottom: 8px;
-    }
-    .faq-a {
       font-size: 14px;
       color: var(--muted);
       line-height: 1.7;
     }
 
-    /* ===== CTA ===== */
-    .cta-section {
+    /* ===== COMPARISON ===== */
+    .comparison-wrap {
+      background: var(--card);
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+    }
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .comparison-table th, .comparison-table td {
+      padding: 14px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      font-size: 13.5px;
+      vertical-align: middle;
+    }
+    .comparison-table thead th {
       background: var(--accent);
       color: #fff;
-      text-align: center;
-      padding: 80px 24px;
+      font-weight: 700;
+      font-size: 13px;
     }
-    .cta-section h2 { color: #fff; margin-bottom: 16px; }
-    .cta-section p { opacity: 0.7; margin-bottom: 32px; }
+    .comparison-table thead th.col-self {
+      background: var(--blue);
+    }
+    .comparison-table tr:last-child td { border-bottom: none; }
+    .comparison-table .col-self,
+    .comparison-table tbody td.cell-self {
+      background: #eff6ff;
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .comparison-footnote {
+      margin-top: 14px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    /* ===== FAQ ===== */
+    .faq-list { max-width: 760px; margin: 0 auto; }
+    .faq-item {
+      border-bottom: 1px solid var(--border);
+      padding: 22px 0;
+    }
+    .faq-item:last-child { border-bottom: none; }
+    .faq-q {
+      font-weight: 700;
+      font-size: 15.5px;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+    .faq-a {
+      font-size: 14px;
+      color: var(--muted-strong);
+      line-height: 1.75;
+    }
+
+    /* ===== AI PLAN ===== */
+    .ai-plan-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    .ai-plan-card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      text-align: center;
+    }
+    .ai-plan-card.featured {
+      border: 2px solid var(--blue);
+      position: relative;
+    }
+    .ai-plan-card .ribbon {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--blue);
+      color: #fff;
+      font-size: 11px;
+      padding: 4px 14px;
+      border-radius: 100px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .ai-plan-name {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .ai-plan-price {
+      font-size: 36px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      margin-bottom: 4px;
+    }
+    .ai-plan-price small {
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--muted);
+    }
+    .ai-plan-quota {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 18px;
+    }
+    .ai-plan-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      transition: transform 0.15s;
+    }
+    .ai-plan-cta:hover { transform: translateY(-1px); text-decoration: none; }
+    .ai-plan-cta.primary {
+      background: var(--blue);
+      color: #fff;
+    }
+    .ai-plan-cta.outline {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--border);
+    }
+
+    /* ===== CTA ===== */
+    .cta-section {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #fff;
+      text-align: center;
+      padding: 72px 24px;
+    }
+    .cta-section h2 { color: #fff; margin-bottom: 12px; }
+    .cta-section .section-lead { color: rgba(255,255,255,0.65); margin-bottom: 32px; }
+    .cta-section .hero-price { margin-bottom: 4px; }
+    .cta-section .hero-price-note { color: rgba(255,255,255,0.55); margin-bottom: 28px; }
+    .cta-actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-bottom: 16px; }
 
     /* ===== FOOTER ===== */
     footer {
@@ -220,68 +623,262 @@
     /* ===== BANK GRID ===== */
     .bank-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 8px;
     }
     .bank-chip {
       background: #fff;
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 12px 14px;
-      font-size: 13px;
+      padding: 10px 12px;
+      font-size: 12.5px;
       font-weight: 500;
       color: var(--fg);
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 9px;
       transition: transform 0.15s, box-shadow 0.15s;
     }
     .bank-chip:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-sm);
     }
     .bank-bar {
       display: inline-block;
-      width: 4px;
-      height: 24px;
+      width: 3px;
+      height: 18px;
       background: var(--brand, #999);
       border-radius: 2px;
       flex-shrink: 0;
     }
+    .bank-section-label {
+      font-size: 14px;
+      font-weight: 700;
+      margin: 0 0 14px;
+      color: var(--fg);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .bank-section-label .count {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+
+    /* ===== inline mini CTA ===== */
+    .inline-cta {
+      display: flex;
+      justify-content: center;
+      margin-top: 36px;
+    }
+    .inline-cta a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--fg);
+      color: #fff;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .inline-cta a:hover { text-decoration: none; opacity: 0.9; }
 
     /* ===== RESPONSIVE ===== */
+    @media (max-width: 960px) {
+      .hero-inner {
+        grid-template-columns: 1fr;
+        gap: 40px;
+      }
+      .hero-copy { text-align: center; }
+      .hero-badge { margin-left: auto; margin-right: auto; }
+      .hero-price-row { justify-content: center; }
+      .hero-actions { justify-content: center; }
+      .hero-shot { transform: none; max-width: 600px; margin: 0 auto; }
+      .step-flow { grid-template-columns: 1fr; }
+      .why-grid { grid-template-columns: 1fr; gap: 24px; }
+      .trust-bar-inner { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    }
     @media (max-width: 640px) {
-      .hero { padding: 60px 20px 80px; }
+      .hero { padding: 56px 20px 64px; }
       .hero-price { font-size: 36px; }
-      section { padding: 60px 0; }
-      .comparison-table { font-size: 12px; }
-      .comparison-table th, .comparison-table td { padding: 10px 12px; }
+      section { padding: 48px 0; }
+      section h2 { font-size: 22px; }
+      .comparison-table th, .comparison-table td { padding: 10px 10px; font-size: 12px; }
+      .site-nav { display: none; }
+      .site-header-inner { padding: 10px 20px; }
     }
   </style>
 </head>
 <body>
 
-<!-- HERO -->
-<div class="hero">
-  <div class="hero-badge">Mac App for 個人事業主</div>
-  <h1>確定申告、もう<br><span>サブスク</span>はいらない。</h1>
-  <p>データは全てあなたのMacに。クラウドに一切送信しない、完全オフラインの会計アプリ。</p>
-  <div class="hero-price">無料</div>
-  <div class="hero-price-note">基本機能ずっと無料 / AI 読み取り機能のみ任意の月額プラン</div>
-  <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="hero-cta">
-    Mac 版をダウンロード (.dmg)
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
-  </a>
-  <div class="hero-sub">
-    macOS 11 (Big Sur) 以降 / Apple Silicon (M1/M2/M3/M4) 対応 &middot;
-    <a href="install.html" style="color:#93c5fd;">開き方ガイド</a>
+<!-- ===== STICKY HEADER ===== -->
+<header class="site-header">
+  <div class="site-header-inner">
+    <a href="#top" class="site-logo"><span class="logo-mark"></span>KAIKEI LOCAL</a>
+    <nav class="site-nav">
+      <a href="#features">機能</a>
+      <a href="#comparison">比較</a>
+      <a href="#ai-plan">AI読み取り</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="header-cta">
+      ダウンロード
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+    </a>
+  </div>
+</header>
+
+<!-- ===== HERO ===== -->
+<div class="hero" id="top">
+  <div class="hero-inner">
+    <div class="hero-copy">
+      <span class="hero-badge">
+        <span class="badge-pill">v0.2</span>
+        Mac App for 個人事業主
+      </span>
+      <h1>確定申告、もう<br><span>サブスク</span>はいらない。</h1>
+      <p class="hero-lead">
+        データは全てあなたのMacに。クラウドに一切送信しない、完全オフラインの会計アプリ。仕訳・領収書・青色申告・e-Tax XTX 出力まで、ずっと無料で使えます。
+      </p>
+      <div class="hero-price-row">
+        <div class="hero-price">¥0</div>
+        <div class="hero-price-note">基本機能ずっと無料<br>AI 読み取り機能のみ任意の月額プラン</div>
+      </div>
+      <div class="hero-actions">
+        <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="hero-cta">
+          Mac 版をダウンロード (.dmg)
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+        </a>
+        <a href="#features" class="hero-cta hero-cta-secondary">
+          機能を見る
+        </a>
+      </div>
+      <div class="hero-sub">
+        macOS 11 (Big Sur) 以降 / Apple Silicon (M1/M2/M3/M4) 対応 &middot;
+        <a href="install.html">開き方ガイド</a>
+      </div>
+    </div>
+    <div class="hero-shot">
+      <div class="browser-frame">
+        <div class="browser-bar">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="browser-title">KAIKEI LOCAL — ダッシュボード</span>
+        </div>
+        <img src="assets/screenshots/dashboard.png" alt="KAIKEI LOCAL ダッシュボード画面" loading="eager">
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- FEATURES -->
-<section>
+<!-- ===== TRUST BAR ===== -->
+<div class="trust-bar">
+  <div class="trust-bar-inner">
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#f0fdf4;color:#10b981;">&yen;0</span>
+      基本機能ずっと無料
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</span>
+      完全オフライン保存
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#fff7ed;color:#f97316;">&#9989;</span>
+      e-Tax 実機検証済み
+    </div>
+    <div class="trust-item">
+      <span class="trust-icon" style="background:#ede9fe;color:#8b5cf6;">&#128196;</span>
+      オープンソース
+    </div>
+  </div>
+</div>
+
+<!-- ===== 3-STEP FLOW ===== -->
+<section id="how-it-works">
   <div class="container">
-    <h2>必要な機能を、圧倒的な低価格で。</h2>
+    <span class="section-eyebrow">How it works</span>
+    <h2>3 ステップで、確定申告まで完結</h2>
+    <p class="section-lead">
+      銀行・カードの CSV を入れるところから e-Tax 用 XTX ファイル生成まで、全部 Mac の中で完結。<br>
+      クラウドに一切データを送りません。
+    </p>
+    <div class="step-flow">
+      <div class="step-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="step-number">1</span>
+          <h3>銀行 CSV を取り込む</h3>
+        </div>
+        <p>みずほ・三菱UFJ・住信SBI など主要 30+ 行 / カード 11 社の CSV を自動判別。Shift_JIS でも UTF-8 でも、ヘッダの形式を見て勝手に直してくれます。</p>
+        <div class="step-shot">
+          <img src="assets/screenshots/bank-csv.png" alt="銀行CSV取込画面" loading="lazy">
+        </div>
+      </div>
+      <div class="step-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="step-number">2</span>
+          <h3>AI が仕訳をつくる</h3>
+        </div>
+        <p>取引内容と過去のルールから勘定科目を推測。「Apple」→ 通信費、「JR」→ 旅費交通費 のように、使うほど精度が上がる学習型エンジン。</p>
+        <div class="step-shot">
+          <img src="assets/screenshots/ai-journal.png" alt="AI自動仕訳画面" loading="lazy">
+        </div>
+      </div>
+      <div class="step-card">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="step-number">3</span>
+          <h3>e-Tax XTX が出力される</h3>
+        </div>
+        <p>所得税申告 (RKO0010) と消費税申告 (RSH0010) の XTX を直接生成。e-Tax マイページの「データ内容確認」で実際にパース・帳票表示まで通ることを確認済み。</p>
+        <div class="step-shot">
+          <img src="assets/screenshots/etax.png" alt="e-Tax XTX出力画面" loading="lazy">
+        </div>
+      </div>
+    </div>
+    <div class="inline-cta">
+      <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg">
+        無料ダウンロード
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ===== WHY KAIKEI LOCAL ===== -->
+<section class="why-section">
+  <div class="container">
+    <span class="section-eyebrow">Why KAIKEI LOCAL</span>
+    <h2>クラウド会計と何が違うのか</h2>
+    <p class="section-lead">freee や マネーフォワードのようなクラウドサービスとは、設計思想がまるで違います。</p>
+    <div class="why-grid">
+      <div class="why-card">
+        <div class="why-icon" style="background:#eff6ff;color:#2563eb;">&#128274;</div>
+        <h3>データはあなたのMacにだけ</h3>
+        <p>SQLite ファイルとしてローカルに保存。クラウドに送信しないので、サービス停止・データ漏洩・規約変更でデータが消えることがありません。</p>
+      </div>
+      <div class="why-card">
+        <div class="why-icon" style="background:#f0fdf4;color:#10b981;">&yen;0</div>
+        <h3>サブスクなし、ずっと無料</h3>
+        <p>仕訳から青色申告決算書、e-Tax XTX 出力まで全部無料。月額 1,000 円 × 数年というクラウドの累積コストがかかりません。</p>
+      </div>
+      <div class="why-card">
+        <div class="why-icon" style="background:#fff7ed;color:#f97316;">&#9889;</div>
+        <h3>Mac ネイティブで軽い</h3>
+        <p>Tauri ベースの 32MB ネイティブアプリ。Web アプリのようなページ遷移待ちがなく、オフラインでも瞬時に開く。M1/M2/M3/M4 にネイティブ対応。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FEATURES ===== -->
+<section id="features" style="background:#f5f5f5;">
+  <div class="container">
+    <span class="section-eyebrow">Features</span>
+    <h2>必要な機能は、ぜんぶ揃っている。</h2>
+    <p class="section-lead">青色申告 65 万円控除に必要な複式簿記から、インボイス対応の請求書発行まで。</p>
     <div class="features-grid">
       <div class="feature-card">
         <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
@@ -289,115 +886,145 @@
         <p>仕訳、領収書、請求書...全てMacのローカルに保存。クラウドへのデータ送信は一切なし。あなたの財務データは、あなただけのもの。</p>
       </div>
       <div class="feature-card">
-        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">&#128179;</div>
-        <h3>買い切り 3,980円</h3>
-        <p>月額課金なし。一度買えば、ずっと使える。税制改正対応のアップデートも良心的な価格で提供予定。</p>
+        <div class="feature-icon" style="background:#f0fdf4;color:#10b981;">&yen;0</div>
+        <h3>基本機能ずっと無料</h3>
+        <p>仕訳・領収書管理・青色申告決算書・所得税/消費税計算・e-Tax 用 XTX 出力まで、すべて無料で利用可能。サブスクも買い切り料金もありません。</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128247;</div>
-        <h3>スマホで撮影→即取込</h3>
-        <p>アプリが表示するQRコードをスマホで読み取り、写真を撮って送信。同じWi-Fi内で完結。アプリのインストール不要。</p>
+        <h3>スマホで撮影 → 即取込</h3>
+        <p>アプリが表示するQRコードをスマホで読み取り、写真を撮って送信。同じWi-Fi内でLAN完結。スマホ側のアプリインストールは不要です。</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128218;</div>
-        <h3>青色申告対応</h3>
-        <p>複式簿記の仕訳帳、月次推移の損益計算書・貸借対照表、家事按分、固定資産台帳、減価償却まで。65万円控除に対応。</p>
+        <h3>青色申告 65 万円控除対応</h3>
+        <p>複式簿記の仕訳帳、月次推移の損益計算書・貸借対照表、家事按分、固定資産台帳、減価償却まで。e-Tax 提出に対応した青色申告決算書を生成。</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#9889;</div>
         <h3>自動仕訳ルール</h3>
-        <p>銀行・クレカのCSVを取り込むと、登録したルールで勘定科目を自動推測。使うほど正答率が上がる学習型。</p>
+        <p>銀行・クレカのCSVを取り込むと、登録したルールで勘定科目を自動推測。「Apple→通信費」のように使うほど正答率が上がる学習型エンジン。</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#fff7ed;color:#f97316;">&#128196;</div>
-        <h3>請求書発行</h3>
-        <p>適格請求書（インボイス）フォーマットのPDFを出力。取引先マスタ連携、税率ごとの税額計算、登録番号対応。</p>
+        <h3>適格請求書 (インボイス)</h3>
+        <p>登録番号・税率ごとの税額計算に対応した PDF を出力。取引先マスタ連携、源泉徴収にも対応。発注書・領収書も同じテンプレート系で発行可能。</p>
       </div>
+    </div>
+    <div class="inline-cta">
+      <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg">
+        無料ダウンロード
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </a>
     </div>
   </div>
 </section>
 
-<!-- COMPARISON -->
-<section style="background:#f5f5f5;">
-  <div class="container">
-    <h2>他サービスとの比較</h2>
-    <table class="comparison-table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>KAIKEI LOCAL</th>
-          <th>クラウド会計 A</th>
-          <th>クラウド会計 B</th>
-          <th>クラウド会計 C</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>年間コスト</td>
-          <td class="highlight">3,980円（買い切り）</td>
-          <td>11,760円〜</td>
-          <td>10,560円〜</td>
-          <td>8,800円〜</td>
-        </tr>
-        <tr>
-          <td>データ保存先</td>
-          <td class="highlight">ローカルのみ</td>
-          <td>クラウド</td>
-          <td>クラウド</td>
-          <td>クラウド</td>
-        </tr>
-        <tr>
-          <td>オフライン利用</td>
-          <td class="highlight">可能</td>
-          <td>不可</td>
-          <td>不可</td>
-          <td>不可</td>
-        </tr>
-        <tr>
-          <td>青色申告65万円控除</td>
-          <td class="highlight">対応</td>
-          <td>対応</td>
-          <td>対応</td>
-          <td>対応</td>
-        </tr>
-        <tr>
-          <td>請求書発行</td>
-          <td class="highlight">対応</td>
-          <td>対応</td>
-          <td>対応</td>
-          <td>別料金</td>
-        </tr>
-        <tr>
-          <td>銀行API連携</td>
-          <td>CSV取込</td>
-          <td>対応</td>
-          <td>対応</td>
-          <td>対応</td>
-        </tr>
-        <tr>
-          <td>アプリサイズ</td>
-          <td class="highlight">32MB</td>
-          <td>Webアプリ</td>
-          <td>Webアプリ</td>
-          <td>Webアプリ</td>
-        </tr>
-      </tbody>
-    </table>
+<!-- ===== COMPARISON ===== -->
+<section id="comparison">
+  <div class="container-narrow">
+    <span class="section-eyebrow">Comparison</span>
+    <h2>クラウド会計サービスとの比較</h2>
+    <p class="section-lead">青色申告ができる主要サービスとの、ざっくりした比較です。<br>各社の最新の料金は公式サイトでご確認ください。</p>
+    <div class="comparison-wrap">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th class="col-self">KAIKEI LOCAL</th>
+            <th>freee 会計<br><small style="opacity:.7;font-weight:400;">スターター</small></th>
+            <th>マネーフォワード<br><small style="opacity:.7;font-weight:400;">クラウド確定申告 ミニ</small></th>
+            <th>弥生<br><small style="opacity:.7;font-weight:400;">青色申告 オンライン</small></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>年間コスト</td>
+            <td class="cell-self">¥0<br><small style="color:var(--muted);font-weight:400;">サブスクなし</small></td>
+            <td>約 ¥14,000〜<sup>※1</sup></td>
+            <td>約 ¥10,800〜<sup>※2</sup></td>
+            <td>約 ¥10,800〜<sup>※3</sup></td>
+          </tr>
+          <tr>
+            <td>データ保存先</td>
+            <td class="cell-self">ローカル (Mac)</td>
+            <td>クラウド</td>
+            <td>クラウド</td>
+            <td>クラウド</td>
+          </tr>
+          <tr>
+            <td>オフライン利用</td>
+            <td class="cell-self">可能</td>
+            <td>不可</td>
+            <td>不可</td>
+            <td>不可</td>
+          </tr>
+          <tr>
+            <td>青色申告 65万円控除</td>
+            <td class="cell-self">対応</td>
+            <td>対応</td>
+            <td>対応</td>
+            <td>対応</td>
+          </tr>
+          <tr>
+            <td>e-Tax XTX 直接出力</td>
+            <td class="cell-self">対応</td>
+            <td>対応</td>
+            <td>対応</td>
+            <td>対応</td>
+          </tr>
+          <tr>
+            <td>請求書発行 (インボイス)</td>
+            <td class="cell-self">対応</td>
+            <td>対応</td>
+            <td>対応</td>
+            <td>別アプリ</td>
+          </tr>
+          <tr>
+            <td>銀行 API 自動連携</td>
+            <td class="cell-self">CSV 手動取込</td>
+            <td>対応</td>
+            <td>対応</td>
+            <td>対応</td>
+          </tr>
+          <tr>
+            <td>アプリ形式</td>
+            <td class="cell-self">Mac ネイティブ (32MB)</td>
+            <td>Web</td>
+            <td>Web</td>
+            <td>Web</td>
+          </tr>
+          <tr>
+            <td>ソースコード</td>
+            <td class="cell-self">公開</td>
+            <td>非公開</td>
+            <td>非公開</td>
+            <td>非公開</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="comparison-footnote">
+      ※1 freee 会計 個人スターター: 年払い ¥11,760 + 税。月払いは年換算で約 ¥17,760 相当 (2026年4月時点 公式サイト調べ)<br>
+      ※2 マネーフォワード クラウド確定申告 パーソナルミニ: 年払い ¥10,800 + 税 (2026年4月時点 公式サイト調べ)<br>
+      ※3 弥生 青色申告オンライン セルフプラン: 年 ¥10,300 + 税 (初年度無料、次年度以降。2026年4月時点 公式サイト調べ)<br>
+      銀行 API 自動連携は KAIKEI LOCAL では実装していません (ローカル設計のためスクレイピング/Aggregator 連携と相性が悪い) 。CSV 自動取込で代替しています。
+    </p>
   </div>
 </section>
 
-<!-- SUPPORTED BANKS -->
-<section>
+<!-- ===== SUPPORTED BANKS ===== -->
+<section style="background:#f5f5f5;">
   <div class="container">
+    <span class="section-eyebrow">Supported</span>
     <h2>対応銀行・カード</h2>
-    <p style="text-align:center;color:var(--muted);font-size:14px;max-width:640px;margin:-32px auto 40px;">
-      各銀行・カード会社が発行する CSV を自動判別してインポートします。未対応の銀行でも、
-      一般的な形式なら汎用パーサで取り込めます。Shift_JIS / UTF-8 両対応。
+    <p class="section-lead">
+      各銀行・カード会社が発行する CSV を自動判別してインポート。未対応の銀行でも、<br>
+      標準的なヘッダ (日付/摘要/入金/出金/残高) なら汎用パーサで取り込めます。
     </p>
 
-    <!-- 銀行 -->
-    <h3 style="font-size:18px;margin:0 0 16px;color:var(--fg);">🏦 銀行 (15行)</h3>
-    <div class="bank-grid" style="margin-bottom:40px;">
+    <h3 class="bank-section-label">🏦 銀行 <span class="count">25 行</span></h3>
+    <div class="bank-grid" style="margin-bottom:32px;">
       <div class="bank-chip" style="--brand:#003f8e;"><span class="bank-bar"></span>みずほ銀行</div>
       <div class="bank-chip" style="--brand:#c8102e;"><span class="bank-bar"></span>三菱UFJ銀行</div>
       <div class="bank-chip" style="--brand:#1e8b4e;"><span class="bank-bar"></span>三井住友銀行</div>
@@ -425,8 +1052,7 @@
       <div class="bank-chip" style="--brand:#e50012;"><span class="bank-bar"></span>東邦銀行</div>
     </div>
 
-    <!-- カード -->
-    <h3 style="font-size:18px;margin:0 0 16px;color:var(--fg);">💳 クレジットカード (11社)</h3>
+    <h3 class="bank-section-label">💳 クレジットカード <span class="count">12 社</span></h3>
     <div class="bank-grid">
       <div class="bank-chip" style="--brand:#bf0000;"><span class="bank-bar"></span>楽天カード</div>
       <div class="bank-chip" style="--brand:#1e8b4e;"><span class="bank-bar"></span>三井住友カード</div>
@@ -442,23 +1068,23 @@
       <div class="bank-chip" style="--brand:#d4007a;"><span class="bank-bar"></span>イオンカード</div>
     </div>
 
-    <p style="text-align:center;color:var(--muted);font-size:12px;margin-top:32px;line-height:1.8;">
-      ※ 上記ロゴマーク・銀行名・カード名は各社の商標です。KAIKEI LOCAL は各社と提携していません。<br>
-      未対応の銀行・カードでも、CSV ヘッダが標準的な形式 (日付 / 摘要 / 入金 / 出金 / 残高)<br>
-      であれば汎用パーサで取り込めます。対応追加のご要望は
-      <a href="mailto:k.nagasawa.pc@gmail.com">k.nagasawa.pc@gmail.com</a> まで。
+    <p style="text-align:center;color:var(--muted);font-size:11.5px;margin-top:28px;line-height:1.8;">
+      ※ 上記の銀行名・カード名は各社の商標です。KAIKEI LOCAL は各社と提携していません。<br>
+      対応追加のご要望は <a href="mailto:k.nagasawa.pc@gmail.com">k.nagasawa.pc@gmail.com</a> までご連絡ください。
     </p>
   </div>
 </section>
 
-<!-- TRUST / SECURITY -->
-<section style="background:#f5f5f5;">
+<!-- ===== TRUST / SECURITY ===== -->
+<section>
   <div class="container">
+    <span class="section-eyebrow">Security</span>
     <h2>なぜ安心して使えるのか</h2>
+    <p class="section-lead">財務データを預ける以上、信頼の根拠は明示しておくべきだと考えています。</p>
     <div class="features-grid">
       <div class="feature-card">
         <div class="feature-icon" style="background:#eff6ff;color:#3b82f6;">&#128274;</div>
-        <h3>オフライン動作</h3>
+        <h3>完全オフライン動作</h3>
         <p>仕訳・領収書・請求書・確定申告データはすべて Mac のローカル SQLite ファイルに保存。クラウドへのバックアップ送信も一切ありません。</p>
       </div>
       <div class="feature-card">
@@ -469,12 +1095,12 @@
       <div class="feature-card">
         <div class="feature-icon" style="background:#fef3c7;color:#f59e0b;">&#128257;</div>
         <h3>日次自動バックアップ</h3>
-        <p>アプリ起動時に DB を snapshots/ に自動保存。直近 7 日分保持。復元時も自動で pre-restore スナップショットを作成するので失敗時に安全に戻せます。</p>
+        <p>アプリ起動時に DB を snapshots/ に自動保存。直近 7 日分保持。復元時も自動で pre-restore スナップショットを作成するので、失敗時に安全に戻せます。</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#ede9fe;color:#8b5cf6;">&#128196;</div>
         <h3>オープンソース</h3>
-        <p><a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank">GitHub で全コードを公開</a>。データの取り扱いも第三者が検証可能。隠れた外部送信はありません。</p>
+        <p><a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub で全コードを公開</a>。データの取り扱いも第三者が検証可能。隠れた外部送信はありません。</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon" style="background:#fce7f3;color:#ec4899;">&#128269;</div>
@@ -490,121 +1116,118 @@
   </div>
 </section>
 
-<!-- FAQ -->
-<section>
+<!-- ===== AI PLAN ===== -->
+<section id="ai-plan" style="background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);">
   <div class="container">
+    <span class="section-eyebrow">Optional</span>
+    <h2>✨ AI 読み取りプラン</h2>
+    <p class="section-lead">
+      領収書の写真を入れるだけで、店名・金額・日付を AI が自動で読み取る追加機能。<br>
+      面倒な手入力から解放されます。基本機能は無料のままご利用いただけます。
+    </p>
+    <div class="ai-plan-cards">
+      <div class="ai-plan-card">
+        <div class="ai-plan-name">月額プラン</div>
+        <div class="ai-plan-price">&yen;980<small>/月</small></div>
+        <div class="ai-plan-quota">月 500 枚まで読み取り可能</div>
+        <a href="mailto:k.nagasawa.pc@gmail.com?subject=KAIKEI%20LOCAL%20AI%E8%AA%AD%E3%81%BF%E5%8F%96%E3%82%8A%E5%85%88%E8%A1%8C%E7%99%BB%E9%8C%B2%20%28%E6%9C%88%E9%A1%8D%29&body=AI%E8%AA%AD%E3%81%BF%E5%8F%96%E3%82%8A%E6%A9%9F%E8%83%BD%E3%81%AE%E6%9C%88%E9%A1%8D%E3%83%97%E3%83%A9%E3%83%B3%E3%81%AB%E5%85%88%E8%A1%8C%E7%99%BB%E9%8C%B2%E3%81%97%E3%81%9F%E3%81%84%E3%81%A7%E3%81%99%E3%80%82" class="ai-plan-cta outline">先行登録する</a>
+      </div>
+      <div class="ai-plan-card featured">
+        <div class="ribbon">2ヶ月分お得</div>
+        <div class="ai-plan-name">年額プラン</div>
+        <div class="ai-plan-price">&yen;9,800<small>/年</small></div>
+        <div class="ai-plan-quota">月 500 枚 × 12ヶ月</div>
+        <a href="mailto:k.nagasawa.pc@gmail.com?subject=KAIKEI%20LOCAL%20AI%E8%AA%AD%E3%81%BF%E5%8F%96%E3%82%8A%E5%85%88%E8%A1%8C%E7%99%BB%E9%8C%B2%20%28%E5%B9%B4%E9%A1%8D%29&body=AI%E8%AA%AD%E3%81%BF%E5%8F%96%E3%82%8A%E6%A9%9F%E8%83%BD%E3%81%AE%E5%B9%B4%E9%A1%8D%E3%83%97%E3%83%A9%E3%83%B3%E3%81%AB%E5%85%88%E8%A1%8C%E7%99%BB%E9%8C%B2%E3%81%97%E3%81%9F%E3%81%84%E3%81%A7%E3%81%99%E3%80%82" class="ai-plan-cta primary">先行登録する</a>
+      </div>
+    </div>
+    <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:28px;">
+      ※ AI 読み取りプランは現在ベータ提供準備中。先行登録いただいた方には正式リリース時に優先案内をお送りします。<br>
+      解約は Stripe カスタマーポータルから随時可能。基本機能 (¥0) には影響しません。
+    </p>
+  </div>
+</section>
+
+<!-- ===== FAQ ===== -->
+<section id="faq">
+  <div class="container">
+    <span class="section-eyebrow">FAQ</span>
     <h2>よくある質問</h2>
     <div class="faq-list">
       <div class="faq-item">
-        <div class="faq-q">Q: データは本当に外に出ませんか？</div>
-        <div class="faq-a">はい。全てのデータ（仕訳、領収書画像、請求書）はMacのローカルフォルダにSQLiteファイルとして保存されます。インターネットへの送信は一切行いません。スマホ連携も同一Wi-Fi内のLAN通信のみです。</div>
+        <div class="faq-q">基本機能は本当にずっと無料ですか？</div>
+        <div class="faq-a">はい。仕訳・領収書・請求書・青色申告決算書・所得税/消費税計算・e-Tax 用 XTX 出力まで、すべて無料でご利用いただけます。課金が必要なのは AI 領収書読み取り機能のみです (任意)。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: 他の会計ソフトから乗り換えられますか？</div>
-        <div class="faq-a">多くのクラウド会計ソフトからCSVエクスポートした仕訳データを取り込むことができます。完全な自動移行ではありませんが、主要なデータは移行可能です。</div>
+        <div class="faq-q">データは本当に外に出ませんか？</div>
+        <div class="faq-a">はい。全てのデータ（仕訳、領収書画像、請求書）は Mac のローカルフォルダに SQLite ファイルとして保存されます。インターネットへの送信は一切行いません。スマホ連携も同一 Wi-Fi 内の LAN 通信のみです。ソースコードも GitHub で公開しているので、隠れた外部送信がないことを第三者が検証できます。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: 確定申告はオンラインでできますか？</div>
-        <div class="faq-a">アプリ内で所得税・消費税を自動計算し、確認用PDFを出力します。実際の提出は、そのPDFを参照しながら国税庁のe-Taxサイトでマイナンバーカード＋スマホを使って行います。</div>
+        <div class="faq-q">他の会計ソフトから乗り換えられますか？</div>
+        <div class="faq-a">freee・マネーフォワード・弥生からエクスポートした CSV (仕訳帳) を取り込むことができます。完全な自動移行ではありませんが、主要なデータは移行可能です。期首残高・固定資産台帳は移行ウィザードで個別入力します。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: Windowsには対応していますか？</div>
-        <div class="faq-a">現在はmacOS専用です。Windows版は需要に応じて検討します。技術的にはTauriフレームワークを使っているため、Windows対応は可能です。</div>
+        <div class="faq-q">確定申告はオンラインでできますか？</div>
+        <div class="faq-a">アプリ内で所得税・消費税を自動計算し、e-Tax 用の XTX ファイルおよび確認用 PDF を出力します。XTX は e-Tax マイページの「作成した申告・申請データの内容を確認」で読み込み可能です。実送信は国税庁の確定申告書等作成コーナーで XTX を読み込むか、e-Tax ソフト (Windows) で組み込み送信する形になります。Mac から直接送信する手段は現時点で国税庁側に存在しません。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: 別のMacにデータを移行できますか？</div>
-        <div class="faq-a">「設定」画面からワンクリックでバックアップZIPを作成できます。DB＋領収書画像を丸ごと含みます。新しいMacでアプリをインストールし、ZIPから復元するだけです。</div>
+        <div class="faq-q">Windows には対応していますか？</div>
+        <div class="faq-a">現在は macOS 専用です。Windows 版は需要に応じて検討します。技術的には Tauri フレームワークを使っているため、Windows 対応は可能です。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: 税制改正に対応しますか？</div>
+        <div class="faq-q">別の Mac にデータを移行できますか？</div>
+        <div class="faq-a">「設定」画面からワンクリックでバックアップ ZIP を作成できます。DB ＋ 領収書画像を丸ごと含みます。新しい Mac でアプリをインストールし、ZIP から復元するだけです。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">税制改正に対応しますか？</div>
         <div class="faq-a">毎年の税制改正に合わせたアップデート版を提供します。新バージョン公開時はアプリ起動時に通知され、GitHub Releases から最新 DMG を取得できます。アップデート自体は無料です。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: 基本機能は本当にずっと無料ですか？</div>
-        <div class="faq-a">はい。仕訳・領収書・請求書・青色申告決算書・所得税/消費税計算・e-Tax 用 XTX 出力まで、すべて無料でご利用いただけます。課金が必要なのは AI 領収書読み取り機能のみです。</div>
-      </div>
-      <div class="faq-item">
-        <div class="faq-q">Q: AI 読み取りプランはいつでも解約できますか？</div>
+        <div class="faq-q">AI 読み取りプランはいつでも解約できますか？</div>
         <div class="faq-a">はい。Stripe のカスタマーポータルから随時解約可能です。解約後も基本機能は引き続き無料でご利用いただけます。オフラインの Tesseract OCR は解約後も動作します。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: 初回起動時に「開発元を確認できません」と出ます</div>
+        <div class="faq-q">初回起動時に「開発元を確認できません」と出ます</div>
         <div class="faq-a">現在はベータ配布中のため Apple 公証未取得です。「KAIKEI LOCAL.app」を Control キーを押しながらクリック → 「開く」で起動できます。詳しくは <a href="install.html">インストールガイド</a> をご覧ください。</div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">Q: e-Tax で実際に送信できますか？</div>
-        <div class="faq-a">令和 7 年分所得税申告 XTX は e-Tax マイページの「作成した申告・申請データの内容を確認」で読み込み・帳票表示まで検証済みです。実送信は国税庁の確定申告書等作成コーナーで新規入力するか、e-Taxソフト (Windows) で組み込み送信する形になります。Mac から直接送信できる手段は現時点で国税庁側に存在しません。</div>
-      </div>
-      <div class="faq-item">
-        <div class="faq-q">Q: 対応していない銀行・カードの CSV はどうすれば？</div>
-        <div class="faq-a">対応リスト外でも汎用パーサが動作します。ヘッダが「日付・摘要・入金・出金・残高」などの標準的な名前なら大丈夫です。うまく読み込めなかった場合は k.nagasawa.pc@gmail.com に CSV のヘッダ行だけお送りいただければ、個別対応を追加します。</div>
+        <div class="faq-q">対応していない銀行・カードの CSV はどうすれば？</div>
+        <div class="faq-a">対応リスト外でも汎用パーサが動作します。ヘッダが「日付・摘要・入金・出金・残高」などの標準的な名前なら大丈夫です。うまく読み込めなかった場合は <a href="mailto:k.nagasawa.pc@gmail.com">k.nagasawa.pc@gmail.com</a> に CSV のヘッダ行だけお送りいただければ、個別対応を追加します。</div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- AI PLAN -->
-<section id="ai-plan" style="background:linear-gradient(135deg,#f0f9ff 0%,#e0f2fe 100%);">
-  <div class="container">
-    <h2 style="font-size:32px;">✨ AI 読み取りプラン（オプション）</h2>
-    <p style="text-align:center;color:var(--muted);margin-bottom:48px;max-width:640px;margin-left:auto;margin-right:auto;">
-      領収書の写真をアプリに入れるだけで、店名・金額・日付を AI が自動で読み取ります。<br>
-      面倒な手入力から解放される、本編とは別の追加機能です。
-    </p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;max-width:720px;margin:0 auto;">
-      <div class="feature-card" style="text-align:center;">
-        <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">月額プラン</div>
-        <div style="font-size:36px;font-weight:900;margin-bottom:4px;">&yen;980<span style="font-size:14px;font-weight:400;color:var(--muted);">/月</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:20px;">月 500枚まで読み取り可能</div>
-        <a href="#" class="hero-cta" style="background:var(--accent);color:#fff;display:inline-flex;width:auto;padding:12px 24px;font-size:14px;">月額プランに加入</a>
-      </div>
-      <div class="feature-card" style="text-align:center;border:2px solid #3b82f6;position:relative;">
-        <div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#3b82f6;color:#fff;font-size:11px;padding:4px 12px;border-radius:100px;font-weight:700;">2ヶ月分お得</div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">年額プラン</div>
-        <div style="font-size:36px;font-weight:900;margin-bottom:4px;">&yen;9,800<span style="font-size:14px;font-weight:400;color:var(--muted);">/年</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:20px;">月 500枚まで × 12ヶ月</div>
-        <a href="#" class="hero-cta" style="background:#3b82f6;color:#fff;display:inline-flex;width:auto;padding:12px 24px;font-size:14px;">年額プランに加入</a>
-      </div>
-    </div>
-    <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:32px;">
-      ご購入後、メールでライセンスキーが届きます。アプリの設定画面に貼り付けるだけで使えます。<br>
-      いつでも解約可能。基本機能（買い切り）には影響しません。
-    </p>
-  </div>
-</section>
-
-<!-- CTA -->
+<!-- ===== FINAL CTA ===== -->
 <section class="cta-section" id="download">
-  <h2>今すぐダウンロード</h2>
-  <p>軽量アプリ (約 30-50MB)。インストールして、すぐに使い始められます。</p>
-  <div class="hero-price">無料</div>
-  <div class="hero-price-note" style="margin-bottom:32px;">基本機能はずっと無料。AI 読み取りのみ任意の有料プラン</div>
-  <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;margin-bottom:16px;">
+  <h2>今すぐ、確定申告を Mac の中で完結させる。</h2>
+  <p class="section-lead">軽量 32MB のアプリ。インストールしてすぐに使い始められます。</p>
+  <div class="hero-price">¥0</div>
+  <div class="hero-price-note">基本機能ずっと無料 / AI 読み取りのみ任意の有料プラン</div>
+  <div class="cta-actions">
     <a href="https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/KAIKEI_LOCAL.dmg" class="hero-cta">
       ⬇︎ Mac 版をダウンロード (.dmg)
     </a>
-    <a href="install.html" class="hero-cta" style="background:#e5e5e5;color:#333;">
+    <a href="install.html" class="hero-cta hero-cta-secondary">
       開き方ガイド →
     </a>
   </div>
-  <div class="hero-sub">
-    macOS 11 (Big Sur) 以降<br>
-    Apple Silicon (M1/M2/M3/M4) 対応<br>
+  <div class="hero-sub" style="margin-top:8px;">
+    macOS 11 (Big Sur) 以降 / Apple Silicon (M1/M2/M3/M4) 対応<br>
     <span style="font-size:11px;">※ Intel Mac は今後対応予定</span><br>
     <span style="opacity:.7;font-size:12px;">ベータ配布中のため、初回起動時は Gatekeeper の「開発元未確認」警告が出ることがあります (ガイド参照)</span>
   </div>
 </section>
 
-<!-- FOOTER -->
+<!-- ===== FOOTER ===== -->
 <footer>
   <p>&copy; 2026 KAIKEI LOCAL. All rights reserved.</p>
   <p style="margin-top:8px;">
     <a href="legal.html#privacy">プライバシーポリシー</a> &middot;
     <a href="legal.html#terms">利用規約</a> &middot;
+    <a href="https://github.com/kantanagasawa93/kaikei-local" target="_blank" rel="noopener">GitHub</a> &middot;
     <a href="mailto:k.nagasawa.pc@gmail.com">お問い合わせ</a>
   </p>
 </footer>
 
 </body>
 </html>
-
