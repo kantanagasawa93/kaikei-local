@@ -1,6 +1,9 @@
 mod lan_server;
 mod migrations;
 
+#[cfg(target_os = "macos")]
+mod photos;
+
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -13,6 +16,70 @@ fn get_lan_upload_info() -> Option<lan_server::LanInfo> {
 #[tauri::command]
 fn list_pending_lan_uploads() -> Vec<lan_server::PendingUpload> {
     lan_server::drain_pending()
+}
+
+// ────────────────────────────────────────────────────────────
+// Photos.framework (macOS) 連携コマンド
+//   - 写真ライブラリへのアクセス権限の確認・リクエスト
+//   - 指定日時以降の写真をスキャンして、画像を inbox/ にコピー
+//   - inbox/ のパスを Vec で返却し、Vision OCR / 領収書フィルタは別レイヤで処理
+//
+// 非 macOS では未対応エラーを返す stub。
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn photos_authorization_status() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        photos::authorization_status().to_string()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unsupported".to_string()
+    }
+}
+
+#[tauri::command]
+async fn photos_request_authorization() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        // ダイアログ表示は同期的にブロックする可能性があるので spawn_blocking で逃がす
+        tokio::task::spawn_blocking(|| photos::request_authorization().to_string())
+            .await
+            .unwrap_or_else(|_| "unknown".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unsupported".to_string()
+    }
+}
+
+#[tauri::command]
+async fn photos_scan_recent(
+    app: tauri::AppHandle,
+    since_unix: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        let inbox_dir = app_data.join("inbox");
+        let result = tokio::task::spawn_blocking(move || photos::scan_recent(since_unix, &inbox_dir))
+            .await
+            .map_err(|e| format!("join: {}", e))??;
+        let json = result
+            .into_iter()
+            .map(|p| serde_json::to_value(p).unwrap_or(serde_json::Value::Null))
+            .collect();
+        Ok(json)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, since_unix);
+        Err("photos scan is only supported on macOS".into())
+    }
 }
 
 /// macOS で指定パスを Finder で開く (reveal)。他 OS では open で既定アプリで開く。
@@ -50,6 +117,12 @@ pub fn run() {
             version: 2,
             description: "invoices_and_settings",
             sql: migrations::SCHEMA_V2_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "photo_inbox_and_scan_log",
+            sql: migrations::SCHEMA_V3_SQL,
             kind: MigrationKind::Up,
         },
     ];
@@ -208,6 +281,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_lan_upload_info,
             list_pending_lan_uploads,
+            photos_authorization_status,
+            photos_request_authorization,
+            photos_scan_recent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

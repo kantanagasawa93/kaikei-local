@@ -19,5 +19,11 @@
   <!-- ユーザーファイルアクセス: 領収書のインポート・PDFエクスポート -->
   <key>com.apple.security.files.user-selected.read-write</key>
   <true/>
+
+  <!-- 写真自動取込 (Phase 1): iCloud Photos 経由で iPhone の写真ライブラリ
+       にアクセスし、領収書候補を抽出する機能。初回利用時に macOS の標準
+       同意ダイアログが表示される。 -->
+  <key>com.apple.security.personal-information.photos-library</key>
+  <true/>
 </dict>
 </plist>

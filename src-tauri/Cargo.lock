@@ -2247,6 +2247,7 @@ name = "kaikei"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "block",
  "cocoa",
  "dirs 5.0.1",
  "local-ip-address",

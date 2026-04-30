@@ -374,3 +374,63 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 "#;
 
+/// v3: 写真自動取込 (photo inbox)
+///
+/// 仕組み:
+/// - PhotoKit から取得した画像を `photo_inbox` に 1 行 = 1 写真として記録
+/// - 各行は state ('candidate'|'receipt'|'not_receipt'|'imported'|'dismissed') を持つ
+/// - Vision OCR の結果テキストと「これは領収書らしさ」のスコアも保持
+/// - 取り込み済みになったら receipts テーブルに新規行を作って imported_receipt_id に紐づける
+/// - source_asset_id (PHAsset の localIdentifier) で重複検出
+pub const SCHEMA_V3_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS photo_inbox (
+  id TEXT PRIMARY KEY,
+  source_asset_id TEXT NOT NULL UNIQUE,    -- PHAsset.localIdentifier
+  taken_at TEXT NOT NULL,                  -- 撮影日時 ISO8601
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  width INTEGER,
+  height INTEGER,
+  file_path TEXT,                          -- 保存先 (~/Library/Application Support/dev.kaikei.app/inbox/<id>.jpg)
+  thumbnail_path TEXT,
+  -- Vision OCR 結果
+  ocr_text TEXT,
+  receipt_score REAL,                      -- 0.0〜1.0 (1=確実に領収書)
+  -- 状態
+  state TEXT NOT NULL DEFAULT 'candidate'
+    CHECK (state IN ('candidate','receipt','not_receipt','imported','dismissed')),
+  imported_receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  imported_at TEXT,
+  -- メタ
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
+CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
+
+-- スキャン履歴 (LaunchAgent / 手動どちらの実行も記録)
+CREATE TABLE IF NOT EXISTS photo_scan_log (
+  id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  trigger TEXT NOT NULL CHECK (trigger IN ('manual','schedule','launchagent')),
+  scanned_count INTEGER DEFAULT 0,         -- スキャンした写真総数
+  receipt_count INTEGER DEFAULT 0,         -- 領収書と判定された数
+  imported_count INTEGER DEFAULT 0,        -- 自動仕訳まで進んだ数
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_photo_scan_log_started ON photo_scan_log(started_at);
+
+-- Claude 送信ログ (透明性のため、どの画像を送ったか後で見られる)
+CREATE TABLE IF NOT EXISTS ai_ocr_log (
+  id TEXT PRIMARY KEY,
+  inbox_id TEXT REFERENCES photo_inbox(id) ON DELETE CASCADE,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE CASCADE,
+  sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+  endpoint TEXT NOT NULL,                  -- 送信先 (例: api.kaikei-local.com/api/ocr)
+  bytes_sent INTEGER,
+  result_summary TEXT,                     -- vendor_name + amount だけ短縮
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_ocr_log_sent_at ON ai_ocr_log(sent_at);
+"#;
+
