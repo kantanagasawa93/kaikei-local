@@ -49,6 +49,43 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 - `next build` は `next.config.ts` に `output: "export"` がある前提で `out/` を吐く
 - アセット URL は asset:// (convertFileSrc) ではなく **`read_image_file` Tauri command + Blob URL** 経由 (パススコープ問題回避)
 
+## 次ラウンド (Round 2) 候補 — ユーザは「全部やって」希望
+
+新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
+推し優先順は ① → ⑤ → ② → ④ → ③。
+
+### ① 自律検証ハーネス (Mac アプリ実機テストの自動化) ★★★★★
+- 目的: 毎回ユーザに「アプリ立ち上げて」と頼まずに E2E 検証を Claude 側で完結
+- 対象: `scripts/verify-app.sh` (新規) + `src-tauri/src/lib.rs` の CLI 拡張
+- やること:
+  - `--ui-screenshot=<window>` で起動中アプリのスクショ取得 (`screencapture -l`)
+  - `--simulate-scan` で実 PhotoKit を叩いてスキャン → 結果 JSON
+  - `--db-dump=<table>` で photo_inbox / photo_scan_log を JSON 吐き
+  - osascript レシピを `scripts/verify/` に集約
+- commit サイズ: 中 (~250 行)
+
+### ② Universal Binary リリース動線 ★★★
+- 目的: Intel Mac 対応を実リリースに反映
+- 対象: scripts/release.sh (前ラウンド改修済) + docs/index.html + docs/install.html
+- やること: v0.3.0 タグで signed + arm64/x64 両 DMG → GitHub Release / LP 表記
+- commit サイズ: 小〜中 (~150 行)
+
+### ③ candidate を 1 クリックで領収書化する逆操作 ★★
+- 対象: src/app/(app)/inbox/page.tsx
+- 「破棄を candidate に戻す」 / Tinder 風スワイプ / 件数バッジ ("未判定 6 / 領収書 4")
+- commit サイズ: 小 (~100 行)
+
+### ④ スマート増分スキャン (iCloud 帯域削減) ★★★
+- 対象: src-tauri/src/photos.rs (PHImageManager FFI 拡張)
+- サムネで先に文書判定 → 通った物だけフルサイズ DL → JPEG 化 → 保存
+- 1000 枚規模で帯域 1/20
+- commit サイズ: 中 (~150 行)
+
+### ⑤ 自動仕訳の精度向上 + 確定時 UX ★★★★
+- 対象: src/lib/auto-journal.ts + journals/page.tsx + migration v4
+- 受信箱→仕訳の紐付けバッジ / 失敗時 receipt_failed state + 再試行 / Claude 結果完全保存
+- commit サイズ: 中 (~200 行)
+
 ## 学習済みアンチパターン (再発防止メモ)
 
 - **Vision の `VNRequestTextRecognitionLevel` 値**: `Accurate = 0`, `Fast = 1`。逆に書くと OCR が常に 0 行を返す事故になる。Apple ヘッダの `NS_ENUM` の宣言順がそのまま raw value
