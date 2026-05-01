@@ -63,57 +63,64 @@ scripts/verify-app.sh smoke          # 上記を順に
 
 CLI 直叩き: `/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei --verify-help`
 
-## 次ラウンド (Round 4) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 5) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊀ → ㊂ → ㊁ → ㊃ → ㊄。
+推し優先順は ㊅ → ㊆ → ㊇ → ㊈ → ㊉。
 
-### ㊀ v0.3.0 実リリース発火 ★★★★★
-- 目的: Round 2/3 で揃えた Universal Binary + 自動仕訳精度向上を実配布
-- 対象: `scripts/release.sh v0.3.0` (要 APPLE_* env)
-- やること:
-  - 環境変数 4 種 (APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD /
-    APPLE_TEAM_ID) を確認 → スクリプト発火
-  - arm64 + x64 両 DMG が GitHub Release に並ぶこと、`*_x64.dmg` の URL が 200
-  - LP の changelog セクションに v0.3.0 ハイライトを表示
-- 注: 認証情報なしのチャットからは打てないので、ユーザの手元シェルで叩く
-- commit サイズ: 小 (~50 行 — LP 文言反映のみ。リリース自体はスクリプト)
+### ㊅ v0.3.0 実発火 (再オファー) ★★★★★
+- 目的: Round 4 ㊀ で precheck/changelog/build-all.sh の動的 version まで
+  揃えた。あとは APPLE_* env を渡して `scripts/release.sh v0.3.0` を打つだけ
+- 対象: ユーザ手元シェル (Claude チャット側からは認証情報無く打てない)
+- 確認手順:
+  ```
+  export APPLE_SIGNING_IDENTITY="..."
+  export APPLE_ID="..."
+  export APPLE_PASSWORD="@keychain:AC_PASSWORD"
+  export APPLE_TEAM_ID="..."
+  scripts/release-precheck.sh v0.3.0   # 全項目 ✓ になることを確認
+  scripts/release.sh v0.3.0            # 実発火
+  ```
 
-### ㊁ 既知 OCR 失敗パターンの自動学習 ★★★
-- 目的: receipt_failed 行の last_error を集計 → 同じパターン再発時に「再試行
-  しても無駄」と判定して silent skip
-- 対象: `src/lib/auto-journal.ts` + `src/lib/error-reporter.ts`
+### ㊆ 受信箱「自動仕訳予定」のスマートトリミング ★★★
+- 目的: 「領収書をすべて自動仕訳」を押す前に、Round 4 ㊁ の失敗バケット情報を
+  使って「これ押すと N 件はライセンス上限で必ず落ちますがそれでも実行?」と確認
+- 対象: `src/app/(app)/inbox/page.tsx` の handleJournalizeAll
 - やること:
-  - last_error を正規化 (License limit / network timeout / vendor parse 等)
-  - 連続失敗 3 回以上のパターンを app_settings に保存
-  - quickConfirmOne 起動時にチェックして、該当パターンなら「もう一度押す前に
-    設定を見直してください」モーダル
-- commit サイズ: 中 (~150 行)
+  - getFailureStats() で top バケットを参照
+  - actionable な原因 (license/consent) があれば対処を促すモーダル
+  - 「設定を開く」「無視して実行」「キャンセル」の三択
+- commit サイズ: 小 (~80 行)
 
-### ㊂ 仕訳の差し戻し→受信箱再投入 ★★★★
-- 目的: 自動仕訳された結果が不正だった時に、journal を消して inbox 行を
-  candidate に戻して再仕訳するフロー
-- 対象: `src/app/(app)/journals/page.tsx` (削除アクション拡張) + `src/lib/journal-commit.ts`
+### ㊇ Vision OCR の hint 候補で receipts.new を pre-fill ★★★★
+- 目的: Round 3 ⓔ + Round 4 ㊃ の rich preview 分類器を、領収書手動登録の
+  入力欄に流し込む。AI OCR 不使用ユーザにも便利
+- 対象: `src/app/(app)/receipts/new/page.tsx` (inbox= クエリ受け取り側)
 - やること:
-  - 受信箱由来の仕訳の削除メニューに「ゴミ箱 + 受信箱に戻す」を追加
-  - photo_inbox.state を 'candidate' に + imported_receipt_id クリア
-  - claude_result_json は保持 (再 OCR 不要なら同じ結果で再仕訳できる)
+  - inbox=ID で開いた時に photo_inbox から ocr_text を読み、
+    classifyReceiptLines で分類 → 最初の vendor 行を vendor_name に、
+    最初の total or amount 行から数字抽出して amount に、最初の date 行から
+    日付パースして date に流し込む
+  - 既存値があったら上書きしない
 - commit サイズ: 中 (~120 行)
 
-### ㊃ rich preview の hover ツールチップ ★★
-- 目的: 受信箱カードの色分け行を hover すると、その種別の説明と、
-  AI OCR で送った場合に取れる情報の例を表示
-- 対象: `src/app/(app)/inbox/page.tsx` (RichOcrPreview)
-- commit サイズ: 小 (~50 行)
-
-### ㊄ verify-app.sh smoke の Markdown レポート ★★
-- 目的: smoke の結果を `verify-report-<ts>.md` に書き出して、ユーザに渡す
-  時に「最後に検証したときの結果」を毎回見せる
-- 対象: `scripts/verify-app.sh`
+### ㊈ migration v4 の二重実行で attempts が 0 にリセットされる問題 ★★
+- 目的: Round 3 ⓐ の migration recovery で v4 が再 run された時に
+  attempts/claude_result_json/last_error が初期値に戻る
+  (CREATE TABLE photo_inbox_v4 の SELECT が新規カラムを含まないため)
+- 対象: `src-tauri/src/migrations.rs` の SCHEMA_V4_SQL
 - やること:
-  - smoke の結果 (件数・最終スキャン日時・最近のエラー) を Markdown 化
-  - 起動時に最新レポートをアプリ内で表示するメニュー (Tauri command + UI)
-- commit サイズ: 小〜中 (~100 行)
+  - "v4 が既に当たっている" ことを検出して skip するガードを冒頭に
+    (例: `SELECT 1 FROM pragma_table_info('photo_inbox') WHERE name='claude_result_json'`)
+  - もしくは v5 で「冪等な復旧用 v4」として上書き
+- commit サイズ: 小 (~60 行)
+
+### ㊉ 受信箱→領収書の手動登録動線で claude_result_json を再利用 ★★
+- 目的: 一度 AI OCR したけど未確定の photo_inbox 行 (例: state='receipt' で
+  Claude 結果を貰ったが json 解析に失敗) を、receipts.new で再利用
+- 対象: `src/app/(app)/receipts/new/page.tsx` + `src/lib/auto-journal.ts`
+- 機能: claude_result_json があれば「前回の OCR 結果を使う」ボタンを出す
+- commit サイズ: 小〜中 (~80 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

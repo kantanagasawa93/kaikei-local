@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>変更履歴 | KAIKEI LOCAL</title>
+<style>
+  :root {
+    --bg: #fafafa; --fg: #1a1a1a; --muted: #666; --card: #fff;
+    --border: #e5e5e5; --accent: #0a84ff;
+  }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    line-height:1.75;
+  }
+  header { padding:20px 24px; border-bottom:1px solid var(--border); background:#fff; }
+  header a { color:var(--fg); text-decoration:none; font-weight:600; font-size:15px; }
+  main { max-width:760px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:30px; margin:16px 0 8px; }
+  .subtitle { color:var(--muted); margin-bottom:32px; }
+  h2 { font-size:22px; margin:36px 0 8px; padding-top:12px; border-top:1px solid var(--border); }
+  h2 .ver-meta { font-size:12px; color:var(--muted); font-weight:400; margin-left:8px; }
+  h3 { font-size:14px; margin:20px 0 6px; color:#444; letter-spacing:.02em; }
+  p, li { font-size:14.5px; }
+  ul { padding-left:1.4em; }
+  code { background:#f0f0f0; padding:1px 6px; border-radius:4px; font-size:13px; }
+  .hl-yes { color:#16a34a; font-weight:600; }
+  .hl-fix { color:#dc2626; font-weight:600; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:9999px; font-size:11px; font-weight:600; margin-right:6px; }
+  .badge-feat { background:#dcfce7; color:#15803d; }
+  .badge-fix { background:#fef2f2; color:#b91c1c; }
+  .badge-perf { background:#dbeafe; color:#1d4ed8; }
+  .badge-dev { background:#f3e8ff; color:#7e22ce; }
+  footer { text-align:center; padding:32px 16px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); margin-top:60px; }
+</style>
+</head>
+<body>
+
+<header>
+  <a href="index.html">← KAIKEI LOCAL</a>
+</header>
+
+<main>
+  <h1>変更履歴</h1>
+  <p class="subtitle">PDCA ラウンド単位のリリースノート。最新版から並べています。</p>
+
+  <h2>v0.3.0 <span class="ver-meta">(2026 年 5 月 — Round 2 + Round 3 成果)</span></h2>
+
+  <h3>受信箱・自動仕訳</h3>
+  <ul>
+    <li><span class="badge badge-feat">NEW</span><b>クイック確定モード</b> — 受信箱の候補カードで「⚡ いますぐ仕訳化」をワンクリックすると、その場で AI OCR → 領収書登録 → 仕訳まで一気通貫</li>
+    <li><span class="badge badge-feat">NEW</span><b>失敗の見える化と再試行</b> — AI OCR で詰まった写真を <code>receipt_failed</code> 状態で残し、エラー理由をカード上に赤バッジで表示。1 件ずつ or 一括で再試行可能</li>
+    <li><span class="badge badge-feat">NEW</span><b>OCR 結果の完全保存</b> — Claude OCR のレスポンスを <code>photo_inbox.claude_result_json</code> に保存し、再仕訳・監査ができる</li>
+    <li><span class="badge badge-feat">NEW</span><b>件数バッジ</b> — 受信箱フィルタタブに件数を表示 (未判定 6 / 領収書 4 / 失敗 1 など)</li>
+    <li><span class="badge badge-feat">NEW</span><b>未判定に戻す</b> — 「破棄」「違う」「失敗」のカードからワンクリックで未判定に戻せる逆操作</li>
+    <li><span class="badge badge-feat">NEW</span><b>OCR テキストの色分けプレビュー</b> — Vision OCR の結果を行単位で「金額」「合計」「日付」「インボイス番号」「店名」と色分け表示し、AI OCR を回す前から「ここまで読めてる」が分かる</li>
+  </ul>
+
+  <h3>取り込みパフォーマンス</h3>
+  <ul>
+    <li><span class="badge badge-perf">PERF</span><b>スマート増分スキャン</b> — iCloud から低画質サムネだけ先に取って文書判定 → 通った写真だけフルサイズダウンロード。1000 枚規模で iCloud 帯域が ~1/20 に</li>
+    <li><span class="badge badge-fix">FIX</span><b>マイグレーション自動復旧</b> — sqlx の checksum mismatch を自動検出し、データベースをバックアップしたうえで <code>_sqlx_migrations</code> をリセット → マイグレーション再適用 (Round 1 で起きたデータ初期化事故を再発防止)</li>
+  </ul>
+
+  <h3>仕訳帳</h3>
+  <ul>
+    <li><span class="badge badge-feat">NEW</span><b>「📷 受信箱」バッジ</b> — 受信箱経由で自動仕訳された行に画像バッジを表示し、領収書一覧に飛べる</li>
+  </ul>
+
+  <h3>配布</h3>
+  <ul>
+    <li><span class="badge badge-feat">NEW</span><b>Universal Binary 動線</b> — Apple Silicon (M1〜M4) + Intel Mac の両方に対応
+      <ul>
+        <li>Apple Silicon: <code>KAIKEI_LOCAL.dmg</code> または <code>KAIKEI_LOCAL_arm64.dmg</code></li>
+        <li>Intel Mac: <code>KAIKEI_LOCAL_x64.dmg</code></li>
+      </ul>
+    </li>
+    <li>LP / インストールガイドにアーキ別ダウンロードボタンを追加</li>
+  </ul>
+
+  <h3>開発者向け</h3>
+  <ul>
+    <li><span class="badge badge-dev">DEV</span><code>kaikei --simulate-scan</code> / <code>--db-dump=&lt;table&gt;</code> / <code>--tail-scan-log</code> の CLI 拡張</li>
+    <li><span class="badge badge-dev">DEV</span><code>scripts/verify-app.sh smoke</code> で起動・スキャン・スクショまでを自動化</li>
+    <li><span class="badge badge-dev">DEV</span>GitHub Actions の <code>Verify Round</code> ワークフローで commit ごとに macOS で自動検証</li>
+    <li><span class="badge badge-dev">DEV</span><code>scripts/release-precheck.sh</code> でリリース実行前のフル検証 (env / バージョン整合 / 認証 / 空き容量)</li>
+  </ul>
+
+  <h2>v0.2.0 <span class="ver-meta">(2026 年 4 月末 — Round 1)</span></h2>
+  <ul>
+    <li><span class="badge badge-fix">FIX</span>Vision OCR の致命バグ修正 (<code>VNRequestTextRecognitionLevel</code> の値が逆だった事故)</li>
+    <li><span class="badge badge-feat">NEW</span>受信箱の精度・表示・操作性を全面立て直し</li>
+    <li><span class="badge badge-feat">NEW</span>iCloud 写真スキャンの初期版 (PhotoKit + 文書検出フィルタ)</li>
+    <li><span class="badge badge-feat">NEW</span>AI OCR 送信ログビュアー (透明性のため、送信履歴を確認可能)</li>
+    <li><span class="badge badge-feat">NEW</span>LaunchAgent によるバックグラウンド定期スキャン</li>
+  </ul>
+
+  <h2>v0.1.0 <span class="ver-meta">(初版)</span></h2>
+  <ul>
+    <li>ローカル SQLite ベースの会計帳簿</li>
+    <li>領収書・仕訳・銀行明細・請求書・確定申告 (青色 / 白色) 対応</li>
+    <li>e-Tax XTX 出力</li>
+  </ul>
+
+</main>
+
+<footer>
+  <p>&copy; 2026 KAIKEI LOCAL.</p>
+  <p style="margin-top:8px;">
+    <a href="index.html">トップ</a> &middot;
+    <a href="install.html">インストールガイド</a> &middot;
+    <a href="https://github.com/kantanagasawa93/kaikei-local/releases">GitHub Releases</a>
+  </p>
+</footer>
+
+</body>
+</html>

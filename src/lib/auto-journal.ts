@@ -202,6 +202,132 @@ export async function autoJournalizeOne(
   return receiptId;
 }
 
+// ────────────────────────────────────────────────────────────
+// Round 4 ㊁ 失敗パターン分類
+//
+// AI OCR の失敗 (photo_inbox.last_error) を6 バケットに正規化する。
+// 受信箱の「失敗」タブで「ライセンス上限が原因」等の集約バッジを出して、
+// 個別カードのエラーメッセージを読まずとも対処方針が分かるようにするのが目的。
+// ────────────────────────────────────────────────────────────
+
+export type FailureBucket =
+  | "license" // ライセンスキー / 月次上限
+  | "consent" // AI OCR への同意
+  | "network" // ネットワーク (timeout / DNS / 5xx)
+  | "image" // 画像読み込み / file_path / Tauri API
+  | "server" // サーバー側エラー (4xx 5xx)
+  | "unknown"; // 分類できなかった
+
+export interface FailureClass {
+  bucket: FailureBucket;
+  /** ユーザの設定変更等で直せるか (true なら UI で目立たせる) */
+  actionable: boolean;
+  /** 受信箱に出すワンライナー */
+  hint: string;
+}
+
+/**
+ * last_error 文字列を見てバケット分類する。
+ * 純粋関数 (DB アクセスなし) なので UI からも auto-journal 内からも呼べる。
+ */
+export function classifyOcrError(msg: string | null | undefined): FailureClass {
+  const m = (msg ?? "").toLowerCase();
+  if (!m) {
+    return { bucket: "unknown", actionable: false, hint: "原因不明 — 再試行してみてください" };
+  }
+  if (
+    /license|ライセンス|monthly_limit|quota|limit|exceeded|超過|上限/.test(m)
+  ) {
+    return {
+      bucket: "license",
+      actionable: true,
+      hint: "ライセンスキーの月次上限に到達したか未設定です — 設定→AI OCR で確認",
+    };
+  }
+  if (/consent|同意/.test(m)) {
+    return {
+      bucket: "consent",
+      actionable: true,
+      hint: "AI OCR の同意がまだです — 設定→AI OCR で同意してください",
+    };
+  }
+  if (
+    /network|timeout|fetch failed|econnrefused|enotfound|getaddrinfo|タイムアウト|接続/.test(
+      m,
+    )
+  ) {
+    return {
+      bucket: "network",
+      actionable: false,
+      hint: "ネットワーク不調 — 接続を確認してから再試行",
+    };
+  }
+  if (/file_path|read[_\s]image|tauri api|read:|allowed/.test(m)) {
+    return {
+      bucket: "image",
+      actionable: false,
+      hint: "画像ファイルを読めませんでした — 一度スキャンし直すと直る可能性",
+    };
+  }
+  if (/api error \(5|server error|503|502|500|internal/.test(m)) {
+    return {
+      bucket: "server",
+      actionable: false,
+      hint: "OCR サーバーが一時的に応答していません — 数分待って再試行",
+    };
+  }
+  return { bucket: "unknown", actionable: false, hint: "原因不明 — 再試行してみてください" };
+}
+
+export interface FailureStats {
+  total: number;
+  byBucket: Record<FailureBucket, number>;
+  /** 最頻値のバケット (件数 0 なら null) */
+  top: { bucket: FailureBucket; count: number; hint: string } | null;
+}
+
+/**
+ * receipt_failed 行の last_error をバケット集計する。
+ * 受信箱画面で「失敗 N 件 (うち 〜 が原因)」のサマリーを出すのに使う。
+ */
+export async function getFailureStats(): Promise<FailureStats> {
+  const { data } = await db
+    .from("photo_inbox")
+    .select("last_error")
+    .eq("state", "receipt_failed");
+  const rows = (data as { last_error: string | null }[] | null) ?? [];
+
+  const byBucket: Record<FailureBucket, number> = {
+    license: 0,
+    consent: 0,
+    network: 0,
+    image: 0,
+    server: 0,
+    unknown: 0,
+  };
+  for (const r of rows) {
+    byBucket[classifyOcrError(r.last_error).bucket]++;
+  }
+
+  // バケット → hint の固定テーブル (classifyOcrError と整合させる)
+  const HINT: Record<FailureBucket, string> = {
+    license: "ライセンスキーの月次上限に到達したか未設定です — 設定→AI OCR で確認",
+    consent: "AI OCR の同意がまだです — 設定→AI OCR で同意してください",
+    network: "ネットワーク不調 — 接続を確認してから再試行",
+    image: "画像ファイルを読めませんでした — 一度スキャンし直すと直る可能性",
+    server: "OCR サーバーが一時的に応答していません — 数分待って再試行",
+    unknown: "原因不明 — 再試行してみてください",
+  };
+
+  let top: FailureStats["top"] = null;
+  for (const [bucket, count] of Object.entries(byBucket) as [FailureBucket, number][]) {
+    if (count > 0 && (!top || count > top.count)) {
+      top = { bucket, count, hint: HINT[bucket] };
+    }
+  }
+  return { total: rows.length, byBucket, top };
+}
+
 /**
  * 受信箱の state='receipt' を全部仕訳化する。
  * @param onProgress 各 1 件処理が終わるたびに呼ばれる
@@ -335,6 +461,69 @@ export async function quickConfirmOne(inboxId: string): Promise<string> {
     }
     throw e;
   }
+}
+
+/**
+ * 仕訳を取り消して、紐付いていた受信箱行を「未判定」に戻す
+ * (Round 4 ㊂ "差し戻し" フロー)。
+ *
+ * 流れ:
+ *   1. journals.id から receipt_id を逆引き
+ *   2. photo_inbox.imported_receipt_id = receipts.id の行を探す
+ *   3. journal_lines → journals → receipts の順で削除
+ *   4. photo_inbox を candidate に戻し imported_receipt_id / imported_at を null
+ *      (claude_result_json は保持 — 同じ画像なら再 OCR せずに使い回せる将来拡張用)
+ *   5. last_error / attempts はクリア (新しい仕訳化のフレッシュなスタート)
+ *
+ * 使い所: 受信箱→自動仕訳された結果が誤読 (店名違い・金額違い・科目違い) で、
+ * もう一度仕訳化したい時。journals/page.tsx のメニューから呼ぶ。
+ *
+ * @returns 戻された inbox_id か null (受信箱由来でない仕訳)
+ */
+export async function reverseJournalToInbox(journalId: string): Promise<string | null> {
+  // 1. journals → receipt_id
+  const { data: jdata } = await db
+    .from("journals")
+    .select("id, receipt_id")
+    .eq("id", journalId)
+    .single();
+  const journal = jdata as { id: string; receipt_id: string | null } | null;
+  if (!journal) throw new Error("対象の仕訳が見つかりません");
+  const receiptId = journal.receipt_id;
+
+  // 2. receipt_id から photo_inbox を逆引き (受信箱由来でない場合は inboxId=null のまま進む)
+  let inboxId: string | null = null;
+  if (receiptId) {
+    const { data: idata } = await db
+      .from("photo_inbox")
+      .select("id")
+      .eq("imported_receipt_id", receiptId)
+      .single();
+    inboxId = (idata as { id: string } | null)?.id ?? null;
+  }
+
+  // 3. 関連レコードを順番に削除 (journal_lines は journal_id の FK で残るので明示)
+  await db.from("journal_lines").delete().eq("journal_id", journalId);
+  await db.from("journals").delete().eq("id", journalId);
+  if (receiptId) {
+    await db.from("receipts").delete().eq("id", receiptId);
+  }
+
+  // 4. 受信箱行を candidate に復帰 (受信箱由来でなければスキップ)
+  if (inboxId) {
+    await db
+      .from("photo_inbox")
+      .update({
+        state: "candidate",
+        imported_receipt_id: null,
+        imported_at: null,
+        last_error: null,
+        attempts: 0,
+      })
+      .eq("id", inboxId);
+  }
+
+  return inboxId;
 }
 
 /**
