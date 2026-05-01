@@ -87,9 +87,40 @@ export interface ClassifyResult {
   signals: Signal[];
 }
 
+/**
+ * 「これが書かれていたら確実に領収書」と言い切れるキーワード。
+ * Apple Photos.app の「領収書」キーワード検索もこのレベルの直接マッチで動く。
+ * 1 つでもヒットしたら他のスコアを無視して即 receipt 判定する fast-path。
+ */
+const FORCE_RECEIPT_KEYWORDS = [
+  "領収書",
+  "レシート",
+  "領収証",
+  "受領書",
+  "Receipt",
+  "RECEIPT",
+  "receipt",
+];
+
 export function classifyReceipt(text: string): ClassifyResult {
   if (!text || text.trim().length === 0) {
-    return { score: 0, state: "not_receipt", signals: [{ score: 0, reason: "空テキスト" }] };
+    // 空テキスト → 自動破棄せず candidate に残す (人間判断)
+    return {
+      score: 0,
+      state: "candidate",
+      signals: [{ score: 0, reason: "空テキスト (人間判断に委ねる)" }],
+    };
+  }
+
+  // Fast-path: 直接キーワードがあれば確定
+  for (const kw of FORCE_RECEIPT_KEYWORDS) {
+    if (text.includes(kw)) {
+      return {
+        score: 1.0,
+        state: "receipt",
+        signals: [{ score: 1.0, reason: `direct match: "${kw}"` }],
+      };
+    }
   }
 
   const lower = text.toLowerCase();
@@ -154,10 +185,15 @@ export function classifyReceipt(text: string): ClassifyResult {
 
   score = Math.max(0, Math.min(1, score));
 
+  // 重要な方針変更:
+  //   - 自動で "not_receipt" は付けない。Stage2 (文書検出) を通った時点で
+  //     文書ではあるので、領収書である可能性をゼロにはしない。
+  //   - 閾値も少し下げ (0.4) て、ユーザーが見える受信箱に並ぶようにする。
+  //   - 確信を持てない物は candidate のまま並ばせ、人間が「違う」を押した
+  //     時だけ not_receipt に入る (= 自動でデータが失われない)。
   let state: ClassifyResult["state"];
-  if (score >= 0.6) state = "receipt";
-  else if (score >= 0.3) state = "candidate";
-  else state = "not_receipt";
+  if (score >= 0.4) state = "receipt";
+  else state = "candidate";
 
   return { score, state, signals };
 }

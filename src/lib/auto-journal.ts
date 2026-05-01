@@ -19,7 +19,7 @@
  */
 
 import { db } from "@/lib/localDb";
-import { ocrWithClaude, fileToBase64, getApiKey, hasAiOcrConsent } from "@/lib/ai-ocr";
+import { ocrWithClaude, getApiKey, hasAiOcrConsent } from "@/lib/ai-ocr";
 import { suggestAccount } from "@/lib/accounts";
 import type { OcrResult } from "@/types";
 
@@ -33,18 +33,26 @@ export interface AutoJournalResult {
 }
 
 async function readFileAsBase64(path: string): Promise<{ base64: string; mediaType: string }> {
-  const { readFile } = await import("@tauri-apps/plugin-fs");
-  const bytes = await readFile(path);
-  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  // detect mime by signature
-  const sig = Array.from(u8.slice(0, 12))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  let mediaType = "image/jpeg";
-  if (sig.startsWith("89504e47")) mediaType = "image/png";
-  else if (sig.includes("66747970686569")) mediaType = "image/heic";
+  // Rust 側の read_image_file コマンドで読む (plugin-fs のスコープ問題を回避)
+  const { invoke } = await import("@tauri-apps/api/core");
+  const raw = (await invoke("read_image_file", { path })) as Uint8Array | number[];
+  const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
 
-  // base64 化 (Uint8Array → base64)
+  // 先頭バイトで MIME 判定
+  let mediaType = "image/jpeg";
+  if (u8.length >= 4 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) {
+    mediaType = "image/png";
+  } else if (
+    u8.length >= 12 &&
+    String.fromCharCode(u8[4], u8[5], u8[6], u8[7]) === "ftyp"
+  ) {
+    const brand = String.fromCharCode(u8[8], u8[9], u8[10], u8[11]).toLowerCase();
+    if (brand.startsWith("hei") || brand === "mif1" || brand === "msf1") {
+      mediaType = "image/heic";
+    }
+  }
+
+  // Uint8Array → base64
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < u8.length; i += chunk) {
@@ -195,6 +203,16 @@ export async function autoJournalizeOne(
 export async function autoJournalizeAllReceipts(
   onProgress?: (done: number, total: number) => void
 ): Promise<AutoJournalResult> {
+  // 先にライセンス/同意のチェック (毎ループでチェックすると同じエラーが N 回出る)
+  const consent = await hasAiOcrConsent();
+  if (!consent) {
+    throw new Error("AI OCR への同意がまだです。設定で承諾してから再度実行してください。");
+  }
+  const apiKey = await getApiKey();
+  if (!apiKey) {
+    throw new Error("ライセンスキーが未設定です。設定 → AI OCR から登録してください。");
+  }
+
   const { data } = await db
     .from("photo_inbox")
     .select("id, file_path, ocr_text")
