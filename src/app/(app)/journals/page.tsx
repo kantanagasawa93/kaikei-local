@@ -14,8 +14,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon } from "lucide-react";
+import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { reverseJournalToInbox } from "@/lib/auto-journal";
+import { toast } from "@/lib/toast";
 import type { Journal, JournalLine } from "@/types";
 
 interface JournalWithLines extends Journal {
@@ -47,6 +49,29 @@ export default function JournalsPage() {
     if (!confirm("この仕訳を削除しますか？")) return;
     await supabase.from("journals").delete().eq("id", id);
     setJournals((prev) => prev.filter((j) => j.id !== id));
+  }
+
+  // Round 4 ㊂ 差し戻し:
+  // 受信箱由来 (receipt_id 紐付き) の仕訳を取り消して photo_inbox を candidate に戻す。
+  // 自動仕訳の結果が誤読だった時のリカバリー動線。
+  async function handleReverseToInbox(id: string) {
+    const ok = window.confirm(
+      "この仕訳と紐付く領収書レコードを削除して、写真を「未判定」状態の受信箱に戻します。\n\n" +
+        "戻したあと、受信箱の「いますぐ仕訳化」または「領収書として登録」から再仕訳できます。\n\n" +
+        "続行しますか?",
+    );
+    if (!ok) return;
+    try {
+      const inboxId = await reverseJournalToInbox(id);
+      if (inboxId) {
+        toast.success("仕訳を取り消して受信箱に戻しました");
+      } else {
+        toast.info("仕訳と領収書を削除しました (受信箱由来ではないので戻し先なし)");
+      }
+      setJournals((prev) => prev.filter((j) => j.id !== id));
+    } catch (e) {
+      toast.error(`差し戻しに失敗: ${(e as Error).message}`);
+    }
   }
 
   const filteredJournals = journals.filter((j) =>
@@ -184,6 +209,21 @@ export default function JournalsPage() {
                                 <Pencil className="h-3 w-3" />
                               </Button>
                             </Link>
+                            {/* ㊂ 受信箱由来の仕訳に限り「受信箱に戻す」を出す。
+                                単純削除と違って imported_receipt_id を逆引いて
+                                photo_inbox を candidate に戻すため、誤仕訳の
+                                やり直しがここから 1 クリックで完結する。 */}
+                            {journal.receipt_id && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleReverseToInbox(journal.id)}
+                                className="h-8 w-8 p-0"
+                                title="受信箱に戻して再仕訳する"
+                              >
+                                <Undo2 className="h-3 w-3" />
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="sm"

@@ -45,6 +45,8 @@ import {
   quickConfirmOne,
   resetFailedToReceipt,
   resetAllFailedToReceipt,
+  getFailureStats,
+  type FailureStats,
 } from "@/lib/auto-journal";
 import { Sparkles } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -62,6 +64,8 @@ export default function InboxPage() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   // ⓓ クイック確定中の inbox.id を持っておく (カード単位の押下中表示)
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
+  // ㊁ 失敗パターン集計 (top バケットを「失敗」タブの近くにヒント表示)
+  const [failureStats, setFailureStats] = useState<FailureStats | null>(null);
   // 件数バッジ用: state ごとの行数 (タブ表示の補助)
   const [counts, setCounts] = useState<Record<InboxState | "all", number>>({
     candidate: 0,
@@ -90,6 +94,12 @@ export default function InboxPage() {
     };
     for (const r of all) next[r.state] = (next[r.state] ?? 0) + 1;
     setCounts(next);
+    // ㊁ 失敗パターン集計を refresh のたびに更新
+    try {
+      setFailureStats(await getFailureStats());
+    } catch {
+      setFailureStats(null);
+    }
   };
 
   useEffect(() => {
@@ -349,6 +359,18 @@ export default function InboxPage() {
         )}
       </div>
 
+      {/* ㊁ 失敗パターンの一行ヒント (top バケットだけ目立たせる).
+          原因が偏っている時は「再試行を勧める」より「設定を直しに行く」を促す。 */}
+      {failureStats && failureStats.top && failureStats.top.count >= 2 && (
+        <div className="flex items-start gap-2 text-xs px-3 py-2 rounded border border-amber-200 bg-amber-50 text-amber-900">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <span className="font-medium">失敗 {failureStats.total} 件中 {failureStats.top.count} 件は同じ原因:</span>{" "}
+            {failureStats.top.hint}
+          </div>
+        </div>
+      )}
+
       {items.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -562,6 +584,8 @@ function InboxCard({
  * OCR テキストを行種別ごとに色分け表示する小コンポーネント (Round 3 ⓔ)。
  * 金額/合計/日付/時刻/インボイス番号/店名 候補をそれぞれ違う色で出すことで、
  * "AI OCR を回す前から、Vision OCR がここまで読めてる" のがひと目で分かる。
+ *
+ * Round 4 ㊃: hover ツールチップで行種別の意味を補足し、凡例を上部に追加。
  */
 function RichOcrPreview({ text }: { text: string }) {
   const lines = classifyReceiptLines(text);
@@ -575,13 +599,47 @@ function RichOcrPreview({ text }: { text: string }) {
     vendor: "text-amber-800 font-medium",
     other: "text-muted-foreground",
   };
+  // ㊃ 行種別の日本語説明 (hover で見える)
+  const kindDesc: Record<LineKind, { label: string; help: string }> = {
+    amount: { label: "金額", help: "¥ 記号 / 円 / カンマ区切り数字を含む行 — AI OCR で「明細金額」になる候補" },
+    total: { label: "合計", help: "金額 + 合計/小計/total キーワード — AI OCR で「合計金額」になる候補" },
+    date: { label: "日付", help: "YYYY/MM/DD 等を含む行 — AI OCR で「取引日」になる候補" },
+    time: { label: "時刻", help: "HH:MM 等を含む行 — レシート発行時刻として補助情報になる" },
+    invoice: { label: "インボイス番号", help: "T+13桁の登録番号 — 適格請求書として認識される" },
+    vendor: { label: "店名候補", help: "「店」「会社」等のヒント語 / 最初の有意行 — AI OCR で「店名」になる候補" },
+    other: { label: "その他", help: "上記いずれにも当てはまらない行" },
+  };
+  // どの種別がこの OCR テキストに含まれているか — 凡例には登場するものだけ出す
+  const presentKinds = Array.from(new Set(lines.map((l) => l.kind))).filter(
+    (k) => k !== "other",
+  ) as LineKind[];
+
   return (
-    <pre className="mt-1 p-2 bg-muted rounded text-[10px] max-h-32 overflow-y-auto whitespace-pre-wrap font-mono leading-snug">
-      {lines.map((l, i) => (
-        <div key={i} className={kindClass[l.kind]} title={`種別: ${l.kind}`}>
-          {l.line || " "}
+    <div className="mt-1">
+      {presentKinds.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-1 text-[9px]">
+          {presentKinds.map((k) => (
+            <span
+              key={k}
+              className={`px-1.5 py-0.5 rounded border ${kindClass[k]} bg-background`}
+              title={kindDesc[k].help}
+            >
+              ●{kindDesc[k].label}
+            </span>
+          ))}
         </div>
-      ))}
-    </pre>
+      )}
+      <pre className="p-2 bg-muted rounded text-[10px] max-h-32 overflow-y-auto whitespace-pre-wrap font-mono leading-snug">
+        {lines.map((l, i) => (
+          <div
+            key={i}
+            className={kindClass[l.kind]}
+            title={`${kindDesc[l.kind].label}: ${kindDesc[l.kind].help}`}
+          >
+            {l.line || " "}
+          </div>
+        ))}
+      </pre>
+    </div>
   );
 }

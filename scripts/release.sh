@@ -38,6 +38,18 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
+# 0. Round 4 ㊀ で導入: フル precheck を回して失敗してたら止める。
+# SKIP_PRECHECK=1 で無効化可能だが、通常は必ず通すこと。
+if [ -z "${SKIP_PRECHECK:-}" ]; then
+  echo ""
+  echo "==> 0. Precheck"
+  if ! "$(dirname "$0")/release-precheck.sh" "$TAG"; then
+    echo ""
+    echo "ERROR: precheck が失敗しました。SKIP_PRECHECK=1 で強制発火できますが推奨しません"
+    exit 1
+  fi
+fi
+
 # Rust toolchain
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1090
