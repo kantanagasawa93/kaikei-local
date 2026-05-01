@@ -148,7 +148,7 @@ export default function InboxPage() {
           <div>
             <h1 className="text-2xl font-bold">写真受信箱</h1>
             <p className="text-sm text-muted-foreground">
-              iCloud 写真から自動で見つけた領収書候補
+              iCloud 写真から文書検出 + キーワード判定で抽出した領収書候補
             </p>
           </div>
         </div>
