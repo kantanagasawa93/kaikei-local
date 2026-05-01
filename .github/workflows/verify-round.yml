@@ -1,0 +1,112 @@
+# PDCA Round の品質ゲート
+#
+# やること:
+#   1. cargo check (Rust 側のコンパイル)
+#   2. tsc --noEmit (TypeScript 型チェック)
+#   3. next build (フロント本番ビルド) → out/ が吐かれること
+#   4. tauri build --bundles app --debug (Mac .app バンドル作成)
+#   5. .app の起動 + 終了 (起動だけ確認、UI 操作はしない)
+#   6. .app の CLI --verify-help が出ること
+#
+# トリガー:
+#   - workflow_dispatch: 必要な時だけ手動で
+#   - push to main: PDCA commit のたびに sanity check (.app は省略 — 時間節約)
+#
+# macOS runner は時間が掛かる + 課金枠を喰うので、フル E2E (.app)
+# は workflow_dispatch のみ。push の sanity は 5 分程度で済む構成。
+name: Verify Round
+
+on:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: ".app バンドルまで作る (約 10 分)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+jobs:
+  sanity:
+    name: Sanity (cargo check + tsc + next build)
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+      - name: cargo check
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
+      - name: next build
+        run: npm run build
+
+  bundle:
+    name: .app bundle (debug)
+    needs: sanity
+    # workflow_dispatch のときだけ走る (push トリガでは sanity だけ)。
+    # input.full にチェックを入れない場合も bundle は走る (default true 相当に
+    # するか迷ったが、明示 opt-in の方が課金枠を保てるので false)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: tauri build (debug, .app only)
+        run: |
+          npm run build
+          npx tauri build --bundles app --debug
+
+      - name: Smoke — CLI --verify-help
+        run: |
+          BIN="src-tauri/target/debug/kaikei"
+          if [ ! -x "$BIN" ]; then
+            echo "ERROR: kaikei binary not found at $BIN"
+            ls -lah src-tauri/target/debug/ || true
+            exit 1
+          fi
+          "$BIN" --verify-help
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAIKEI-LOCAL-debug-app
+          path: src-tauri/target/debug/bundle/macos/KAIKEI LOCAL.app
+          retention-days: 7

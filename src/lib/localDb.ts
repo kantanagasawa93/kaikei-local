@@ -83,10 +83,58 @@ function translateDbError(msg: string): string {
 
 let _db: Database | null = null;
 
+/**
+ * sqlx の "migration N was previously applied but has been modified" エラーを
+ * 検知 → Rust 側の db_repair_migration_checksum を叩いて _sqlx_migrations を
+ * 一旦クリア → Database.load を再試行する自動復旧ヘルパ。
+ *
+ * 一度きり ('once') にしてあるのは「直しても直らない時に無限ループしない」ため。
+ */
+const CHECKSUM_MISMATCH_RE = /previously applied but has been modified/i;
+
+let _repairAttempted = false;
+
 async function getDb(): Promise<Database> {
   if (_db) return _db;
-  _db = await Database.load("sqlite:kaikei.db");
-  return _db;
+  try {
+    _db = await Database.load("sqlite:kaikei.db");
+    return _db;
+  } catch (e) {
+    const msg = (e as Error)?.message || String(e);
+    if (CHECKSUM_MISMATCH_RE.test(msg) && !_repairAttempted) {
+      _repairAttempted = true;
+      console.warn("[localDb] migration checksum mismatch — auto-repair 実行");
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const r = (await invoke("db_repair_migration_checksum")) as {
+          ok: boolean;
+          backup_path?: string;
+          error?: string;
+          skipped?: string;
+        };
+        if (!r.ok) {
+          throw new Error(r.error || "auto-repair failed");
+        }
+        // 念のため UI 側に「直したよ」を見せる (toast はベストエフォート)
+        void import("@/lib/toast")
+          .then(({ toast }) =>
+            toast.success(
+              `データベースのマイグレーション情報を修復しました${
+                r.backup_path ? ` (バックアップ: ${r.backup_path})` : ""
+              }`,
+            ),
+          )
+          .catch(() => {});
+        // sqlx の状態をクリアしたので再 load
+        _db = await Database.load("sqlite:kaikei.db");
+        return _db;
+      } catch (re) {
+        console.error("[localDb] auto-repair 失敗:", re);
+        throw e; // 元の checksum mismatch を投げ直す
+      }
+    }
+    throw e;
+  }
 }
 
 type Row = Record<string, unknown>;

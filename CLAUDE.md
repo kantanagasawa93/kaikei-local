@@ -63,55 +63,56 @@ scripts/verify-app.sh smoke          # 上記を順に
 
 CLI 直叩き: `/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei --verify-help`
 
-## 次ラウンド (Round 3) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 4) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ⓐ → ⓓ → ⓑ → ⓔ → ⓒ。
+推し優先順は ㊀ → ㊂ → ㊁ → ㊃ → ㊄。
 
-### ⓐ Migration recovery (致命バグ修正) ★★★★★
-- 目的: sqlx の checksum mismatch (`migration 1 was previously applied but
-  has been modified`) で v4+ が end user 環境で適用されない問題を修正
-- 対象: `src/lib/localDb.ts` (Database.load を catch + 自動復旧)
+### ㊀ v0.3.0 実リリース発火 ★★★★★
+- 目的: Round 2/3 で揃えた Universal Binary + 自動仕訳精度向上を実配布
+- 対象: `scripts/release.sh v0.3.0` (要 APPLE_* env)
 - やること:
-  - Database.load 失敗時に "previously applied" エラーを検出
-  - DB ファイルを `kaikei.db.bak-<ts>` にバックアップ
-  - `DELETE FROM _sqlx_migrations` → 再 load (idempotent な SCHEMA_SQL に依存)
-  - 復旧成功時は info toast、失敗時はバックアップ手順を案内
-- 注: Round 2 では開発機の `_sqlx_migrations` を手動クリアして v4 適用を確認済み。
-  本番ユーザにはまだ未到達 → 最優先で修正する
+  - 環境変数 4 種 (APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD /
+    APPLE_TEAM_ID) を確認 → スクリプト発火
+  - arm64 + x64 両 DMG が GitHub Release に並ぶこと、`*_x64.dmg` の URL が 200
+  - LP の changelog セクションに v0.3.0 ハイライトを表示
+- 注: 認証情報なしのチャットからは打てないので、ユーザの手元シェルで叩く
+- commit サイズ: 小 (~50 行 — LP 文言反映のみ。リリース自体はスクリプト)
+
+### ㊁ 既知 OCR 失敗パターンの自動学習 ★★★
+- 目的: receipt_failed 行の last_error を集計 → 同じパターン再発時に「再試行
+  しても無駄」と判定して silent skip
+- 対象: `src/lib/auto-journal.ts` + `src/lib/error-reporter.ts`
+- やること:
+  - last_error を正規化 (License limit / network timeout / vendor parse 等)
+  - 連続失敗 3 回以上のパターンを app_settings に保存
+  - quickConfirmOne 起動時にチェックして、該当パターンなら「もう一度押す前に
+    設定を見直してください」モーダル
 - commit サイズ: 中 (~150 行)
 
-### ⓑ v0.3.0 リリース実行 (Round 2 成果物の配布) ★★★★
-- 目的: Round 2 で整備した Universal Binary 動線を実 Release に反映
-- 対象: `scripts/release.sh v0.3.0` を発火 (要 APPLE_* env)、changelog 追記
+### ㊂ 仕訳の差し戻し→受信箱再投入 ★★★★
+- 目的: 自動仕訳された結果が不正だった時に、journal を消して inbox 行を
+  candidate に戻して再仕訳するフロー
+- 対象: `src/app/(app)/journals/page.tsx` (削除アクション拡張) + `src/lib/journal-commit.ts`
 - やること:
-  - APPLE_SIGNING_IDENTITY 等を確認 → `scripts/release.sh v0.3.0`
-  - arm64 + x64 両 DMG が GitHub Release に揃うこと、
-    `https://github.com/.../releases/latest/download/KAIKEI_LOCAL_x64.dmg` が 200 を返すこと
-- commit サイズ: 小 (~50 行)
-
-### ⓒ verify-app.sh の CI 化 ★★
-- 目的: Round 開始時の状態確認を自動化 (cargo check + tsc + next build + .app smoke)
-- 対象: `.github/workflows/verify-round.yml` (新規)
-- macOS runner で: `npm ci` → `cargo check` → `npx tauri build --bundles app --debug`
-  → 起動 → `--db-dump=photo_inbox` で sanity check
-- 課題: macOS runner は遅い (1 ジョブ 8〜10 分)。on demand (workflow_dispatch) スタートが現実的
-- commit サイズ: 中 (~100 行)
-
-### ⓓ 受信箱「クイック確定」モード ★★★★
-- 目的: candidate のカードで「確定」を押したらその場で auto-journal が背後で
-  走って journals まで作成する 1-click フロー
-- 対象: `src/app/(app)/inbox/page.tsx` + `src/lib/auto-journal.ts`
-- やること:
-  - 1 件単位の `quickConfirmOne(inboxId)` を auto-journal に追加
-  - candidate / receipt 両状態で「⚡ いますぐ仕訳化」ボタン (進行スピナー)
-  - 結果トーストに「仕訳 #journal_id を作成」リンク
+  - 受信箱由来の仕訳の削除メニューに「ゴミ箱 + 受信箱に戻す」を追加
+  - photo_inbox.state を 'candidate' に + imported_receipt_id クリア
+  - claude_result_json は保持 (再 OCR 不要なら同じ結果で再仕訳できる)
 - commit サイズ: 中 (~120 行)
 
-### ⓔ Vision OCR 結果の rich preview ★★
-- 受信箱カードで OCR テキストを行単位ハイライト (金額・日付・店名候補を色分け)
-- 領収書として登録する前から「これくらい読めてる」が分かる
-- 対象: `src/app/(app)/inbox/page.tsx` + `src/lib/receipt-classifier.ts` (行スコア API 公開)
+### ㊃ rich preview の hover ツールチップ ★★
+- 目的: 受信箱カードの色分け行を hover すると、その種別の説明と、
+  AI OCR で送った場合に取れる情報の例を表示
+- 対象: `src/app/(app)/inbox/page.tsx` (RichOcrPreview)
+- commit サイズ: 小 (~50 行)
+
+### ㊄ verify-app.sh smoke の Markdown レポート ★★
+- 目的: smoke の結果を `verify-report-<ts>.md` に書き出して、ユーザに渡す
+  時に「最後に検証したときの結果」を毎回見せる
+- 対象: `scripts/verify-app.sh`
+- やること:
+  - smoke の結果 (件数・最終スキャン日時・最近のエラー) を Markdown 化
+  - 起動時に最新レポートをアプリ内で表示するメニュー (Tauri command + UI)
 - commit サイズ: 小〜中 (~100 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
@@ -124,6 +125,6 @@ CLI 直叩き: `/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei --verify-he
 - **VNDetectDocumentSegmentationRequest は false positive 多い**: 「文書らしい矩形」は壁掛け絵・PC モニタ画面・ガジェットラベル等にも反応する。これだけで「領収書」判定するのは無理 → 必ず VNRecognizeText のキーワード判定と組み合わせる
 - **NSPredicate の variadic format**: `predicateWithFormat:`+可変長は Rust FFI 不可。`predicateWithFormat:argumentArray:` (NSArray) 経由必須
 - **DB migration が UI 起動なしで走らない**: tauri-plugin-sql は最初の `Database.load(...)` 呼出時にマイグレーション。CLI scanner が migration 当たってない DB を触ると table 不在エラー → CLI 側で `sqlite_master` チェックして graceful exit する設計に
-- **sqlx の checksum mismatch (Round 1〜2 で発覚)**: `_sqlx_migrations` に記録された hash と現在の SCHEMA_SQL の hash が違うと sqlx は「migration N was previously applied but has been modified」を投げて、それ以降のマイグレーションが一切走らない。Round 2 で v4 が適用されない事故が発生 → 開発機は手動で `DELETE FROM _sqlx_migrations` で復旧。本番では Round 3 ⓐ で自動復旧を実装予定。SCHEMA_SQL を「絶対に既存版数の中身を変えない」運用が原則 (新規版数を追加するのみ)
+- **sqlx の checksum mismatch**: `_sqlx_migrations` に記録された hash と現在の SCHEMA_SQL の hash が違うと sqlx は「migration N was previously applied but has been modified」を投げて、それ以降のマイグレーションが一切走らない。Round 3 ⓐ で `db_repair_migration_checksum` Tauri command + localDb.ts の自動復旧を実装済み (DB 自動バックアップ → `_sqlx_migrations` クリア → 再 load)。SCHEMA_SQL を「絶対に既存版数の中身を変えない」運用が原則 (新規版数を追加するのみ)
 - **SQLite で CHECK 制約を変えるにはテーブル再作成必要**: ALTER TABLE ... DROP CHECK は無いので、新テーブル作成 → INSERT SELECT → DROP → RENAME。Round 2 v4 で `state` enum 拡張時に採用
 
