@@ -12,6 +12,10 @@
 //     古い OS では英語のみで動作するが、領収書は数字や記号が多いので
 //     英語フォールバックでも金額・日付などはある程度拾える。
 //   - フレームワーク: Vision + CoreImage + ImageIO。
+//   - HEIC: CIImage が macOS 11+ ネイティブで HEIC をサポートするため、
+//     iPhone 純正カメラの HEIC ファイルもそのまま処理できる
+//     (`imageWithContentsOfURL:` が ImageIO 経由で自動デコード)。
+//   - PNG / JPEG / HEIC 全部同経路。
 //
 // Phase 2 ではここまで。受信箱の各写真に対して認識テキストを保存し、
 // receipt_classifier がスコアを付ける。
@@ -86,29 +90,27 @@ pub fn recognize_text<P: AsRef<Path>>(path: P) -> Result<VisionOcrResult, String
                 Err(unsafe { nsstring_to_rust(desc) })
             } else {
                 // [VNRecognizedTextObservation] -> firstCandidate -> string
-                let observations: id = unsafe { msg_send![req, results] };
+                let observations: id = msg_send![req, results];
                 if observations == nil {
                     Ok(Vec::<String>::new())
                 } else {
-                    let count: u64 = unsafe { msg_send![observations, count] };
+                    let count: u64 = msg_send![observations, count];
                     let mut out = Vec::with_capacity(count as usize);
                     for i in 0..count {
-                        unsafe {
-                            let obs: id = msg_send![observations, objectAtIndex: i];
-                            let candidates: id = msg_send![obs, topCandidates: 1u64];
-                            if candidates == nil {
-                                continue;
-                            }
-                            let c_count: u64 = msg_send![candidates, count];
-                            if c_count == 0 {
-                                continue;
-                            }
-                            let first: id = msg_send![candidates, objectAtIndex: 0u64];
-                            let s: id = msg_send![first, string];
-                            let line = nsstring_to_rust(s);
-                            if !line.is_empty() {
-                                out.push(line);
-                            }
+                        let obs: id = msg_send![observations, objectAtIndex: i];
+                        let candidates: id = msg_send![obs, topCandidates: 1u64];
+                        if candidates == nil {
+                            continue;
+                        }
+                        let c_count: u64 = msg_send![candidates, count];
+                        if c_count == 0 {
+                            continue;
+                        }
+                        let first: id = msg_send![candidates, objectAtIndex: 0u64];
+                        let s: id = msg_send![first, string];
+                        let line = nsstring_to_rust(s);
+                        if !line.is_empty() {
+                            out.push(line);
                         }
                     }
                     Ok(out)

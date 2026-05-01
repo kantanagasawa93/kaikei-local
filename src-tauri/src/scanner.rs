@@ -21,6 +21,33 @@ use crate::photos;
 use crate::vision;
 
 use rusqlite::params;
+use std::io::Write;
+
+/// LaunchAgent から呼ばれる場合 stdio が `open(1)` で食われて plist の
+/// StandardErrorPath にも届かないため、scanner 自身でログファイルを開いて
+/// 追記する。手動 (`kaikei --auto-scan` をターミナルから) で動かす分には
+/// stderr にも従来通り出力される。
+fn log_file_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join("Library/Logs/KAIKEI LOCAL/scan.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/kaikei-scan.log"))
+}
+
+pub fn log_line(msg: &str) {
+    eprintln!("[scanner] {}", msg);
+    let path = log_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(f, "[{}] {}", ts, msg);
+    }
+}
 
 #[derive(Debug)]
 pub struct ScanSummary {
@@ -33,9 +60,12 @@ pub struct ScanSummary {
 /// LaunchAgent / CLI から呼ばれるエントリポイント。
 /// app_data_dir = ~/Library/Application Support/dev.kaikei.app/
 pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
+    log_line(&format!("run_once start: app_data={}", app_data_dir.display()));
     let auth = photos::authorization_status();
     if auth != "authorized" && auth != "limited" {
-        return Err(format!("not authorized: {}", auth));
+        let msg = format!("not authorized: {}", auth);
+        log_line(&msg);
+        return Err(msg);
     }
 
     let inbox_dir = app_data_dir.join("inbox");
@@ -44,6 +74,24 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
     let db_path = app_data_dir.join("kaikei.db");
     let conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("open db ({}): {}", db_path.display(), e))?;
+
+    // GUI アプリの起動を一度も経ていない場合 photo_scan_log が無い。
+    // その場合は明示エラーで止めて「初回は KAIKEI LOCAL.app を開いてください」
+    // と促す (cargo の migration を CLI 側でやり直すと version 不整合の
+    // 危険があるため、敢えて GUI 経由に統一する)。
+    let has_v3: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='photo_scan_log' LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|_| true)
+        .unwrap_or(false);
+    if !has_v3 {
+        let msg = "DB v3 migration not applied. Please open KAIKEI LOCAL.app once first.";
+        log_line(msg);
+        return Err(msg.into());
+    }
 
     // 前回スキャン時刻を取得
     let last_scan: i64 = conn
