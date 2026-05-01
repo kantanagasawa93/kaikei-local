@@ -76,6 +76,11 @@ const PH_SUBTYPE_NON_RECEIPT_MASK: u64 =
 
 /// PHImageRequestOptionsDeliveryMode: 1 = HighQualityFormat
 const PH_DELIVERY_MODE_HIGH_QUALITY: i64 = 1;
+/// PHImageRequestOptionsDeliveryMode: 2 = FastFormat
+/// (iCloud 上の写真の場合、低画質サムネ相当を返す → 帯域 1/20 程度)
+/// 注: synchronous=YES だとこのフラグは無視され HighQuality 扱いになるので、
+/// サムネ取得時は synchronous=NO で使う必要がある。
+const PH_DELIVERY_MODE_FAST_FORMAT: i64 = 2;
 
 /// PHImageRequestOptionsVersion: 0 = current (edits applied)
 const PH_VERSION_CURRENT: i64 = 0;
@@ -212,7 +217,7 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
 
         let mut out: Vec<ScannedPhoto> = Vec::with_capacity(count as usize);
 
-        // PHImageRequestOptions (synchronous + iCloud download OK)
+        // PHImageRequestOptions (synchronous + iCloud download OK) — Stage 2 用 (フル DL)
         let req_opts: id = {
             let alloc: id = msg_send![class!(PHImageRequestOptions), alloc];
             msg_send![alloc, init]
@@ -221,6 +226,17 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
         let _: () = msg_send![req_opts, setNetworkAccessAllowed: YES];
         let _: () = msg_send![req_opts, setVersion: PH_VERSION_CURRENT];
         let _: () = msg_send![req_opts, setDeliveryMode: PH_DELIVERY_MODE_HIGH_QUALITY];
+
+        // Stage 1.5 用 — 「サムネ画質」で先に文書判定し、通った物だけフル DL する。
+        // synchronous=NO + DeliveryMode=FastFormat で iCloud 帯域を抑える。
+        // (synchronous=YES だと FastFormat は無視されるので必ず NO のまま)
+        let fast_opts: id = {
+            let alloc: id = msg_send![class!(PHImageRequestOptions), alloc];
+            msg_send![alloc, init]
+        };
+        let _: () = msg_send![fast_opts, setNetworkAccessAllowed: YES];
+        let _: () = msg_send![fast_opts, setVersion: PH_VERSION_CURRENT];
+        let _: () = msg_send![fast_opts, setDeliveryMode: PH_DELIVERY_MODE_FAST_FORMAT];
 
         let manager: id = msg_send![class!(PHImageManager), defaultManager];
 
@@ -268,6 +284,43 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                 continue;
             }
 
+            // ── Stage 1.5: サムネで先に文書判定 (iCloud 帯域削減) ──
+            // FastFormat (~数百 KB) でサムネを取って has_document で文書らしさを判定。
+            // 通らなかった物は フル DL (~5 MB/枚) を完全 skip — 1000 枚規模で帯域 1/20。
+            // 注: 偽陰性 (本当は領収書なのにサムネで弾かれる) を避けるため、サムネ取得
+            //     や判定が失敗した時は安全側で「pass」扱いにし、Stage 2 の has_document
+            //     で再判定する。
+            let thumb_passed = {
+                let thumb_path = std::env::temp_dir()
+                    .join(format!("kaikei-thumb-{}.jpg", safe_name));
+                match request_image_data(manager, asset, fast_opts) {
+                    Ok(b) => {
+                        let b = ensure_jpeg(b);
+                        if std::fs::write(&thumb_path, &b).is_err() {
+                            true // 一時書込失敗 → 安全側で full DL に進む
+                        } else {
+                            let r = crate::vision::has_document(
+                                &thumb_path.to_string_lossy(),
+                            )
+                            .unwrap_or(true);
+                            let _ = std::fs::remove_file(&thumb_path);
+                            r
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "thumb fetch failed for {}: {} (full DL に fallback)",
+                            asset_id, e
+                        );
+                        true
+                    }
+                }
+            };
+            if !thumb_passed {
+                // サムネ判定で文書検出されず — 帯域節約のため完全 skip
+                continue;
+            }
+
             // 画像データ取得 (synchronous=YES でも block で結果を受け取る)
             let bytes = match request_image_data(manager, asset, req_opts) {
                 Ok(b) => b,
@@ -286,14 +339,14 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                 continue;
             }
 
-            // ── Stage 2: VNDetectDocumentSegmentationRequest で文書検出 ──
-            // Apple Photos.app の検索で「領収書」が正確に取れるのと同じ
-            // on-device モデル。文書らしい矩形が無ければ即削除して skip する。
-            // (= 受信箱に並ばない、= ユーザーが目にしない)
+            // ── Stage 2: フル解像度で再度 VNDetectDocumentSegmentationRequest ──
+            // サムネ判定は解像度が低くて偽陽性が混じる可能性がある (壁掛け絵・PC 画面
+            // のラベル等)。フル DL 後に同じモデルでもう一度判定し、ここで弾けるなら
+            // ファイルごと削除する safety net。
             let path_str = file_path.to_string_lossy().to_string();
             match crate::vision::has_document(&path_str) {
                 Ok(false) => {
-                    // 領収書らしくない: 一時保存したファイルを削除して skip
+                    // 領収書らしくない: 保存したファイルを削除して skip
                     let _ = std::fs::remove_file(&file_path);
                     continue;
                 }

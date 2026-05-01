@@ -89,9 +89,12 @@ async function logAiOcr(opts: {
 /**
  * 1 件の photo_inbox 行を仕訳化する。
  * @returns 作成された receipt_id か null (失敗時)
+ *
+ * 失敗時は呼び出し側 (autoJournalizeAllReceipts) が photo_inbox を
+ * state='receipt_failed' に更新する。本関数は throw して呼び出し元に伝える。
  */
 export async function autoJournalizeOne(
-  inboxRow: { id: string; file_path: string | null; ocr_text: string | null }
+  inboxRow: { id: string; file_path: string | null; ocr_text: string | null; attempts?: number | null }
 ): Promise<string | null> {
   const consent = await hasAiOcrConsent();
   if (!consent) {
@@ -175,13 +178,16 @@ export async function autoJournalizeOne(
     tax_amount: 0,
   });
 
-  // photo_inbox を imported に更新
+  // photo_inbox を imported に更新 + Claude OCR 結果を完全保存 + エラー履歴クリア
+  // claude_result_json は再仕訳・監査用。雑費自動付与のロジック復元元になる。
   await db
     .from("photo_inbox")
     .update({
       state: "imported",
       imported_receipt_id: receiptId,
       imported_at: new Date().toISOString(),
+      claude_result_json: JSON.stringify(ocr),
+      last_error: null,
     })
     .eq("id", inboxRow.id);
 
@@ -215,11 +221,14 @@ export async function autoJournalizeAllReceipts(
 
   const { data } = await db
     .from("photo_inbox")
-    .select("id, file_path, ocr_text")
+    .select("id, file_path, ocr_text, attempts")
     .eq("state", "receipt")
     .order("taken_at", { ascending: true })
     .limit(BATCH_SIZE);
-  const rows = (data as { id: string; file_path: string | null; ocr_text: string | null }[] | null) ?? [];
+  const rows =
+    (data as
+      | { id: string; file_path: string | null; ocr_text: string | null; attempts: number | null }[]
+      | null) ?? [];
 
   const result: AutoJournalResult = {
     total: rows.length,
@@ -229,16 +238,64 @@ export async function autoJournalizeAllReceipts(
   };
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
+    const attempts = (row.attempts ?? 0) + 1;
     try {
       await autoJournalizeOne(row);
       result.imported++;
     } catch (e) {
       result.failed++;
-      result.errors.push(`${row.id}: ${(e as Error).message}`);
+      const msg = (e as Error).message;
+      result.errors.push(`${row.id}: ${msg}`);
+      // 失敗を photo_inbox に永続化:
+      // - state='receipt_failed' で受信箱の「失敗」タブに並ぶ
+      // - last_error に最後のエラーを残し、UI で原因を表示
+      // - attempts++ で何度失敗したか分かる
+      try {
+        await db
+          .from("photo_inbox")
+          .update({
+            state: "receipt_failed",
+            last_error: msg.slice(0, 500),
+            attempts,
+          })
+          .eq("id", row.id);
+      } catch {
+        // 永続化に失敗してもバッチ全体は止めない (受信箱は最悪 'receipt' に
+        // 戻ったままだが UI から再ボタンで復旧可能)
+      }
     }
     if (onProgress) onProgress(i + 1, rows.length);
   }
   return result;
+}
+
+/**
+ * receipt_failed 状態の写真を「もう一度試す」。state を 'receipt' に戻すだけ。
+ * 直後に autoJournalizeAllReceipts を呼ぶか、UI の「領収書をすべて自動仕訳」を
+ * 押すと、再度 Claude OCR にかかる。
+ */
+export async function resetFailedToReceipt(inboxId: string): Promise<void> {
+  await db
+    .from("photo_inbox")
+    .update({ state: "receipt", last_error: null })
+    .eq("id", inboxId);
+}
+
+/**
+ * 失敗したものをまとめて 'receipt' に戻す (一括再試行の前段)。
+ */
+export async function resetAllFailedToReceipt(): Promise<number> {
+  const { data } = await db
+    .from("photo_inbox")
+    .select("id")
+    .eq("state", "receipt_failed");
+  const rows = (data as { id: string }[] | null) ?? [];
+  if (rows.length === 0) return 0;
+  await db
+    .from("photo_inbox")
+    .update({ state: "receipt", last_error: null })
+    .eq("state", "receipt_failed");
+  return rows.length;
 }
 
 // ────────────────────────────────────────────────────────────

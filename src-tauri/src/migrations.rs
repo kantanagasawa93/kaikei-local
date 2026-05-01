@@ -434,3 +434,53 @@ CREATE TABLE IF NOT EXISTS ai_ocr_log (
 CREATE INDEX IF NOT EXISTS idx_ai_ocr_log_sent_at ON ai_ocr_log(sent_at);
 "#;
 
+/// v4: 自動仕訳の精度向上
+///
+/// 1. photo_inbox.claude_result_json — Claude OCR 結果を JSON 文字列で完全保存
+///    (UI から後で読み返したり、再仕訳のときに同じ結果を流用できる)
+/// 2. photo_inbox.last_error — 直近の自動仕訳エラー (受信箱で表示・再試行に使う)
+/// 3. photo_inbox.attempts — 試行回数 (5 回以上失敗で自動再試行をやめる等の制御に)
+/// 4. state CHECK に 'receipt_failed' を追加 (SQLite は ALTER TABLE で
+///    CHECK を変えられないので、新テーブル作成 → INSERT SELECT → DROP → RENAME)
+pub const SCHEMA_V4_SQL: &str = r#"
+CREATE TABLE photo_inbox_v4 (
+  id TEXT PRIMARY KEY,
+  source_asset_id TEXT NOT NULL UNIQUE,
+  taken_at TEXT NOT NULL,
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  width INTEGER,
+  height INTEGER,
+  file_path TEXT,
+  thumbnail_path TEXT,
+  ocr_text TEXT,
+  receipt_score REAL,
+  state TEXT NOT NULL DEFAULT 'candidate'
+    CHECK (state IN ('candidate','receipt','not_receipt','imported','dismissed','receipt_failed')),
+  imported_receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  imported_at TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- v4 新規カラム
+  claude_result_json TEXT,                  -- Claude OCR 全レスポンスを JSON 文字列で保存
+  last_error TEXT,                          -- 直近の失敗理由
+  attempts INTEGER NOT NULL DEFAULT 0       -- 自動仕訳試行回数
+);
+
+INSERT INTO photo_inbox_v4 (
+  id, source_asset_id, taken_at, detected_at, width, height, file_path,
+  thumbnail_path, ocr_text, receipt_score, state, imported_receipt_id,
+  imported_at, notes, created_at
+)
+SELECT
+  id, source_asset_id, taken_at, detected_at, width, height, file_path,
+  thumbnail_path, ocr_text, receipt_score, state, imported_receipt_id,
+  imported_at, notes, created_at
+FROM photo_inbox;
+
+DROP TABLE photo_inbox;
+ALTER TABLE photo_inbox_v4 RENAME TO photo_inbox;
+
+CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
+CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
+"#;
+

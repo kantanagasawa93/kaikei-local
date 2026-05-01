@@ -229,11 +229,15 @@ export interface InboxRow {
   thumbnail_path: string | null;
   ocr_text: string | null;
   receipt_score: number | null;
-  state: "candidate" | "receipt" | "not_receipt" | "imported" | "dismissed";
+  state: "candidate" | "receipt" | "not_receipt" | "imported" | "dismissed" | "receipt_failed";
   imported_receipt_id: string | null;
   imported_at: string | null;
   notes: string | null;
   created_at: string;
+  // v4 追加カラム
+  claude_result_json: string | null;
+  last_error: string | null;
+  attempts: number | null;
 }
 
 export async function listInbox(state?: InboxRow["state"]): Promise<InboxRow[]> {
