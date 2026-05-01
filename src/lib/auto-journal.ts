@@ -270,6 +270,74 @@ export async function autoJournalizeAllReceipts(
 }
 
 /**
+ * 1 件だけ「いますぐ仕訳化」する高速パス (Round 3 ⓓ "クイック確定モード")。
+ *
+ * 流れ:
+ *   1. 受信箱の対象行を読む
+ *   2. state が candidate / receipt_failed なら 'receipt' に上げる
+ *      (failed の場合は last_error を消して再試行扱い)
+ *   3. autoJournalizeOne を呼ぶ
+ *   4. 失敗したら呼び出し元 (UI) に throw、state は 'receipt_failed' に落として永続化
+ *
+ * UI 側の使い方:
+ *   - 候補カードの「⚡ いますぐ仕訳化」ボタンから呼ぶ
+ *   - 戻り値の receiptId / journalId をトーストで「仕訳 #xxx を作成しました」
+ *     のリンクに使う
+ *
+ * @returns 作成された receipt_id (成功時)。失敗時は throw。
+ */
+export async function quickConfirmOne(inboxId: string): Promise<string> {
+  // 受信箱行を取得 — file_path / ocr_text / attempts が要る
+  const { data } = await db
+    .from("photo_inbox")
+    .select("id, file_path, ocr_text, attempts, state")
+    .eq("id", inboxId)
+    .single();
+  const row = data as
+    | {
+        id: string;
+        file_path: string | null;
+        ocr_text: string | null;
+        attempts: number | null;
+        state: string;
+      }
+    | null;
+  if (!row) throw new Error("対象の写真が見つかりません");
+
+  // state を 'receipt' に上げる (candidate / receipt_failed どちらでも OK)
+  if (row.state !== "receipt" && row.state !== "imported") {
+    await db
+      .from("photo_inbox")
+      .update({ state: "receipt", last_error: null })
+      .eq("id", inboxId);
+  }
+
+  try {
+    const receiptId = await autoJournalizeOne(row);
+    if (!receiptId) {
+      throw new Error("自動仕訳が空の結果を返しました");
+    }
+    return receiptId;
+  } catch (e) {
+    const msg = (e as Error).message;
+    // autoJournalizeAllReceipts と同じ永続化ロジック
+    try {
+      await db
+        .from("photo_inbox")
+        .update({
+          state: "receipt_failed",
+          last_error: msg.slice(0, 500),
+          attempts: (row.attempts ?? 0) + 1,
+        })
+        .eq("id", inboxId);
+    } catch {
+      /* 永続化失敗は致命でないので throw 元のまま */
+    }
+    throw e;
+  }
+}
+
+/**
  * receipt_failed 状態の写真を「もう一度試す」。state を 'receipt' に戻すだけ。
  * 直後に autoJournalizeAllReceipts を呼ぶか、UI の「領収書をすべて自動仕訳」を
  * 押すと、再度 Claude OCR にかかる。

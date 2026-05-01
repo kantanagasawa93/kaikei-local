@@ -17,13 +17,20 @@ if [ -f "$HOME/.cargo/env" ]; then
   source "$HOME/.cargo/env"
 fi
 
+# tauri.conf.json の "version" を 1 つだけ拾う雑 parser (jq 非依存にしておく)
+APP_VERSION=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' src-tauri/tauri.conf.json)
+if [ -z "$APP_VERSION" ]; then
+  echo "ERROR: src-tauri/tauri.conf.json から version を取得できませんでした"
+  exit 1
+fi
+
 build_arch() {
   local arch_name="$1"    # aarch64 or x64
   local target_flag="$2"  # "" for host (arm64), or "--target x86_64-apple-darwin"
 
   echo ""
   echo "=========================================="
-  echo "  Building $arch_name"
+  echo "  Building $arch_name (v$APP_VERSION)"
   echo "=========================================="
 
   # tauri の DMG 作成は macOS 26 の TCC と相性が悪いため、--bundles app で .app のみ作る。
@@ -34,14 +41,14 @@ build_arch() {
     APPLE_SIGNING_IDENTITY="$APPLE_SIGNING_IDENTITY" \
     npx tauri build --bundles app $target_flag
 
-  # .app の場所と DMG の出力先
+  # .app の場所と DMG の出力先 (バージョンは tauri.conf.json から動的に解決)
   local app_dir dmg_file
   if [ "$arch_name" = "aarch64" ]; then
     app_dir="src-tauri/target/release/bundle/macos"
-    dmg_file="src-tauri/target/release/bundle/dmg/KAIKEI LOCAL_0.1.0_aarch64.dmg"
+    dmg_file="src-tauri/target/release/bundle/dmg/KAIKEI LOCAL_${APP_VERSION}_aarch64.dmg"
   else
     app_dir="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
-    dmg_file="src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/KAIKEI LOCAL_0.1.0_x64.dmg"
+    dmg_file="src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/KAIKEI LOCAL_${APP_VERSION}_x64.dmg"
   fi
   local app_file="$app_dir/KAIKEI LOCAL.app"
 

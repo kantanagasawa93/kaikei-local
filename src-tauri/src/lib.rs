@@ -66,6 +66,89 @@ async fn photos_request_authorization() -> String {
     }
 }
 
+/// sqlx の "migration N was previously applied but has been modified"
+/// エラーを自動復旧する Tauri command。
+///
+/// 経緯:
+///   - sqlx は `_sqlx_migrations` に各マイグレーションの SHA384 を記録
+///   - SQL を一切いじっていなくても、sqlx のバージョン違い・改行コード混入・
+///     ビルド時のエンコーディング変動などで checksum が変わるケースがあり、
+///     一度 mismatch が起きると tauri-plugin-sql は Database.load 時点で
+///     例外を投げて「全マイグレーション停止」する
+///   - Round 1 → Round 2 で v3 を追加した時に開発機で発症し、v4 が適用されない
+///     事故が起きた。Round 2 では手動で `DELETE FROM _sqlx_migrations` で復旧。
+///     end user 環境では JS から Database.load できないので JS だけでは直せない
+///
+/// この関数は:
+///   1. rusqlite で kaikei.db を直接開く (tauri-plugin-sql を経由しない)
+///   2. `kaikei.db.bak-<unix>` にコピーバックアップ (失われたら困るので必ず取る)
+///   3. `_sqlx_migrations` の全行を DELETE (idempotent な SCHEMA_SQL に依存)
+///   4. 再度 Database.load("sqlite:kaikei.db") を JS から呼び直すと、
+///      sqlx は記録なし → 全マイグレーション再適用 (CREATE IF NOT EXISTS で安全)
+///
+/// 結果は { ok: bool, backup_path?: string, error?: string } で返す。
+#[tauri::command]
+async fn db_repair_migration_checksum(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        let db_path = app_data.join("kaikei.db");
+        if !db_path.exists() {
+            // DB が無い時は復旧不要 — 次の load で新規作成される
+            return Ok(serde_json::json!({
+                "ok": true,
+                "skipped": "db_not_found",
+            }));
+        }
+        // tokio のブロッキング外しに spawn_blocking
+        let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let ts = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+            let backup = db_path.with_file_name(format!("kaikei.db.bak-{}", ts));
+            std::fs::copy(&db_path, &backup).map_err(|e| format!("backup: {}", e))?;
+
+            let conn = rusqlite::Connection::open(&db_path)
+                .map_err(|e| format!("open db: {}", e))?;
+            // _sqlx_migrations が無ければ何もしないで OK (新規 DB)
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|_| true)
+                .unwrap_or(false);
+            if exists {
+                conn.execute("DELETE FROM _sqlx_migrations", [])
+                    .map_err(|e| format!("delete: {}", e))?;
+            }
+            Ok(backup.to_string_lossy().to_string())
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))?;
+
+        match result {
+            Ok(backup) => Ok(serde_json::json!({
+                "ok": true,
+                "backup_path": backup,
+            })),
+            Err(e) => Ok(serde_json::json!({
+                "ok": false,
+                "error": e,
+            })),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("db_repair_migration_checksum is only supported on macOS".into())
+    }
+}
+
 /// 画像ファイルを生バイトで読み出す。tauri-plugin-fs のスコープ/権限に依存せず、
 /// Rust 側 (フルディスクアクセス) で std::fs::read する。
 ///
@@ -698,6 +781,7 @@ pub fn run() {
             launchd_status,
             launchd_install,
             launchd_uninstall,
+            db_repair_migration_checksum,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

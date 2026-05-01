@@ -197,3 +197,96 @@ export function classifyReceipt(text: string): ClassifyResult {
 
   return { score, state, signals };
 }
+
+// ────────────────────────────────────────────────────────────
+// 行単位分類 (Round 3 ⓔ OCR rich preview 用)
+//
+// 受信箱カードで OCR テキストを表示するときに、金額・日付・店名候補を
+// 色分けするための行レベル分類器。ロジックは classifyReceipt の弱化版で、
+// AI OCR には投げず純粋にローカルキーワード/正規表現で判定する。
+// ────────────────────────────────────────────────────────────
+
+export type LineKind =
+  | "amount" // ¥1,234 / 1,234 円
+  | "total" // 合計 / 小計 / total / subtotal を含む行
+  | "date" // 2025/01/02 / 2025年1月2日 / 令和7年1月2日
+  | "time" // 14:23 / 14時23分
+  | "invoice" // T+13桁のインボイス登録番号
+  | "vendor" // 店名/会社名候補 — 最初の有意行で他種別に該当しないもの
+  | "other";
+
+const TOTAL_KEYWORDS = ["合計", "小計", "計：", "計:", "total", "subtotal"];
+const VENDOR_HINTS = ["店", "会社", "shop", "stand", "store", "corp", "inc"];
+
+/**
+ * OCR テキストを行ごとに種別分類する。順序は元のまま。
+ *
+ * ルール (上から順に評価し、最初にマッチした種別を採用):
+ *   1. INVOICE_NUM_RE (T+13桁) → 'invoice'
+ *   2. AMOUNT_RE がヒット かつ 行に "合計"/"小計"/"total" のいずれかを含む → 'total'
+ *   3. AMOUNT_RE がヒット → 'amount'
+ *   4. DATE_RE がヒット → 'date'
+ *   5. TIME_RE がヒット → 'time'
+ *   6. 店名ヒント語が含まれる、または最初の有意行 → 'vendor'
+ *   7. それ以外 → 'other'
+ */
+export function classifyReceiptLines(text: string): { line: string; kind: LineKind }[] {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+
+  const result: { line: string; kind: LineKind }[] = [];
+  let vendorAssigned = false;
+
+  for (const raw of lines) {
+    const line = raw;
+    const trimmed = line.trim();
+    if (!trimmed) {
+      result.push({ line, kind: "other" });
+      continue;
+    }
+
+    if (INVOICE_NUM_RE.test(trimmed)) {
+      result.push({ line, kind: "invoice" });
+      continue;
+    }
+
+    const lower = trimmed.toLowerCase();
+    const hasAmount = AMOUNT_RE.test(trimmed);
+    // AMOUNT_RE は g フラグで lastIndex が動くので reset
+    AMOUNT_RE.lastIndex = 0;
+    const isTotalKeyword = TOTAL_KEYWORDS.some((k) =>
+      k === k.toLowerCase() ? lower.includes(k) : trimmed.includes(k)
+    );
+    if (hasAmount && isTotalKeyword) {
+      result.push({ line, kind: "total" });
+      continue;
+    }
+    if (hasAmount) {
+      result.push({ line, kind: "amount" });
+      continue;
+    }
+
+    if (DATE_RE.test(trimmed)) {
+      result.push({ line, kind: "date" });
+      continue;
+    }
+    if (TIME_RE.test(trimmed)) {
+      result.push({ line, kind: "time" });
+      continue;
+    }
+
+    // 店名候補: ヒント語があるか、まだ vendor が割り当てられていない最初の有意行
+    const hasVendorHint = VENDOR_HINTS.some((h) =>
+      h === h.toLowerCase() ? lower.includes(h) : trimmed.includes(h)
+    );
+    if (hasVendorHint || !vendorAssigned) {
+      result.push({ line, kind: "vendor" });
+      vendorAssigned = true;
+      continue;
+    }
+
+    result.push({ line, kind: "other" });
+  }
+
+  return result;
+}

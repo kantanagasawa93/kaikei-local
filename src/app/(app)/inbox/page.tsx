@@ -38,9 +38,11 @@ import {
   type AuthStatus,
   type InboxRow,
 } from "@/lib/photo-scanner";
+import { classifyReceiptLines, type LineKind } from "@/lib/receipt-classifier";
 import {
   autoJournalizeAllReceipts,
   getAutoJournalMode,
+  quickConfirmOne,
   resetFailedToReceipt,
   resetAllFailedToReceipt,
 } from "@/lib/auto-journal";
@@ -58,6 +60,8 @@ export default function InboxPage() {
   const [, setAutoMode] = useState(false);
   const [journalizing, setJournalizing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // ⓓ クイック確定中の inbox.id を持っておく (カード単位の押下中表示)
+  const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
   // 件数バッジ用: state ごとの行数 (タブ表示の補助)
   const [counts, setCounts] = useState<Record<InboxState | "all", number>>({
     candidate: 0,
@@ -214,6 +218,21 @@ export default function InboxPage() {
     await refresh();
   };
 
+  // ⓓ クイック確定: 1 クリックで Claude OCR → receipt + journal 作成
+  const quickConfirm = async (inboxId: string) => {
+    if (quickConfirming) return;
+    setQuickConfirming(inboxId);
+    try {
+      await quickConfirmOne(inboxId);
+      toast.success("仕訳化しました — 仕訳帳で確認できます");
+    } catch (e) {
+      toast.error(`仕訳化に失敗: ${(e as Error).message}`);
+    } finally {
+      setQuickConfirming(null);
+      await refresh();
+    }
+  };
+
   const isAuthorized = auth === "authorized" || auth === "limited";
 
   return (
@@ -345,11 +364,13 @@ export default function InboxPage() {
             <InboxCard
               key={it.id}
               row={it}
+              quickConfirming={quickConfirming === it.id}
               onMarkReceipt={() => markReceipt(it.id)}
               onMarkNotReceipt={() => markNotReceipt(it.id)}
               onDismiss={() => dismiss(it.id)}
               onRestore={() => restoreToCandidate(it.id)}
               onRetryFailed={() => retryFailed(it.id)}
+              onQuickConfirm={() => quickConfirm(it.id)}
               onOpenForReceipt={() => {
                 // 既存の領収書登録フローに乗せる
                 // file_path をクエリで渡し、receipts/new で fetch して使う設計は Phase 4 で
@@ -365,19 +386,23 @@ export default function InboxPage() {
 
 function InboxCard({
   row,
+  quickConfirming,
   onMarkReceipt,
   onMarkNotReceipt,
   onDismiss,
   onRestore,
   onRetryFailed,
+  onQuickConfirm,
   onOpenForReceipt,
 }: {
   row: InboxRow;
+  quickConfirming: boolean;
   onMarkReceipt: () => void;
   onMarkNotReceipt: () => void;
   onDismiss: () => void;
   onRestore: () => void;
   onRetryFailed: () => void;
+  onQuickConfirm: () => void;
   onOpenForReceipt: () => void;
 }) {
   // 画像表示は plugin-fs で生バイトを読んで Blob URL 化する。
@@ -439,9 +464,8 @@ function InboxCard({
             <summary className="line-clamp-2 cursor-pointer hover:text-foreground">
               {row.ocr_text.slice(0, 60)}
             </summary>
-            <pre className="mt-1 p-2 bg-muted rounded whitespace-pre-wrap text-[10px] max-h-32 overflow-y-auto">
-              {row.ocr_text}
-            </pre>
+            {/* ⓔ rich preview: 行単位で色分け (金額・合計・日付・時刻・インボイス番号・店名) */}
+            <RichOcrPreview text={row.ocr_text} />
           </details>
         ) : (
           <div className="text-[11px] text-muted-foreground italic">
@@ -483,9 +507,23 @@ function InboxCard({
             </>
           )}
           {row.state === "receipt" && (
-            <Button size="sm" onClick={onOpenForReceipt} className="text-xs px-2 h-7 w-full">
+            <Button size="sm" onClick={onOpenForReceipt} className="text-xs px-2 h-7 flex-1">
               <ArrowRight className="h-3 w-3 mr-1" />
               登録に進む
+            </Button>
+          )}
+          {/* ⓓ クイック確定: candidate / receipt から 1 クリックで Claude OCR + 仕訳作成 */}
+          {(row.state === "candidate" || row.state === "receipt") && (
+            <Button
+              size="sm"
+              variant={row.state === "receipt" ? "outline" : "secondary"}
+              onClick={onQuickConfirm}
+              disabled={quickConfirming}
+              className="text-xs px-2 h-7"
+              title="このまま 1 クリックで AI OCR → 領収書 → 仕訳まで作成 (要ライセンスキー)"
+            >
+              <Sparkles className={`h-3 w-3 mr-1 ${quickConfirming ? "animate-pulse" : ""}`} />
+              {quickConfirming ? "仕訳化中..." : "いますぐ仕訳化"}
             </Button>
           )}
           {row.state === "receipt_failed" && (
@@ -517,5 +555,33 @@ function InboxCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * OCR テキストを行種別ごとに色分け表示する小コンポーネント (Round 3 ⓔ)。
+ * 金額/合計/日付/時刻/インボイス番号/店名 候補をそれぞれ違う色で出すことで、
+ * "AI OCR を回す前から、Vision OCR がここまで読めてる" のがひと目で分かる。
+ */
+function RichOcrPreview({ text }: { text: string }) {
+  const lines = classifyReceiptLines(text);
+  // tailwind に動的クラスを使うとパージで消えるので静的マッピング
+  const kindClass: Record<LineKind, string> = {
+    amount: "text-emerald-700 font-semibold",
+    total: "text-emerald-900 font-bold bg-emerald-50",
+    date: "text-blue-700",
+    time: "text-blue-500",
+    invoice: "text-purple-700 font-mono",
+    vendor: "text-amber-800 font-medium",
+    other: "text-muted-foreground",
+  };
+  return (
+    <pre className="mt-1 p-2 bg-muted rounded text-[10px] max-h-32 overflow-y-auto whitespace-pre-wrap font-mono leading-snug">
+      {lines.map((l, i) => (
+        <div key={i} className={kindClass[l.kind]} title={`種別: ${l.kind}`}>
+          {l.line || " "}
+        </div>
+      ))}
+    </pre>
   );
 }
