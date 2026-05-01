@@ -38,8 +38,11 @@ extern "C" {}
 #[link(name = "CoreImage", kind = "framework")]
 extern "C" {}
 
-/// 認識精度: 0=fast, 1=accurate. 領収書は accurate にする。
-const VN_TEXT_RECOGNITION_LEVEL_ACCURATE: i64 = 1;
+/// 認識精度: VNRequestTextRecognitionLevel
+/// 0 = Accurate (デフォルト, 高精度・遅い)
+/// 1 = Fast (低精度・速い、領収書には使えない)
+/// 領収書は Accurate を使う。
+const VN_TEXT_RECOGNITION_LEVEL_ACCURATE: i64 = 0;
 
 /// 1 ページの認識結果。lines は左→右、上→下の順。
 #[derive(serde::Serialize, Debug, Clone, Default)]

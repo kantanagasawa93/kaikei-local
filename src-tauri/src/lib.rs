@@ -66,6 +66,38 @@ async fn photos_request_authorization() -> String {
     }
 }
 
+/// 画像ファイルを生バイトで読み出す。tauri-plugin-fs のスコープ/権限に依存せず、
+/// Rust 側 (フルディスクアクセス) で std::fs::read する。
+///
+/// 用途: フロントから `src/lib/localDb.ts:resolveLocalImageUrl` で呼び、
+/// 戻り値を Blob → ObjectURL に変換して <img> に渡す。
+///
+/// セキュリティ: app_data_dir / ホームディレクトリ配下のみ許可。それ以外は弾く。
+#[tauri::command]
+async fn read_image_file(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<u8>, String> {
+    use std::path::PathBuf;
+    let p = PathBuf::from(&path);
+    let canonical = p.canonicalize().map_err(|e| format!("canonicalize: {}", e))?;
+
+    // 許可するディレクトリを決定
+    let app_data = app.path().app_data_dir().ok();
+    let home = dirs::home_dir();
+
+    let allowed = [app_data.as_ref(), home.as_ref()]
+        .iter()
+        .filter_map(|x| *x)
+        .any(|root| canonical.starts_with(root));
+
+    if !allowed {
+        return Err(format!("path not allowed: {}", canonical.display()));
+    }
+
+    std::fs::read(&canonical).map_err(|e| format!("read: {}", e))
+}
+
 /// Vision.framework で画像のテキストを認識して返す。完全ローカル、ネット送信なし。
 /// 結果: { lines: string[], joined: string, language: "ja"|"en" }
 #[tauri::command]
@@ -263,6 +295,37 @@ pub fn run() {
             println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
             std::process::exit(0);
         }
+        // --test-ocr=<path> : 任意のファイルを Vision OCR にかけて結果を出す
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--test-ocr=")) {
+            let path = arg.strip_prefix("--test-ocr=").unwrap_or("");
+            match vision::recognize_text(path) {
+                Ok(r) => {
+                    println!("---OCR OK---");
+                    println!("language: {}", r.language);
+                    println!("lines: {}", r.lines.len());
+                    println!("joined:\n{}", r.joined);
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("OCR failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        // --test-doc=<path> : 文書検出だけ走らせる
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--test-doc=")) {
+            let path = arg.strip_prefix("--test-doc=").unwrap_or("");
+            match vision::has_document(path) {
+                Ok(b) => {
+                    println!("has_document: {}", b);
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("has_document failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     let sql_migrations: Vec<Migration> = vec![
@@ -444,6 +507,7 @@ pub fn run() {
             photos_request_authorization,
             photos_scan_recent,
             vision_recognize_text,
+            read_image_file,
             launchd_status,
             launchd_install,
             launchd_uninstall,

@@ -23,7 +23,9 @@ import {
   Check,
   X as XIcon,
   ArrowRight,
+  Trash2,
 } from "lucide-react";
+import { db } from "@/lib/localDb";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,6 +60,30 @@ export default function InboxPage() {
   useEffect(() => {
     void refresh();
   }, [filter]);
+
+  const handleDismissAllCandidates = async () => {
+    const candidates = await listInbox("candidate");
+    const count = candidates.length;
+    if (count === 0) {
+      toast.info("未判定の写真がありません");
+      return;
+    }
+    const ok = window.confirm(
+      `未判定 ${count} 件をまとめて「破棄」状態にします。\n\n` +
+        `※ 画像ファイル自体は残ります (受信箱内の状態が変わるだけ)。\n` +
+        `※ 後で「破棄」タブから個別に「領収書」へ戻すこともできます。\n\n` +
+        `続行しますか?`
+    );
+    if (!ok) return;
+    try {
+      // 1 回の UPDATE で全 candidate を dismissed へ
+      await db.from("photo_inbox").update({ state: "dismissed" }).eq("state", "candidate");
+      toast.success(`${count} 件を破棄しました`);
+      await refresh();
+    } catch (e) {
+      toast.error(`破棄に失敗: ${(e as Error).message}`);
+    }
+  };
 
   const handleJournalizeAll = async () => {
     if (journalizing) return;
@@ -162,6 +188,14 @@ export default function InboxPage() {
           <Button onClick={handleScan} disabled={scanning || !isAuthorized}>
             <RefreshCw className={`h-4 w-4 mr-1 ${scanning ? "animate-spin" : ""}`} />
             {scanning ? "スキャン中..." : "今すぐスキャン"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleDismissAllCandidates}
+            title="state=未判定 の写真をすべて破棄状態にする"
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            未判定をまとめて破棄
           </Button>
           <Button
             variant="default"
@@ -272,18 +306,32 @@ function InboxCard({
   onDismiss: () => void;
   onOpenForReceipt: () => void;
 }) {
-  // file:// URL は Tauri webview から asset プロトコル経由で参照する
+  // 画像表示は plugin-fs で生バイトを読んで Blob URL 化する。
+  // asset:// 経由だとパスのスペース展開や HEIC の MIME 判定で
+  // 詰まるケースが多いので、file 直読み + MIME 検出で確実にする。
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     if (!row.file_path) return;
+    let cancelled = false;
+    let createdUrl: string | null = null;
     void (async () => {
       try {
-        const { convertFileSrc } = await import("@tauri-apps/api/core");
-        setSrc(convertFileSrc(row.file_path!));
+        const { resolveLocalImageUrl } = await import("@/lib/localDb");
+        const url = await resolveLocalImageUrl(row.file_path);
+        if (cancelled) {
+          if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+          return;
+        }
+        createdUrl = url;
+        setSrc(url);
       } catch {
-        // fallback: そのまま表示できないが UI は崩さない
+        // 失敗してもグリッド全体を壊さないよう静かに ?
       }
     })();
+    return () => {
+      cancelled = true;
+      if (createdUrl && createdUrl.startsWith("blob:")) URL.revokeObjectURL(createdUrl);
+    };
   }, [row.file_path]);
 
   return (
@@ -312,9 +360,18 @@ function InboxCard({
         <div className="text-xs text-muted-foreground">
           {row.taken_at ? new Date(row.taken_at).toLocaleString("ja-JP") : "-"}
         </div>
-        {row.ocr_text && (
-          <div className="text-[11px] text-muted-foreground line-clamp-2 leading-tight">
-            {row.ocr_text.slice(0, 80)}
+        {row.ocr_text ? (
+          <details className="text-[11px] text-muted-foreground leading-tight">
+            <summary className="line-clamp-2 cursor-pointer hover:text-foreground">
+              {row.ocr_text.slice(0, 60)}
+            </summary>
+            <pre className="mt-1 p-2 bg-muted rounded whitespace-pre-wrap text-[10px] max-h-32 overflow-y-auto">
+              {row.ocr_text}
+            </pre>
+          </details>
+        ) : (
+          <div className="text-[11px] text-muted-foreground italic">
+            (OCR テキストなし)
           </div>
         )}
         <div className="flex flex-wrap gap-1 mt-auto pt-2">

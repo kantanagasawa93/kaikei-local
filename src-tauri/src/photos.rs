@@ -27,11 +27,20 @@ use std::time::Duration;
 
 use cocoa::base::{id, nil, BOOL, YES};
 use cocoa::foundation::NSString;
+use std::os::raw::c_void;
 use objc::runtime::Class;
 use objc::{class, msg_send, sel, sel_impl};
 
 #[link(name = "Photos", kind = "framework")]
 extern "C" {}
+
+#[link(name = "CoreImage", kind = "framework")]
+extern "C" {}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGColorSpaceCreateDeviceRGB() -> id;
+}
 
 // ────────────────────────────────────────────────────────────
 // PhotoKit 定数 (Apple ヘッダから引用)
@@ -268,6 +277,10 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                 }
             };
 
+            // iPhone の純正カメラは HEIC で保存するので、ここで JPEG に正規化する。
+            // (ファイル名は .jpg のままにしておく)
+            let bytes = ensure_jpeg(bytes);
+
             if let Err(e) = std::fs::write(&file_path, &bytes) {
                 log::warn!("save photo failed: {}", e);
                 continue;
@@ -358,6 +371,86 @@ unsafe fn request_image_data(manager: id, asset: id, options: id) -> Result<Vec<
 
 unsafe fn nsstring(s: &str) -> id {
     NSString::alloc(nil).init_str(s)
+}
+
+/// HEIC / HEIF / その他 ImageIO が読める形式を JPEG にエンコードし直す。
+/// 既に JPEG / PNG / GIF / WebP の場合はそのまま返す (再エンコード回避)。
+/// 変換に失敗した場合も入力をそのまま返す (= ファイル名は .jpg だが
+/// 中身が HEIC のまま、ということが起こり得る → resolveLocalImageUrl 側で
+/// MIME 判定して Blob URL 化されるので OS レベルでは表示される)。
+fn ensure_jpeg(bytes: Vec<u8>) -> Vec<u8> {
+    // すでに JPEG (FF D8) なら何もしない
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+        return bytes;
+    }
+    // PNG / WebP / GIF はそのまま (Web も読める)
+    if bytes.len() >= 8 {
+        let head = &bytes[0..8];
+        if head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4e && head[3] == 0x47 {
+            return bytes;
+        }
+        if head[0] == 0x47 && head[1] == 0x49 && head[2] == 0x46 {
+            return bytes;
+        }
+        // RIFF????WEBP
+        if bytes.len() >= 12
+            && head[0] == 0x52
+            && head[1] == 0x49
+            && head[2] == 0x46
+            && head[3] == 0x46
+            && bytes[8] == 0x57
+        {
+            return bytes;
+        }
+    }
+
+    // ここまで来たら HEIC / HEIF / その他 → CIImage 経由で JPEG 化
+    match unsafe { convert_to_jpeg(&bytes) } {
+        Some(jpeg) => jpeg,
+        None => bytes,
+    }
+}
+
+/// HEIC バイト列を CIContext.JPEGRepresentationOfImage で JPEG に変換。
+unsafe fn convert_to_jpeg(input: &[u8]) -> Option<Vec<u8>> {
+    let nsdata: id = msg_send![class!(NSData),
+        dataWithBytes: input.as_ptr() as *const c_void
+        length: input.len() as u64];
+    if nsdata == nil {
+        return None;
+    }
+    let ci_image: id = msg_send![class!(CIImage), imageWithData: nsdata];
+    if ci_image == nil {
+        return None;
+    }
+
+    let ctx: id = msg_send![class!(CIContext), context];
+    if ctx == nil {
+        return None;
+    }
+
+    // colorSpace: 画像由来 → 取れなければ DeviceRGB に fallback
+    let cs_from_image: id = msg_send![ci_image, colorSpace];
+    let cs: id = if cs_from_image == nil {
+        CGColorSpaceCreateDeviceRGB()
+    } else {
+        cs_from_image
+    };
+
+    let opts: id = msg_send![class!(NSDictionary), dictionary];
+    let jpeg: id = msg_send![ctx,
+        JPEGRepresentationOfImage: ci_image
+        colorSpace: cs
+        options: opts];
+    if jpeg == nil {
+        return None;
+    }
+    let len: u64 = msg_send![jpeg, length];
+    let ptr: *const u8 = msg_send![jpeg, bytes];
+    if ptr.is_null() || len == 0 {
+        return None;
+    }
+    Some(std::slice::from_raw_parts(ptr, len as usize).to_vec())
 }
 
 unsafe fn nsstring_to_rust(ns: id) -> String {

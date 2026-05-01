@@ -100,12 +100,35 @@ fn time_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"\d{1,2}:\d{2}|\d{1,2}時\d{1,2}分").unwrap())
 }
 
+/// 「これが書かれていたら確実に領収書」と言い切れるキーワード。
+/// 1 つでもヒットしたら他のスコアを無視して即 receipt 判定する fast-path。
+const FORCE_RECEIPT_KEYWORDS: &[&str] = &[
+    "領収書",
+    "レシート",
+    "領収証",
+    "受領書",
+    "Receipt",
+    "RECEIPT",
+    "receipt",
+];
+
 pub fn classify(text: &str) -> ClassifyResult {
     if text.trim().is_empty() {
+        // 自動破棄せず candidate に残す
         return ClassifyResult {
             score: 0.0,
-            state: ClassifyState::NotReceipt,
+            state: ClassifyState::Candidate,
         };
+    }
+
+    // Fast-path: 直接キーワードがあれば確定
+    for kw in FORCE_RECEIPT_KEYWORDS {
+        if text.contains(kw) {
+            return ClassifyResult {
+                score: 1.0,
+                state: ClassifyState::Receipt,
+            };
+        }
     }
 
     let lower = text.to_lowercase();
@@ -152,12 +175,12 @@ pub fn classify(text: &str) -> ClassifyResult {
     }
 
     let score = score.clamp(0.0, 1.0);
-    let state = if score >= 0.6 {
+    // 自動で NotReceipt にはしない。確信を持てない物は Candidate のまま
+    // 受信箱に並ばせて、人間が「違う」を押した時だけ NotReceipt に入る。
+    let state = if score >= 0.4 {
         ClassifyState::Receipt
-    } else if score >= 0.3 {
-        ClassifyState::Candidate
     } else {
-        ClassifyState::NotReceipt
+        ClassifyState::Candidate
     };
     ClassifyResult { score, state }
 }

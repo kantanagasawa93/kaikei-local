@@ -464,7 +464,6 @@ const authApi = {
 
 import { writeFile, BaseDirectory, mkdir } from "@tauri-apps/plugin-fs";
 import { appDataDir } from "@tauri-apps/api/path";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 type StorageBucket = {
   upload: (
@@ -519,19 +518,83 @@ const storageApi = {
   },
 };
 
-// Tauri環境で local:// を実ファイルパスに変換するヘルパー
+// Tauri環境で local:// / file:// / 絶対パスのいずれも blob URL に変換するヘルパー。
+//
+// 旧実装は convertFileSrc + asset:// プロトコル経由だったが:
+//   - $APPDATA スコープのパス展開がうまく解決されないケース
+//   - パス内のスペース (例: "Application Support") が崩れるケース
+//   - HEIC/HEIF を asset:// で配信した時に WebView が正しい MIME で
+//     受け取れない問題
+// これらをまとめて回避するため、tauri-plugin-fs で生バイトを読み出して
+// MIME を magic byte で確定し、Blob URL として返すように変更。
+//
+// Blob URL は次回呼び出し時に古い分が GC されるが、長時間表示する場合は
+// useEffect の cleanup で URL.revokeObjectURL すると安全。
 export async function resolveLocalImageUrl(url: string | null): Promise<string | null> {
   if (!url) return null;
-  if (!url.startsWith("local://")) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+
   try {
-    const relative = url.replace(/^local:\/\//, "");
-    const dir = await appDataDir();
-    const full = `${dir}${relative}`;
-    return convertFileSrc(full);
+    // 絶対パス文字列に正規化
+    let absPath: string;
+    if (url.startsWith("local://")) {
+      const relative = url.replace(/^local:\/\//, "");
+      const dir = (await appDataDir()).replace(/\/$/, "");
+      absPath = `${dir}/${relative}`;
+    } else if (url.startsWith("file://")) {
+      absPath = decodeURIComponent(url.replace(/^file:\/\//, ""));
+    } else if (url.startsWith("/")) {
+      absPath = url;
+    } else {
+      const dir = (await appDataDir()).replace(/\/$/, "");
+      absPath = `${dir}/${url}`;
+    }
+
+    // Rust の read_image_file コマンドで直接読み出す (fs:scope/permission 不要)
+    const { invoke } = await import("@tauri-apps/api/core");
+    const bytes = (await invoke("read_image_file", { path: absPath })) as
+      | Uint8Array
+      | number[];
+    const u8 = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
+    const mime = detectImageMime(u8);
+    const blob = new Blob([u8 as BlobPart], { type: mime });
+    return URL.createObjectURL(blob);
   } catch (e) {
-    console.warn("resolveLocalImageUrl failed:", e);
+    console.error("resolveLocalImageUrl failed:", url, e);
     return null;
   }
+}
+
+function detectImageMime(bytes: Uint8Array): string {
+  if (bytes.length < 12) return "application/octet-stream";
+  // JPEG: FF D8
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+  // PNG: 89 50 4E 47
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47)
+    return "image/png";
+  // HEIC / HEIF: ISO BMFF "ftyp" at offset 4
+  const ftyp = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+  if (ftyp === "ftyp") {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]).toLowerCase();
+    if (
+      brand === "heic" ||
+      brand === "heix" ||
+      brand === "heim" ||
+      brand === "heis" ||
+      brand === "hevc" ||
+      brand === "hevx" ||
+      brand === "mif1" ||
+      brand === "msf1"
+    ) {
+      return "image/heic";
+    }
+  }
+  // WebP: RIFF????WEBP
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[8] === 0x57 && bytes[9] === 0x45)
+    return "image/webp";
+  // GIF: 47 49 46 38
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return "image/gif";
+  return "application/octet-stream";
 }
 
 // ------------------------------------------------------------
