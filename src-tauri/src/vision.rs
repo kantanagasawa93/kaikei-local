@@ -180,6 +180,89 @@ pub fn recognize_text<P: AsRef<Path>>(path: P) -> Result<VisionOcrResult, String
     }
 }
 
+/// 画像の中に「文書らしい長方形」が検出されるかを返す。
+///
+/// 実装は VNDetectDocumentSegmentationRequest (macOS 13+, 2022年)。これは
+/// Apple Photos.app の領収書/書類検出に使われているのと同じ on-device モデル。
+/// 紙片/レシート/書類/カードを高精度に検出する。
+///
+/// 戻り値: 何らかの document observation が返れば true。
+/// - macOS 12 以下や class 未登録なら Ok(true) を返してフィルタを無効化
+///   (キーワードベースの receipt-classifier に処理を委ねる安全策)
+/// - 入力エラーは Err
+pub fn has_document(file_path: &str) -> Result<bool, String> {
+    use objc::runtime::Class;
+
+    // macOS 13 未満では VNDetectDocumentSegmentationRequest が無いので
+    // フィルタを掛けず通す (= true)
+    let Some(req_class) = Class::get("VNDetectDocumentSegmentationRequest") else {
+        return Ok(true);
+    };
+
+    if !std::path::Path::new(file_path).exists() {
+        return Err(format!("file not found: {}", file_path));
+    }
+
+    unsafe {
+        let path_ns: id = NSString::alloc(nil).init_str(file_path);
+        let url: id = msg_send![class!(NSURL), fileURLWithPath: path_ns];
+        if url == nil {
+            return Err("invalid file URL".into());
+        }
+        let image: id = msg_send![class!(CIImage), imageWithContentsOfURL: url];
+        if image == nil {
+            return Err("CIImage load failed".into());
+        }
+
+        // VNImageRequestHandler を CIImage で初期化
+        let handler: id = {
+            let alloc: id = msg_send![class!(VNImageRequestHandler), alloc];
+            let opts: id = msg_send![class!(NSDictionary), dictionary];
+            msg_send![alloc, initWithCIImage: image options: opts]
+        };
+
+        // 結果受け取り用の同期化された箱
+        use block::ConcreteBlock;
+        let observed: std::sync::Arc<std::sync::Mutex<Option<bool>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let observed_clone = observed.clone();
+
+        let completion = ConcreteBlock::new(move |req: id, _err: id| {
+            let results: id = unsafe { msg_send![req, results] };
+            let count: u64 = if results == nil {
+                0
+            } else {
+                unsafe { msg_send![results, count] }
+            };
+            // 1 件でも長方形が検出されれば文書あり
+            *observed_clone.lock().unwrap() = Some(count > 0);
+        });
+        let completion = completion.copy();
+
+        let request: id = {
+            let alloc: id = msg_send![req_class, alloc];
+            msg_send![alloc, initWithCompletionHandler: &*completion]
+        };
+
+        let requests_array: [id; 1] = [request];
+        let requests: id = msg_send![class!(NSArray),
+            arrayWithObjects: requests_array.as_ptr()
+            count: 1u64];
+
+        let mut error_out: id = nil;
+        let _ok: BOOL = msg_send![handler,
+            performRequests: requests
+            error: &mut error_out];
+        if error_out != nil {
+            // 失敗時は安全側 (true: フィルタ通す) にする
+            return Ok(true);
+        }
+        // performRequests は同期実行なので、ここに来る時点で完了している
+        let v = observed.lock().unwrap().unwrap_or(true);
+        Ok(v)
+    }
+}
+
 /// 文字列から日本語/英語を雑判定 (UI 表示用)
 fn detect_language(s: &str) -> String {
     let mut has_kana_kanji = false;

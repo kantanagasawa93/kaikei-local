@@ -155,13 +155,28 @@ export default function PhotoScanSettingsPage() {
               許可した後も、増分スキャン (前回以降の写真のみ) で動作します。
             </li>
             <li>
-              写真の判定は <strong>すべて Mac 上 (Vision OCR)</strong>{" "}
-              で完結します。Claude OCR への送信は、ユーザが「この写真を仕訳に
-              するため詳細抽出する」を実行した時のみ行います。
+              判定は <strong>すべて Mac 上で完結</strong>。
+              スクリーンショット/パノラマ/HDR は事前に除外し、残った写真は{" "}
+              <code className="bg-white px-1 rounded text-[11px]">VNDetectDocumentSegmentationRequest</code>{" "}
+              (Apple Photos.app と同じ on-device 文書検出モデル) で
+              <strong>「文書/レシート形状の写真」だけ</strong>を抽出します。
+            </li>
+            <li>
+              文書検出を通過した写真のみ Vision OCR + キーワード分析で「領収書らしさ」を
+              スコアリング。受信箱に並ぶ写真は実質的に Photos.app で「領収書」検索した
+              結果に近いものになります。
+            </li>
+            <li>
+              Claude OCR への送信は、ユーザが「この写真を仕訳化する」を実行した時のみ。
+              送信履歴はいつでも{" "}
+              <Link href="/settings/ai-ocr-log" className="text-primary underline">
+                送信履歴ページ
+              </Link>{" "}
+              で確認可能。
             </li>
             <li>
               いつでも 設定 → 写真自動取込 から無効化でき、その後はスキャンが
-              止まります。蓄積した写真受信箱データはローカル DB にのみ残ります。
+              止まります。蓄積した受信箱データはローカル DB にのみ残ります。
             </li>
           </ul>
         </CardContent>

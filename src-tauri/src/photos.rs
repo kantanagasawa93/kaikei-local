@@ -50,6 +50,21 @@ const PH_ACCESS_LEVEL_READ: i64 = 1;
 /// PHAssetMediaType: 1 = image
 const PH_MEDIA_TYPE_IMAGE: i64 = 1;
 
+/// PHAssetMediaSubtype フラグ (ビット OR 値)
+/// 領収書はこれらの subtype では撮らないので、事前除外して効率化する。
+const PH_SUBTYPE_PHOTO_PANORAMA: u64 = 1 << 0;
+const PH_SUBTYPE_PHOTO_HDR: u64 = 1 << 1;
+const PH_SUBTYPE_PHOTO_SCREENSHOT: u64 = 1 << 2;
+#[allow(dead_code)]
+const PH_SUBTYPE_PHOTO_LIVE: u64 = 1 << 3;
+const PH_SUBTYPE_PHOTO_DEPTH_EFFECT: u64 = 1 << 4;
+/// 「領収書ではあり得ない」subtype のビット和
+const PH_SUBTYPE_NON_RECEIPT_MASK: u64 =
+    PH_SUBTYPE_PHOTO_SCREENSHOT
+        | PH_SUBTYPE_PHOTO_PANORAMA
+        | PH_SUBTYPE_PHOTO_HDR
+        | PH_SUBTYPE_PHOTO_DEPTH_EFFECT;
+
 /// PHImageRequestOptionsDeliveryMode: 1 = HighQualityFormat
 const PH_DELIVERY_MODE_HIGH_QUALITY: i64 = 1;
 
@@ -206,6 +221,14 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                 continue;
             }
 
+            // ── Stage 1: メタデータだけで除外できるものを早期 skip ──
+            // スクリーンショット / パノラマ / HDR / Depth Effect 等は
+            // ほぼ確実に領収書ではない。subtype フラグで弾く。
+            let subtypes: u64 = msg_send![asset, mediaSubtypes];
+            if (subtypes & PH_SUBTYPE_NON_RECEIPT_MASK) != 0 {
+                continue;
+            }
+
             let local_id_ns: id = msg_send![asset, localIdentifier];
             let asset_id = nsstring_to_rust(local_id_ns);
             if asset_id.is_empty() {
@@ -249,6 +272,25 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                 log::warn!("save photo failed: {}", e);
                 continue;
             }
+
+            // ── Stage 2: VNDetectDocumentSegmentationRequest で文書検出 ──
+            // Apple Photos.app の検索で「領収書」が正確に取れるのと同じ
+            // on-device モデル。文書らしい矩形が無ければ即削除して skip する。
+            // (= 受信箱に並ばない、= ユーザーが目にしない)
+            let path_str = file_path.to_string_lossy().to_string();
+            match crate::vision::has_document(&path_str) {
+                Ok(false) => {
+                    // 領収書らしくない: 一時保存したファイルを削除して skip
+                    let _ = std::fs::remove_file(&file_path);
+                    continue;
+                }
+                Ok(true) => { /* 領収書候補 — そのまま保持 */ }
+                Err(e) => {
+                    // 文書検出が失敗 (= macOS が古い等) の時は安全側で残す
+                    log::warn!("document detect failed for {}: {} (keeping anyway)", asset_id, e);
+                }
+            }
+
             out.push(ScannedPhoto {
                 asset_id,
                 taken_at: taken_at as i64,
