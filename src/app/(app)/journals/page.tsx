@@ -14,11 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, BookOpen, Trash2, Pencil } from "lucide-react";
+import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import type { Journal, JournalLine } from "@/types";
 
 interface JournalWithLines extends Journal {
   journal_lines: JournalLine[];
+  // receipt_id は Journal 側で string | null と宣言されている前提。
+  // 受信箱(写真自動取込) → 自動仕訳の経路で作られた仕訳にバッジを出す。
 }
 
 const PAGE_SIZE = 50;
@@ -127,7 +130,26 @@ export default function JournalsPage() {
                             rowSpan={journal.journal_lines.length}
                             className="align-top"
                           >
-                            {journal.description}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span>{journal.description}</span>
+                              {journal.receipt_id && (
+                                // 受信箱由来の自動仕訳である目印。
+                                // Phase 4 (auto-journal) で receipts.id が必ず紐付く。
+                                <Link
+                                  href={`/receipts`}
+                                  className="inline-flex"
+                                  title="写真受信箱から自動仕訳された行 — 領収書一覧で原本を確認できます"
+                                >
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-[10px] gap-1 cursor-pointer hover:bg-secondary/80"
+                                  >
+                                    <ImageIcon className="h-3 w-3" />
+                                    受信箱
+                                  </Badge>
+                                </Link>
+                              )}
+                            </div>
                           </TableCell>
                         </>
                       ) : null}

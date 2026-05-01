@@ -49,42 +49,70 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 - `next build` は `next.config.ts` に `output: "export"` がある前提で `out/` を吐く
 - アセット URL は asset:// (convertFileSrc) ではなく **`read_image_file` Tauri command + Blob URL** 経由 (パススコープ問題回避)
 
-## 次ラウンド (Round 2) 候補 — ユーザは「全部やって」希望
+## 自律検証 (Round 2 で導入、毎ラウンド使用)
+
+ユーザに「アプリ立ち上げて」を頼まずに、Claude 単独で E2E 検証できる:
+
+```bash
+scripts/verify-app.sh ui-screenshot  # 起動中の窓をPNGで保存
+scripts/verify-app.sh simulate-scan  # ヘッドレススキャン JSON 出力
+scripts/verify-app.sh db-dump photo_inbox   # DB を JSON 配列で
+scripts/verify-app.sh tail-log 50    # ~/Library/Logs/.../scan.log 末尾
+scripts/verify-app.sh smoke          # 上記を順に
+```
+
+CLI 直叩き: `/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei --verify-help`
+
+## 次ラウンド (Round 3) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ① → ⑤ → ② → ④ → ③。
+推し優先順は ⓐ → ⓓ → ⓑ → ⓔ → ⓒ。
 
-### ① 自律検証ハーネス (Mac アプリ実機テストの自動化) ★★★★★
-- 目的: 毎回ユーザに「アプリ立ち上げて」と頼まずに E2E 検証を Claude 側で完結
-- 対象: `scripts/verify-app.sh` (新規) + `src-tauri/src/lib.rs` の CLI 拡張
+### ⓐ Migration recovery (致命バグ修正) ★★★★★
+- 目的: sqlx の checksum mismatch (`migration 1 was previously applied but
+  has been modified`) で v4+ が end user 環境で適用されない問題を修正
+- 対象: `src/lib/localDb.ts` (Database.load を catch + 自動復旧)
 - やること:
-  - `--ui-screenshot=<window>` で起動中アプリのスクショ取得 (`screencapture -l`)
-  - `--simulate-scan` で実 PhotoKit を叩いてスキャン → 結果 JSON
-  - `--db-dump=<table>` で photo_inbox / photo_scan_log を JSON 吐き
-  - osascript レシピを `scripts/verify/` に集約
-- commit サイズ: 中 (~250 行)
-
-### ② Universal Binary リリース動線 ★★★
-- 目的: Intel Mac 対応を実リリースに反映
-- 対象: scripts/release.sh (前ラウンド改修済) + docs/index.html + docs/install.html
-- やること: v0.3.0 タグで signed + arm64/x64 両 DMG → GitHub Release / LP 表記
-- commit サイズ: 小〜中 (~150 行)
-
-### ③ candidate を 1 クリックで領収書化する逆操作 ★★
-- 対象: src/app/(app)/inbox/page.tsx
-- 「破棄を candidate に戻す」 / Tinder 風スワイプ / 件数バッジ ("未判定 6 / 領収書 4")
-- commit サイズ: 小 (~100 行)
-
-### ④ スマート増分スキャン (iCloud 帯域削減) ★★★
-- 対象: src-tauri/src/photos.rs (PHImageManager FFI 拡張)
-- サムネで先に文書判定 → 通った物だけフルサイズ DL → JPEG 化 → 保存
-- 1000 枚規模で帯域 1/20
+  - Database.load 失敗時に "previously applied" エラーを検出
+  - DB ファイルを `kaikei.db.bak-<ts>` にバックアップ
+  - `DELETE FROM _sqlx_migrations` → 再 load (idempotent な SCHEMA_SQL に依存)
+  - 復旧成功時は info toast、失敗時はバックアップ手順を案内
+- 注: Round 2 では開発機の `_sqlx_migrations` を手動クリアして v4 適用を確認済み。
+  本番ユーザにはまだ未到達 → 最優先で修正する
 - commit サイズ: 中 (~150 行)
 
-### ⑤ 自動仕訳の精度向上 + 確定時 UX ★★★★
-- 対象: src/lib/auto-journal.ts + journals/page.tsx + migration v4
-- 受信箱→仕訳の紐付けバッジ / 失敗時 receipt_failed state + 再試行 / Claude 結果完全保存
-- commit サイズ: 中 (~200 行)
+### ⓑ v0.3.0 リリース実行 (Round 2 成果物の配布) ★★★★
+- 目的: Round 2 で整備した Universal Binary 動線を実 Release に反映
+- 対象: `scripts/release.sh v0.3.0` を発火 (要 APPLE_* env)、changelog 追記
+- やること:
+  - APPLE_SIGNING_IDENTITY 等を確認 → `scripts/release.sh v0.3.0`
+  - arm64 + x64 両 DMG が GitHub Release に揃うこと、
+    `https://github.com/.../releases/latest/download/KAIKEI_LOCAL_x64.dmg` が 200 を返すこと
+- commit サイズ: 小 (~50 行)
+
+### ⓒ verify-app.sh の CI 化 ★★
+- 目的: Round 開始時の状態確認を自動化 (cargo check + tsc + next build + .app smoke)
+- 対象: `.github/workflows/verify-round.yml` (新規)
+- macOS runner で: `npm ci` → `cargo check` → `npx tauri build --bundles app --debug`
+  → 起動 → `--db-dump=photo_inbox` で sanity check
+- 課題: macOS runner は遅い (1 ジョブ 8〜10 分)。on demand (workflow_dispatch) スタートが現実的
+- commit サイズ: 中 (~100 行)
+
+### ⓓ 受信箱「クイック確定」モード ★★★★
+- 目的: candidate のカードで「確定」を押したらその場で auto-journal が背後で
+  走って journals まで作成する 1-click フロー
+- 対象: `src/app/(app)/inbox/page.tsx` + `src/lib/auto-journal.ts`
+- やること:
+  - 1 件単位の `quickConfirmOne(inboxId)` を auto-journal に追加
+  - candidate / receipt 両状態で「⚡ いますぐ仕訳化」ボタン (進行スピナー)
+  - 結果トーストに「仕訳 #journal_id を作成」リンク
+- commit サイズ: 中 (~120 行)
+
+### ⓔ Vision OCR 結果の rich preview ★★
+- 受信箱カードで OCR テキストを行単位ハイライト (金額・日付・店名候補を色分け)
+- 領収書として登録する前から「これくらい読めてる」が分かる
+- 対象: `src/app/(app)/inbox/page.tsx` + `src/lib/receipt-classifier.ts` (行スコア API 公開)
+- commit サイズ: 小〜中 (~100 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
@@ -96,4 +124,6 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 - **VNDetectDocumentSegmentationRequest は false positive 多い**: 「文書らしい矩形」は壁掛け絵・PC モニタ画面・ガジェットラベル等にも反応する。これだけで「領収書」判定するのは無理 → 必ず VNRecognizeText のキーワード判定と組み合わせる
 - **NSPredicate の variadic format**: `predicateWithFormat:`+可変長は Rust FFI 不可。`predicateWithFormat:argumentArray:` (NSArray) 経由必須
 - **DB migration が UI 起動なしで走らない**: tauri-plugin-sql は最初の `Database.load(...)` 呼出時にマイグレーション。CLI scanner が migration 当たってない DB を触ると table 不在エラー → CLI 側で `sqlite_master` チェックして graceful exit する設計に
+- **sqlx の checksum mismatch (Round 1〜2 で発覚)**: `_sqlx_migrations` に記録された hash と現在の SCHEMA_SQL の hash が違うと sqlx は「migration N was previously applied but has been modified」を投げて、それ以降のマイグレーションが一切走らない。Round 2 で v4 が適用されない事故が発生 → 開発機は手動で `DELETE FROM _sqlx_migrations` で復旧。本番では Round 3 ⓐ で自動復旧を実装予定。SCHEMA_SQL を「絶対に既存版数の中身を変えない」運用が原則 (新規版数を追加するのみ)
+- **SQLite で CHECK 制約を変えるにはテーブル再作成必要**: ALTER TABLE ... DROP CHECK は無いので、新テーブル作成 → INSERT SELECT → DROP → RENAME。Round 2 v4 で `state` enum 拡張時に採用
 

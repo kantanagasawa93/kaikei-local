@@ -248,6 +248,148 @@ fn run_auto_scan_and_exit() -> ! {
     std::process::exit(0);
 }
 
+/// 自律検証ハーネス用ヘルパ: ~/Library/Application Support/dev.kaikei.app
+#[cfg(target_os = "macos")]
+fn verify_app_data_dir() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    dirs::data_dir()
+        .map(|d| d.join("dev.kaikei.app"))
+        .unwrap_or_else(|| PathBuf::from("/tmp/dev.kaikei.app"))
+}
+
+/// `--simulate-scan` ヘッドレスでスキャンを実行し、結果を JSON で stdout に吐く。
+/// `--auto-scan` と挙動はほぼ同じだが、通知は出さず JSON だけ返すので
+/// シェル経由で結果を assert できる。
+#[cfg(target_os = "macos")]
+fn run_simulate_scan_and_exit() -> ! {
+    let app_data = verify_app_data_dir();
+    let result = scanner::run_once(&app_data);
+    let json = match &result {
+        Ok(s) => serde_json::json!({
+            "ok": true,
+            "scanned": s.scanned,
+            "new_photos": s.new_photos,
+            "receipts": s.receipts,
+            "errors": s.errors,
+        }),
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": e,
+        }),
+    };
+    println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+    std::process::exit(if result.is_ok() { 0 } else { 1 });
+}
+
+/// `--db-dump=<table>` 指定テーブルの全行を JSON 配列で stdout に吐く。
+/// 許可テーブル: photo_inbox / photo_scan_log / ai_ocr_log / app_settings /
+/// receipts / journals / journal_lines。
+#[cfg(target_os = "macos")]
+fn run_db_dump_and_exit(table: &str) -> ! {
+    const ALLOWED: &[&str] = &[
+        "photo_inbox",
+        "photo_scan_log",
+        "ai_ocr_log",
+        "app_settings",
+        "receipts",
+        "journals",
+        "journal_lines",
+    ];
+    if !ALLOWED.contains(&table) {
+        eprintln!(
+            "table not allowed: {} (許可テーブル: {})",
+            table,
+            ALLOWED.join(", ")
+        );
+        std::process::exit(2);
+    }
+    let app_data = verify_app_data_dir();
+    let db_path = app_data.join("kaikei.db");
+    if !db_path.exists() {
+        eprintln!("db not found: {}", db_path.display());
+        std::process::exit(2);
+    }
+
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("open db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    // テーブル存在チェック (migration が当たってないと crash する)
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+            rusqlite::params![table],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|_| true)
+        .unwrap_or(false);
+    if !exists {
+        eprintln!("table {} not yet created (open KAIKEI LOCAL.app once for migration)", table);
+        std::process::exit(2);
+    }
+
+    let sql = format!("SELECT * FROM {}", table);
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("prepare: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let cols: Vec<String> = stmt.column_names().iter().map(|s| (*s).to_string()).collect();
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut rows = stmt.query([]).expect("query");
+    while let Ok(Some(row)) = rows.next() {
+        let mut obj = serde_json::Map::new();
+        for (i, name) in cols.iter().enumerate() {
+            let v = match row.get_ref(i) {
+                Ok(rusqlite::types::ValueRef::Null) => serde_json::Value::Null,
+                Ok(rusqlite::types::ValueRef::Integer(n)) => serde_json::Value::from(n),
+                Ok(rusqlite::types::ValueRef::Real(f)) => serde_json::Value::from(f),
+                Ok(rusqlite::types::ValueRef::Text(t)) => {
+                    serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
+                }
+                Ok(rusqlite::types::ValueRef::Blob(b)) => {
+                    serde_json::Value::String(format!("<blob {} bytes>", b.len()))
+                }
+                Err(_) => serde_json::Value::Null,
+            };
+            obj.insert(name.clone(), v);
+        }
+        out.push(serde_json::Value::Object(obj));
+    }
+    println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+    std::process::exit(0);
+}
+
+/// `--tail-scan-log[=N]` ~/Library/Logs/KAIKEI LOCAL/scan.log の末尾 N 行を表示。
+#[cfg(target_os = "macos")]
+fn run_tail_scan_log_and_exit(n: usize) -> ! {
+    let path = dirs::home_dir()
+        .map(|h| h.join("Library/Logs/KAIKEI LOCAL/scan.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/kaikei-scan.log"));
+    if !path.exists() {
+        // log が無いのは「まだ scanner が一度も走っていない」だけ。終了 0 で空出力。
+        std::process::exit(0);
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("read log: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.len().saturating_sub(n);
+    for line in &lines[start..] {
+        println!("{}", line);
+    }
+    std::process::exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // CLI/LaunchAgent 経由で `--auto-scan` が来た場合は GUI を立ち上げず即スキャン
@@ -259,6 +401,45 @@ pub fn run() {
         {
             eprintln!("--auto-scan is only supported on macOS");
             std::process::exit(2);
+        }
+    }
+
+    // 自律検証ハーネス用 CLI (GUI 起動を伴わない、JSON 出力で assert 可能)
+    #[cfg(target_os = "macos")]
+    {
+        if args.iter().any(|a| a == "--simulate-scan") {
+            run_simulate_scan_and_exit();
+        }
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--db-dump=")) {
+            let table = arg.strip_prefix("--db-dump=").unwrap_or("");
+            run_db_dump_and_exit(table);
+        }
+        if let Some(arg) = args.iter().find(|a| a == &"--tail-scan-log" || a.starts_with("--tail-scan-log=")) {
+            let n: usize = arg
+                .strip_prefix("--tail-scan-log=")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50);
+            run_tail_scan_log_and_exit(n);
+        }
+        if args.iter().any(|a| a == "--verify-help") {
+            println!(
+                "{}",
+                concat!(
+                    "KAIKEI LOCAL — 自律検証 CLI\n\n",
+                    "  --auto-scan              ヘッドレススキャン (LaunchAgent 互換、通知付き)\n",
+                    "  --simulate-scan          ヘッドレススキャン (JSON 出力、検証用)\n",
+                    "  --db-dump=<table>        DB テーブルを JSON 配列で出力\n",
+                    "                           対象: photo_inbox / photo_scan_log / ai_ocr_log /\n",
+                    "                                 app_settings / receipts / journals / journal_lines\n",
+                    "  --tail-scan-log[=N]      ~/Library/Logs/KAIKEI LOCAL/scan.log の末尾 N 行 (既定 50)\n",
+                    "  --test-ocr=<path>        画像を Vision OCR にかけて結果を表示\n",
+                    "  --test-doc=<path>        画像に文書矩形が検出されるか表示\n",
+                    "  --launchd-status         LaunchAgent の状態を JSON 表示\n",
+                    "  --install-launchd=HH:MM  LaunchAgent を指定時刻でインストール\n",
+                    "  --uninstall-launchd      LaunchAgent をアンインストール\n",
+                ),
+            );
+            std::process::exit(0);
         }
     }
 
@@ -345,6 +526,12 @@ pub fn run() {
             version: 3,
             description: "photo_inbox_and_scan_log",
             sql: migrations::SCHEMA_V3_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "photo_inbox_claude_result_and_retry",
+            sql: migrations::SCHEMA_V4_SQL,
             kind: MigrationKind::Up,
         },
     ];

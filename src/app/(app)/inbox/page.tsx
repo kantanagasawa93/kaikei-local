@@ -24,11 +24,12 @@ import {
   X as XIcon,
   ArrowRight,
   Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { db } from "@/lib/localDb";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   scanNow,
   listInbox,
@@ -37,24 +38,54 @@ import {
   type AuthStatus,
   type InboxRow,
 } from "@/lib/photo-scanner";
-import { autoJournalizeAllReceipts, getAutoJournalMode } from "@/lib/auto-journal";
+import {
+  autoJournalizeAllReceipts,
+  getAutoJournalMode,
+  resetFailedToReceipt,
+  resetAllFailedToReceipt,
+} from "@/lib/auto-journal";
 import { Sparkles } from "lucide-react";
 import { toast } from "@/lib/toast";
+
+type InboxState = InboxRow["state"];
 
 export default function InboxPage() {
   const router = useRouter();
   const [items, setItems] = useState<InboxRow[]>([]);
   const [auth, setAuth] = useState<AuthStatus>("unknown");
   const [scanning, setScanning] = useState(false);
-  const [filter, setFilter] = useState<InboxRow["state"] | "all">("candidate");
-  const [autoMode, setAutoMode] = useState(false);
+  const [filter, setFilter] = useState<InboxState | "all">("candidate");
+  const [, setAutoMode] = useState(false);
   const [journalizing, setJournalizing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // 件数バッジ用: state ごとの行数 (タブ表示の補助)
+  const [counts, setCounts] = useState<Record<InboxState | "all", number>>({
+    candidate: 0,
+    receipt: 0,
+    imported: 0,
+    not_receipt: 0,
+    dismissed: 0,
+    receipt_failed: 0,
+    all: 0,
+  });
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
     setItems(await listInbox(filter === "all" ? undefined : filter));
     setAutoMode(await getAutoJournalMode());
+    // 件数バッジ: 状態ごとに件数を取得
+    const all = await listInbox();
+    const next: Record<InboxState | "all", number> = {
+      candidate: 0,
+      receipt: 0,
+      imported: 0,
+      not_receipt: 0,
+      dismissed: 0,
+      receipt_failed: 0,
+      all: all.length,
+    };
+    for (const r of all) next[r.state] = (next[r.state] ?? 0) + 1;
+    setCounts(next);
   };
 
   useEffect(() => {
@@ -163,6 +194,25 @@ export default function InboxPage() {
     await setInboxState(id, "dismissed");
     await refresh();
   };
+  // ③ 逆操作: 破棄 / 違う / 失敗 → 領収書 候補に戻す
+  const restoreToCandidate = async (id: string) => {
+    await setInboxState(id, "candidate");
+    await refresh();
+  };
+  const retryFailed = async (id: string) => {
+    await resetFailedToReceipt(id);
+    toast.success("再試行待ち (state=領収書) に戻しました");
+    await refresh();
+  };
+  const retryAllFailed = async () => {
+    const n = await resetAllFailedToReceipt();
+    if (n === 0) {
+      toast.info("失敗状態の写真がありません");
+    } else {
+      toast.success(`${n} 件を再試行待ちに戻しました。「領収書をすべて自動仕訳」で再実行してください`);
+    }
+    await refresh();
+  };
 
   const isAuthorized = auth === "authorized" || auth === "limited";
 
@@ -239,27 +289,45 @@ export default function InboxPage() {
         </Card>
       )}
 
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-2 flex-wrap items-center">
         {[
-          { key: "candidate", label: "未判定", color: "default" },
-          { key: "receipt", label: "領収書", color: "secondary" },
-          { key: "imported", label: "取り込み済", color: "secondary" },
-          { key: "not_receipt", label: "違う", color: "outline" },
-          { key: "dismissed", label: "破棄", color: "outline" },
-          { key: "all", label: "すべて", color: "outline" },
-        ].map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key as InboxRow["state"] | "all")}
-            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-              filter === f.key
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-background hover:bg-muted"
-            }`}
+          { key: "candidate", label: "未判定" },
+          { key: "receipt", label: "領収書" },
+          { key: "imported", label: "取り込み済" },
+          { key: "receipt_failed", label: "失敗" },
+          { key: "not_receipt", label: "違う" },
+          { key: "dismissed", label: "破棄" },
+          { key: "all", label: "すべて" },
+        ].map((f) => {
+          const k = f.key as InboxState | "all";
+          const c = counts[k] ?? 0;
+          return (
+            <button
+              key={f.key}
+              onClick={() => setFilter(k)}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                filter === f.key
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background hover:bg-muted"
+              }`}
+            >
+              {f.label}
+              <span className="ml-1.5 opacity-70 tabular-nums">{c}</span>
+            </button>
+          );
+        })}
+        {counts.receipt_failed > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={retryAllFailed}
+            className="ml-2 h-7 text-xs"
+            title="失敗 を全部 領収書 状態に戻して、再度自動仕訳できるようにする"
           >
-            {f.label}
-          </button>
-        ))}
+            <RotateCcw className="h-3.5 w-3.5 mr-1" />
+            失敗をまとめて再試行待ちに戻す
+          </Button>
+        )}
       </div>
 
       {items.length === 0 ? (
@@ -280,6 +348,8 @@ export default function InboxPage() {
               onMarkReceipt={() => markReceipt(it.id)}
               onMarkNotReceipt={() => markNotReceipt(it.id)}
               onDismiss={() => dismiss(it.id)}
+              onRestore={() => restoreToCandidate(it.id)}
+              onRetryFailed={() => retryFailed(it.id)}
               onOpenForReceipt={() => {
                 // 既存の領収書登録フローに乗せる
                 // file_path をクエリで渡し、receipts/new で fetch して使う設計は Phase 4 で
@@ -298,12 +368,16 @@ function InboxCard({
   onMarkReceipt,
   onMarkNotReceipt,
   onDismiss,
+  onRestore,
+  onRetryFailed,
   onOpenForReceipt,
 }: {
   row: InboxRow;
   onMarkReceipt: () => void;
   onMarkNotReceipt: () => void;
   onDismiss: () => void;
+  onRestore: () => void;
+  onRetryFailed: () => void;
   onOpenForReceipt: () => void;
 }) {
   // 画像表示は plugin-fs で生バイトを読んで Blob URL 化する。
@@ -374,6 +448,27 @@ function InboxCard({
             (OCR テキストなし)
           </div>
         )}
+        {row.state === "receipt_failed" && row.last_error && (
+          // 失敗理由は受信箱でその場で見せる (設定 → ログまで掘らせない)
+          <div className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded p-1.5 leading-tight">
+            <span className="font-medium">エラー:</span> {row.last_error}
+            {typeof row.attempts === "number" && row.attempts > 0 && (
+              <span className="ml-1 text-red-500/80">({row.attempts}回失敗)</span>
+            )}
+          </div>
+        )}
+        {row.state === "imported" && row.imported_receipt_id && (
+          // 取り込み済の場合: 関連する受領書 / 仕訳に飛べるリンクを軽く出す
+          <div className="text-[11px] text-emerald-700">
+            <Link
+              href={`/receipts`}
+              className="underline hover:text-emerald-900"
+              title="領収書一覧で確認"
+            >
+              → 領収書として登録済
+            </Link>
+          </div>
+        )}
         <div className="flex flex-wrap gap-1 mt-auto pt-2">
           {row.state === "candidate" && (
             <>
@@ -393,9 +488,30 @@ function InboxCard({
               登録に進む
             </Button>
           )}
+          {row.state === "receipt_failed" && (
+            <Button size="sm" variant="default" onClick={onRetryFailed} className="text-xs px-2 h-7">
+              <RotateCcw className="h-3 w-3 mr-1" />
+              再試行
+            </Button>
+          )}
           {(row.state === "not_receipt" || row.state === "candidate") && (
             <Button size="sm" variant="ghost" onClick={onDismiss} className="text-xs px-2 h-7">
               破棄
+            </Button>
+          )}
+          {/* ③ 逆操作: 違う / 破棄 / 失敗 から「未判定」に戻すボタン (ワンクリック) */}
+          {(row.state === "dismissed" ||
+            row.state === "not_receipt" ||
+            row.state === "receipt_failed") && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onRestore}
+              className="text-xs px-2 h-7 text-muted-foreground hover:text-foreground"
+              title="「未判定」に戻して、もう一度判定できるようにする"
+            >
+              <RotateCcw className="h-3 w-3 mr-1" />
+              未判定に戻す
             </Button>
           )}
         </div>
