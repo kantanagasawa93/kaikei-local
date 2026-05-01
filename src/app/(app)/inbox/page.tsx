@@ -61,6 +61,21 @@ export default function InboxPage() {
 
   const handleJournalizeAll = async () => {
     if (journalizing) return;
+
+    // 課金前確認: state='receipt' の件数を数えて、Claude API 課金が発生する旨を明示
+    const receiptItems = await listInbox("receipt");
+    const count = receiptItems.length;
+    if (count === 0) {
+      toast.info("領収書状態の写真がありません");
+      return;
+    }
+    const ok = window.confirm(
+      `${count} 枚の領収書を Claude OCR にかけて自動仕訳します。\n\n` +
+        `Claude API への画像送信が ${count} 回発生します (ライセンスキーの月次使用量を消費)。\n\n` +
+        `続行しますか?`
+    );
+    if (!ok) return;
+
     setJournalizing(true);
     setProgress({ done: 0, total: 0 });
     try {

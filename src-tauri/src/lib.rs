@@ -187,7 +187,7 @@ fn run_auto_scan_and_exit() -> ! {
         .map(|d| d.join("dev.kaikei.app"))
         .unwrap_or_else(|| PathBuf::from("/tmp/dev.kaikei.app"));
 
-    eprintln!("[auto-scan] start (app_data={})", app_data.display());
+    scanner::log_line(&format!("[auto-scan] start (app_data={})", app_data.display()));
 
     match scanner::run_once(&app_data) {
         Ok(s) => {
@@ -201,11 +201,11 @@ fn run_auto_scan_and_exit() -> ! {
             } else {
                 format!("新規 {} 枚を受信箱に追加しました", s.new_photos)
             };
-            eprintln!("[auto-scan] {}", body);
+            scanner::log_line(&format!("[auto-scan] {}", body));
             scanner::post_notification("KAIKEI LOCAL", &body);
         }
         Err(e) => {
-            eprintln!("[auto-scan] error: {}", e);
+            scanner::log_line(&format!("[auto-scan] error: {}", e));
             scanner::post_notification(
                 "KAIKEI LOCAL — スキャン失敗",
                 &format!("詳細はログを確認してください: {}", e),
@@ -227,6 +227,41 @@ pub fn run() {
         {
             eprintln!("--auto-scan is only supported on macOS");
             std::process::exit(2);
+        }
+    }
+
+    // ops / 検証用: LaunchAgent の install/uninstall を CLI から叩ける
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--install-launchd=")) {
+            let time = arg.strip_prefix("--install-launchd=").unwrap_or("21:00");
+            match launchd::install(time) {
+                Ok(cfg) => {
+                    println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("install failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        if args.iter().any(|a| a == "--uninstall-launchd") {
+            match launchd::uninstall() {
+                Ok(cfg) => {
+                    println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("uninstall failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        if args.iter().any(|a| a == "--launchd-status") {
+            let cfg = launchd::status();
+            println!("{}", serde_json::to_string_pretty(&cfg).unwrap_or_default());
+            std::process::exit(0);
         }
     }
 
