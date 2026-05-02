@@ -149,6 +149,37 @@ async fn db_repair_migration_checksum(
     }
 }
 
+/// 起動中のアプリが「ルート遷移すべきターゲット」を取りに行く。
+/// `--navigate=/route` CLI が書いた `~/Library/Application Support/dev.kaikei.app/.navigate-target`
+/// を読み、空文字を含めずに返したら呼出側 (Frontend NavigateBridge) で
+/// router.push する → 直後に navigate_clear で消す。
+#[tauri::command]
+async fn navigate_target_get(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {}", e))?;
+    let target = app_data.join(".navigate-target");
+    if !target.exists() {
+        return Ok(String::new());
+    }
+    match std::fs::read_to_string(&target) {
+        Ok(s) => Ok(s.trim().to_string()),
+        Err(_) => Ok(String::new()),
+    }
+}
+
+#[tauri::command]
+async fn navigate_target_clear(app: tauri::AppHandle) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {}", e))?;
+    let target = app_data.join(".navigate-target");
+    let _ = std::fs::remove_file(&target);
+    Ok(())
+}
+
 /// 画像ファイルを生バイトで読み出す。tauri-plugin-fs のスコープ/権限に依存せず、
 /// Rust 側 (フルディスクアクセス) で std::fs::read する。
 ///
@@ -504,6 +535,27 @@ pub fn run() {
                 .unwrap_or(50);
             run_tail_scan_log_and_exit(n);
         }
+        // --navigate=/route — 起動中のアプリに「次の polling でこのルートに遷移して」
+        // と control file 経由で指示。CLI なので別プロセスから webview に直接命令
+        // できないため、~/Library/Application Support/dev.kaikei.app/.navigate-target
+        // にルートを書いて、Frontend の NavigateBridge が 1 秒ごとに読む。
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--navigate=")) {
+            let route = arg.strip_prefix("--navigate=").unwrap_or("/");
+            let app_data = verify_app_data_dir();
+            let _ = std::fs::create_dir_all(&app_data);
+            let target = app_data.join(".navigate-target");
+            match std::fs::write(&target, route) {
+                Ok(_) => {
+                    println!("navigate target = {} (written to {})", route, target.display());
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("failed to write navigate target: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         if args.iter().any(|a| a == "--verify-help") {
             println!(
                 "{}",
@@ -515,6 +567,8 @@ pub fn run() {
                     "                           対象: photo_inbox / photo_scan_log / ai_ocr_log /\n",
                     "                                 app_settings / receipts / journals / journal_lines\n",
                     "  --tail-scan-log[=N]      ~/Library/Logs/KAIKEI LOCAL/scan.log の末尾 N 行 (既定 50)\n",
+                    "  --navigate=<route>       起動中のアプリに次のルートへ遷移するよう指示\n",
+                    "                           (例: --navigate=/inbox)\n",
                     "  --test-ocr=<path>        画像を Vision OCR にかけて結果を表示\n",
                     "  --test-doc=<path>        画像に文書矩形が検出されるか表示\n",
                     "  --launchd-status         LaunchAgent の状態を JSON 表示\n",
@@ -788,6 +842,8 @@ pub fn run() {
             launchd_install,
             launchd_uninstall,
             db_repair_migration_checksum,
+            navigate_target_get,
+            navigate_target_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

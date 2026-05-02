@@ -405,14 +405,43 @@ export async function autoJournalizeAllReceipts(
  *   3. autoJournalizeOne を呼ぶ
  *   4. 失敗したら呼び出し元 (UI) に throw、state は 'receipt_failed' に落として永続化
  *
+ * Round 6 ㊋ で追加: 直近の失敗バケットが license/consent で 2 件以上の時は
+ * BlockedByPattern エラーで先に止める。「設定を直してから来て」を促し、
+ * ユーザーがライセンス枠を浪費しないようにする。
+ *
  * UI 側の使い方:
  *   - 候補カードの「⚡ いますぐ仕訳化」ボタンから呼ぶ
  *   - 戻り値の receiptId / journalId をトーストで「仕訳 #xxx を作成しました」
  *     のリンクに使う
+ *   - BlockedByPattern が throw されたら「設定を見直してから再試行」モーダル
  *
  * @returns 作成された receipt_id (成功時)。失敗時は throw。
  */
+export class BlockedByPattern extends Error {
+  constructor(public readonly bucket: FailureBucket, public readonly hint: string) {
+    super(`仕訳化を止めました: ${hint}`);
+    this.name = "BlockedByPattern";
+  }
+}
+
 export async function quickConfirmOne(inboxId: string): Promise<string> {
+  // Round 6 ㊋ 事前 warn:
+  // 直近の失敗が license/consent で 2 件以上ある状態でクイック確定を押すと、
+  // ほぼ確実に同じ理由で落ちる + ライセンス上限を 1 件分浪費する。
+  // → 押下時点で止めて UI 側に対処を促してもらう。
+  try {
+    const stats = await getFailureStats();
+    if (
+      stats.top &&
+      stats.top.count >= 2 &&
+      (stats.top.bucket === "license" || stats.top.bucket === "consent")
+    ) {
+      throw new BlockedByPattern(stats.top.bucket, stats.top.hint);
+    }
+  } catch (e) {
+    if (e instanceof BlockedByPattern) throw e;
+    // getFailureStats 自体の失敗は致命でないので無視して進める
+  }
   // 受信箱行を取得 — file_path / ocr_text / attempts が要る
   const { data } = await db
     .from("photo_inbox")
@@ -463,44 +492,151 @@ export async function quickConfirmOne(inboxId: string): Promise<string> {
   }
 }
 
+// ────────────────────────────────────────────────────────────
+// Round 6 ㊍ 差し戻し Undo スタック
+//
+// reverseJournalToInbox の前に削除対象 (journal / journal_lines / receipt /
+// photo_inbox) のスナップショットを取り、app_settings に JSON で 5 件まで
+// 積んでおく。誤操作の事故を 1 クリックで取り戻せるようにする。
+// ────────────────────────────────────────────────────────────
+
+const UNDO_KEY = "reverse_undo_stack";
+const UNDO_MAX = 5;
+
+interface ReverseUndoSnapshot {
+  ts: string; // ISO
+  journal: Record<string, unknown>;
+  journalLines: Record<string, unknown>[];
+  receipt: Record<string, unknown> | null;
+  inboxId: string | null;
+  // 受信箱を candidate に戻す前の値 (undo で復元する時に使う)
+  inboxPrev:
+    | {
+        state: string;
+        imported_receipt_id: string | null;
+        imported_at: string | null;
+        last_error: string | null;
+        attempts: number | null;
+      }
+    | null;
+}
+
+async function getUndoStack(): Promise<ReverseUndoSnapshot[]> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", UNDO_KEY)
+      .single();
+    const raw = (data as { value?: string } | null)?.value;
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function setUndoStack(stack: ReverseUndoSnapshot[]): Promise<void> {
+  const value = JSON.stringify(stack);
+  const updated_at = new Date().toISOString();
+  const { data: existing } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", UNDO_KEY)
+    .single();
+  if (existing) {
+    await db.from("app_settings").update({ value, updated_at }).eq("id", UNDO_KEY);
+  } else {
+    await db.from("app_settings").insert({ id: UNDO_KEY, value, updated_at });
+  }
+}
+
+/** 現在の undo stack 件数を返す (UI で「取り消し」ボタンの有無判定) */
+export async function getReverseUndoCount(): Promise<number> {
+  return (await getUndoStack()).length;
+}
+
 /**
  * 仕訳を取り消して、紐付いていた受信箱行を「未判定」に戻す
- * (Round 4 ㊂ "差し戻し" フロー)。
+ * (Round 4 ㊂ "差し戻し" フロー、Round 6 ㊍ で undo スタック対応)。
  *
  * 流れ:
- *   1. journals.id から receipt_id を逆引き
- *   2. photo_inbox.imported_receipt_id = receipts.id の行を探す
- *   3. journal_lines → journals → receipts の順で削除
- *   4. photo_inbox を candidate に戻し imported_receipt_id / imported_at を null
+ *   1. 削除対象 (journal / journal_lines / receipt / photo_inbox prev) を
+ *      スナップショットで取得 → undo stack に push
+ *   2. journal_lines → journals → receipts の順で削除
+ *   3. photo_inbox を candidate に戻し imported_receipt_id / imported_at を null
  *      (claude_result_json は保持 — 同じ画像なら再 OCR せずに使い回せる将来拡張用)
- *   5. last_error / attempts はクリア (新しい仕訳化のフレッシュなスタート)
- *
- * 使い所: 受信箱→自動仕訳された結果が誤読 (店名違い・金額違い・科目違い) で、
- * もう一度仕訳化したい時。journals/page.tsx のメニューから呼ぶ。
  *
  * @returns 戻された inbox_id か null (受信箱由来でない仕訳)
  */
 export async function reverseJournalToInbox(journalId: string): Promise<string | null> {
-  // 1. journals → receipt_id
+  // 1. 削除対象を全部取得 (snapshot)
   const { data: jdata } = await db
     .from("journals")
-    .select("id, receipt_id")
+    .select("*")
     .eq("id", journalId)
     .single();
-  const journal = jdata as { id: string; receipt_id: string | null } | null;
+  const journal = jdata as Record<string, unknown> | null;
   if (!journal) throw new Error("対象の仕訳が見つかりません");
-  const receiptId = journal.receipt_id;
+  const receiptId = (journal.receipt_id as string | null) ?? null;
 
-  // 2. receipt_id から photo_inbox を逆引き (受信箱由来でない場合は inboxId=null のまま進む)
+  const { data: lines } = await db
+    .from("journal_lines")
+    .select("*")
+    .eq("journal_id", journalId);
+  const journalLines = (lines as Record<string, unknown>[] | null) ?? [];
+
+  let receipt: Record<string, unknown> | null = null;
   let inboxId: string | null = null;
+  let inboxPrev: ReverseUndoSnapshot["inboxPrev"] = null;
   if (receiptId) {
+    const { data: rdata } = await db
+      .from("receipts")
+      .select("*")
+      .eq("id", receiptId)
+      .single();
+    receipt = rdata as Record<string, unknown> | null;
+
     const { data: idata } = await db
       .from("photo_inbox")
-      .select("id")
+      .select("id, state, imported_receipt_id, imported_at, last_error, attempts")
       .eq("imported_receipt_id", receiptId)
       .single();
-    inboxId = (idata as { id: string } | null)?.id ?? null;
+    const inboxRow = idata as
+      | {
+          id: string;
+          state: string;
+          imported_receipt_id: string | null;
+          imported_at: string | null;
+          last_error: string | null;
+          attempts: number | null;
+        }
+      | null;
+    if (inboxRow) {
+      inboxId = inboxRow.id;
+      inboxPrev = {
+        state: inboxRow.state,
+        imported_receipt_id: inboxRow.imported_receipt_id,
+        imported_at: inboxRow.imported_at,
+        last_error: inboxRow.last_error,
+        attempts: inboxRow.attempts,
+      };
+    }
   }
+
+  // 2. undo stack に push (size 上限超は古い順に捨てる)
+  const stack = await getUndoStack();
+  stack.unshift({
+    ts: new Date().toISOString(),
+    journal,
+    journalLines,
+    receipt,
+    inboxId,
+    inboxPrev,
+  });
+  while (stack.length > UNDO_MAX) stack.pop();
+  await setUndoStack(stack);
 
   // 3. 関連レコードを順番に削除 (journal_lines は journal_id の FK で残るので明示)
   await db.from("journal_lines").delete().eq("journal_id", journalId);
@@ -524,6 +660,44 @@ export async function reverseJournalToInbox(journalId: string): Promise<string |
   }
 
   return inboxId;
+}
+
+/**
+ * 直近の差し戻しを取り消して、journal/lines/receipt/photo_inbox を全部
+ * 元に戻す (Round 6 ㊍).
+ *
+ * @returns { restored: true, journalId } もしくは { restored: false } (stack 空)
+ */
+export async function undoLastReverse(): Promise<
+  { restored: true; journalId: string } | { restored: false }
+> {
+  const stack = await getUndoStack();
+  const snap = stack.shift();
+  if (!snap) return { restored: false };
+  await setUndoStack(stack);
+
+  // 順番が大事: receipts 復元 → journals → journal_lines → photo_inbox
+  // (FK でくくられている方を先に作る)
+  if (snap.receipt) {
+    await db.from("receipts").insert(snap.receipt);
+  }
+  await db.from("journals").insert(snap.journal);
+  for (const line of snap.journalLines) {
+    await db.from("journal_lines").insert(line);
+  }
+  if (snap.inboxId && snap.inboxPrev) {
+    await db
+      .from("photo_inbox")
+      .update({
+        state: snap.inboxPrev.state,
+        imported_receipt_id: snap.inboxPrev.imported_receipt_id,
+        imported_at: snap.inboxPrev.imported_at,
+        last_error: snap.inboxPrev.last_error,
+        attempts: snap.inboxPrev.attempts,
+      })
+      .eq("id", snap.inboxId);
+  }
+  return { restored: true, journalId: snap.journal.id as string };
 }
 
 /**

@@ -11,7 +11,7 @@
  * 自動仕訳は Phase 2〜4 で順次有効化される。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -46,6 +46,7 @@ import {
   resetFailedToReceipt,
   resetAllFailedToReceipt,
   getFailureStats,
+  BlockedByPattern,
   type FailureStats,
 } from "@/lib/auto-journal";
 import { Sparkles } from "lucide-react";
@@ -64,8 +65,26 @@ export default function InboxPage() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   // ⓓ クイック確定中の inbox.id を持っておく (カード単位の押下中表示)
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
+
+  // ㊌ hover preview ハンドラ: enter で 250ms 後に表示、leave で 100ms 後に消す
+  const handleHoverEnter = (row: InboxRow) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHovered(row), 250);
+  };
+  const handleHoverLeave = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHovered(null), 100);
+  };
+  useEffect(() => {
+    return () => {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    };
+  }, []);
   // ㊁ 失敗パターン集計 (top バケットを「失敗」タブの近くにヒント表示)
   const [failureStats, setFailureStats] = useState<FailureStats | null>(null);
+  // ㊌ Round 6: hover プレビュー対象 (右側 pane に拡大画像 + OCR を表示)
+  const [hovered, setHovered] = useState<InboxRow | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 件数バッジ用: state ごとの行数 (タブ表示の補助)
   const [counts, setCounts] = useState<Record<InboxState | "all", number>>({
     candidate: 0,
@@ -243,6 +262,8 @@ export default function InboxPage() {
   };
 
   // ⓓ クイック確定: 1 クリックで Claude OCR → receipt + journal 作成
+  // Round 6 ㊋: BlockedByPattern (license/consent エラーが 2 件以上連続) は
+  // 個別 modal で「設定を開く」を促し、それ以外のエラーは普通の toast.error
   const quickConfirm = async (inboxId: string) => {
     if (quickConfirming) return;
     setQuickConfirming(inboxId);
@@ -250,7 +271,15 @@ export default function InboxPage() {
       await quickConfirmOne(inboxId);
       toast.success("仕訳化しました — 仕訳帳で確認できます");
     } catch (e) {
-      toast.error(`仕訳化に失敗: ${(e as Error).message}`);
+      if (e instanceof BlockedByPattern) {
+        const open = window.confirm(
+          `仕訳化を止めました。\n\n${e.hint}\n\n` +
+            `「OK」で AI OCR の設定画面を開きます。`,
+        );
+        if (open) router.push("/settings");
+      } else {
+        toast.error(`仕訳化に失敗: ${(e as Error).message}`);
+      }
     } finally {
       setQuickConfirming(null);
       await refresh();
@@ -261,6 +290,17 @@ export default function InboxPage() {
 
   return (
     <div className="space-y-6">
+      {/* ㊌ Round 6: hover preview pane — 右上に固定。マウスがカード外に出ても
+          少し残り、その間に preview 自体に hover すれば消えない。 */}
+      {hovered && (
+        <HoverPreview
+          row={hovered}
+          onMouseEnter={() => {
+            if (hoverTimer.current) clearTimeout(hoverTimer.current);
+          }}
+          onMouseLeave={handleHoverLeave}
+        />
+      )}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <InboxIcon className="h-7 w-7 text-primary" />
@@ -401,6 +441,8 @@ export default function InboxPage() {
               key={it.id}
               row={it}
               quickConfirming={quickConfirming === it.id}
+              onHoverEnter={() => handleHoverEnter(it)}
+              onHoverLeave={handleHoverLeave}
               onMarkReceipt={() => markReceipt(it.id)}
               onMarkNotReceipt={() => markNotReceipt(it.id)}
               onDismiss={() => dismiss(it.id)}
@@ -408,8 +450,6 @@ export default function InboxPage() {
               onRetryFailed={() => retryFailed(it.id)}
               onQuickConfirm={() => quickConfirm(it.id)}
               onOpenForReceipt={() => {
-                // 既存の領収書登録フローに乗せる
-                // file_path をクエリで渡し、receipts/new で fetch して使う設計は Phase 4 で
                 router.push(`/receipts/new?inbox=${it.id}`);
               }}
             />
@@ -423,6 +463,8 @@ export default function InboxPage() {
 function InboxCard({
   row,
   quickConfirming,
+  onHoverEnter,
+  onHoverLeave,
   onMarkReceipt,
   onMarkNotReceipt,
   onDismiss,
@@ -433,6 +475,8 @@ function InboxCard({
 }: {
   row: InboxRow;
   quickConfirming: boolean;
+  onHoverEnter: () => void;
+  onHoverLeave: () => void;
   onMarkReceipt: () => void;
   onMarkNotReceipt: () => void;
   onDismiss: () => void;
@@ -470,7 +514,11 @@ function InboxCard({
   }, [row.file_path]);
 
   return (
-    <Card className="overflow-hidden flex flex-col">
+    <Card
+      className="overflow-hidden flex flex-col"
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+    >
       <div className="aspect-[4/3] bg-muted relative">
         {src ? (
           <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />
@@ -591,6 +639,88 @@ function InboxCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * ㊌ Round 6: 受信箱カードを hover した時に右上に出る大きめプレビュー。
+ *
+ * - 画像を 800x600 以下にフィットさせて拡大表示
+ * - メタ (撮影日 / state / score) をその下に
+ * - rich preview (色分け OCR) を更にその下に
+ *
+ * Pane 自体にも hover を効かせるため、onMouseEnter/Leave を上に bubble させて
+ * 親側の hide タイマーをキャンセル/再開できるようにしている (狭いカードから
+ * 移動しても消えない)。
+ */
+function HoverPreview({
+  row,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  row: InboxRow;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    if (!row.file_path) return;
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    void (async () => {
+      try {
+        const { resolveLocalImageUrl } = await import("@/lib/localDb");
+        const url = await resolveLocalImageUrl(row.file_path);
+        if (cancelled) {
+          if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+          return;
+        }
+        createdUrl = url;
+        setSrc(url);
+      } catch {
+        /* silent */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (createdUrl && createdUrl.startsWith("blob:")) URL.revokeObjectURL(createdUrl);
+    };
+  }, [row.file_path]);
+
+  return (
+    <div
+      className="fixed top-20 right-6 w-[28rem] max-h-[80vh] overflow-y-auto z-50
+                 bg-card border-2 border-primary/30 rounded-lg shadow-2xl p-3
+                 pointer-events-auto"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div className="aspect-[4/3] bg-muted rounded mb-2 overflow-hidden">
+        {src ? (
+          <img src={src} alt="" className="w-full h-full object-contain" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">
+            読み込み中...
+          </div>
+        )}
+      </div>
+      <div className="text-xs flex items-center gap-2 mb-1">
+        <Badge variant="outline">{row.state}</Badge>
+        {row.receipt_score !== null && (
+          <span className="font-mono text-muted-foreground">
+            score {row.receipt_score.toFixed(2)}
+          </span>
+        )}
+        <span className="text-muted-foreground ml-auto">
+          {row.taken_at ? new Date(row.taken_at).toLocaleString("ja-JP") : "-"}
+        </span>
+      </div>
+      {row.ocr_text ? (
+        <RichOcrPreview text={row.ocr_text} />
+      ) : (
+        <div className="text-[11px] text-muted-foreground italic">(OCR テキストなし)</div>
+      )}
+    </div>
   );
 }
 

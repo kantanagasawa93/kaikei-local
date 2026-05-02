@@ -63,57 +63,60 @@ scripts/verify-app.sh smoke          # 上記を順に
 
 CLI 直叩き: `/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei --verify-help`
 
-## 次ラウンド (Round 6) 候補 — ユーザは「全部やって」希望
+## 自律検証 (Round 2 で導入、Round 6 で navigate 追加)
+
+ユーザに「アプリ立ち上げて」を頼まずに、Claude 単独で E2E 検証できる:
+
+```bash
+scripts/verify-app.sh navigate /inbox      # アプリ内ナビゲーション (㊎)
+scripts/verify-app.sh ui-screenshot        # 起動中の窓を PNG 保存
+scripts/verify-app.sh smoke-report         # スキャン+DB+ログ+スクショを Markdown に
+scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
+scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
+```
+
+## 次ラウンド (Round 7) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊊ → ㊋ → ㊌ → ㊍ → ㊎。
+推し優先順は ㊏ → ㊐ → ㊑ → ㊒ → ㊓。
 
-### ㊊ v0.3.0 公証付きリリース実発火 ★★★★★
-- 目的: Round 5 までで NOTARIZE_SKIP=1 までは Claude で打てるが、Gatekeeper 警告が
-  出ない正式 DMG はユーザの手元で公証付き発火が必要
-- 手元手順 (再掲):
-  ```
-  # Apple Developer Account: https://appleid.apple.com で app-specific password 生成
-  xcrun notarytool store-credentials AC_PASSWORD \
-    --apple-id "k.nagasawa.pc@gmail.com" \
-    --team-id "6FU765RJ9M" \
-    --password "<app-specific-password>"
-  export APPLE_SIGNING_IDENTITY="Developer ID Application: kanta nagasawa (6FU765RJ9M)"
-  export APPLE_ID="k.nagasawa.pc@gmail.com"
-  export APPLE_PASSWORD="@keychain:AC_PASSWORD"
-  export APPLE_TEAM_ID="6FU765RJ9M"
-  scripts/release-precheck.sh v0.3.0   # 全項目 ✓
-  scripts/release.sh v0.3.0            # 公証付きリリース
-  ```
+### ㊏ v0.3.0 公証付きリリース実発火 (再オファー) ★★★★★
+- 状況: Round 4-5 で precheck/changelog/build-all.sh 動的 version + NOTARIZE_SKIP
+  まで揃え、Round 6 で verify-release.sh で公開後の自動検証も整備済み。
+  あとはユーザが Apple ID + app-specific password を keychain に保存して
+  release.sh v0.3.0 を打つだけ
+- 手元手順 (再掲): CLAUDE.md 上部の「自律検証」直下にコマンドあり
 
-### ㊋ 受信箱「いますぐ仕訳化」の事前 warn (1 件単位) ★★★
-- 目的: Round 5 ㊆ で「全部仕訳化」前の事前 warn は付けたが、quickConfirmOne
-  にも同じロジックを入れる。1 件押す前にも license/consent エラーを止める
-- 対象: src/lib/auto-journal.ts: quickConfirmOne 冒頭で getFailureStats →
-  actionable な top 原因が 2 件以上で confirm
-- commit サイズ: 小 (~50 行)
-
-### ㊌ 受信箱から領収書詳細を直接 hover プレビュー ★★★
-- 目的: 受信箱カードを hover すると右側に領収書のフル画像 + Vision OCR の
-  rich preview が拡大表示されて、確定前にどんな写真かよく分かる
-- 対象: src/app/(app)/inbox/page.tsx
-- やること: portal で固定位置の preview pane、hover 出入り debounce
+### ㊐ AI OCR 結果から仕訳明細の自動分割 ★★★★
+- 目的: 領収書 1 枚に複数カテゴリの品目 (例: 文具と雑費) が混じっている時、
+  Claude OCR の items[] を勘定科目ごとに別 journal_line に分割
+- 対象: src/lib/auto-journal.ts
+- やること: ocr.items[] を suggestAccount でグループ化 → 各グループを別の
+  journal_line に。合計が ocr.amount と一致すること検証
 - commit サイズ: 中 (~150 行)
 
-### ㊍ 仕訳の「差し戻し」アクションを安全な undo に拡張 ★★★★
-- 目的: Round 4 ㊂ で「受信箱に戻す」を入れたが、誤操作で押しても元に戻せない
-- 対象: src/lib/auto-journal.ts: reverseJournalToInbox の前にスナップショット
-  を取っておき、直近 N 件は復元できるようにする (app_settings に JSON で保存)
-- UI: 仕訳帳に「直近の差し戻しを取り消す」ボタン
+### ㊑ 受信箱の自動破棄ルール ★★★
+- 目的: 「Wi-Fi 案内」「機器ラベル」のような明らかに領収書じゃないものを、
+  ユーザーが過去に dismissed したパターンから学習して、今後の new candidate
+  を初期 state='dismissed' にする
+- 対象: src/lib/receipt-classifier.ts に学習層追加
+- やること: dismissed 行の OCR テキストを TF-IDF 等で代表ベクトル化、
+  新規 candidate と類似度 > 0.7 なら直接 dismissed に
 - commit サイズ: 中〜大 (~200 行)
 
-### ㊎ verify-app.sh の追加サブコマンド: navigate ★★
-- 目的: 「受信箱に飛んでスクショ」「設定 → AI OCR ログに飛んでスクショ」を
-  Claude 単独でやる動線。現状 osascript でキー操作が出来ない (TCC) のを
-  Tauri command 経由 (window.location 操作) で代替
-- 対象: src-tauri/src/lib.rs に navigate_to コマンド + scripts/verify-app.sh
-  に navigate サブコマンド
-- commit サイズ: 小〜中 (~100 行)
+### ㊒ 仕訳エクスポート CSV のスマート分類 ★★★
+- 目的: e-Tax XTX の前段で、仕訳帳を会計ソフト互換 CSV (freee/弥生/MFC) に
+  エクスポートする時、receipt 紐付き仕訳に画像 URL コラムを足す
+- 対象: src/lib/journal-import.ts (export 関数追加)
+- commit サイズ: 中 (~120 行)
+
+### ㊓ verify-app.sh navigate と smoke-report の統合 ★★
+- 目的: smoke-report が現状はダッシュボードのスクショ 1 枚のみ。受信箱・
+  仕訳帳・設定 (AI OCR ログ) もスクショして Markdown に貼る
+- 対象: scripts/verify-app.sh の cmd_smoke_report
+- やること: 内部で `cmd_navigate /inbox` → screenshot → `/journals` →
+  screenshot → `/settings/ai-ocr-log` → screenshot して Markdown に列挙
+- commit サイズ: 小 (~50 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

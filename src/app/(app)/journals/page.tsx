@@ -14,9 +14,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2 } from "lucide-react";
+import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { reverseJournalToInbox } from "@/lib/auto-journal";
+import {
+  reverseJournalToInbox,
+  undoLastReverse,
+  getReverseUndoCount,
+} from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
 import type { Journal, JournalLine } from "@/types";
 
@@ -32,9 +36,12 @@ export default function JournalsPage() {
   const [journals, setJournals] = useState<JournalWithLines[]>([]);
   const [monthFilter, setMonthFilter] = useState("");
   const [page, setPage] = useState(0);
+  // ㊍ Round 6: 直近の差し戻しを取り消せる件数 (0 なら button 非表示)
+  const [undoCount, setUndoCount] = useState(0);
 
   useEffect(() => {
     loadJournals();
+    void getReverseUndoCount().then(setUndoCount);
   }, []);
 
   async function loadJournals() {
@@ -43,6 +50,23 @@ export default function JournalsPage() {
       .select("*, journal_lines(*)")
       .order("date", { ascending: false });
     if (data) setJournals(data);
+  }
+
+  // ㊍ undo: app_settings に積んでおいた直近の差し戻しスナップショットから
+  // 仕訳・明細・領収書・受信箱状態をまとめて復元する。
+  async function handleUndoReverse() {
+    try {
+      const r = await undoLastReverse();
+      if (!r.restored) {
+        toast.info("取り消せる差し戻しがありません");
+      } else {
+        toast.success(`差し戻しを取り消し、仕訳を復元しました (#${r.journalId})`);
+        await loadJournals();
+      }
+      setUndoCount(await getReverseUndoCount());
+    } catch (e) {
+      toast.error(`取り消しに失敗: ${(e as Error).message}`);
+    }
   }
 
   async function handleDelete(id: string) {
@@ -54,10 +78,13 @@ export default function JournalsPage() {
   // Round 4 ㊂ 差し戻し:
   // 受信箱由来 (receipt_id 紐付き) の仕訳を取り消して photo_inbox を candidate に戻す。
   // 自動仕訳の結果が誤読だった時のリカバリー動線。
+  // Round 6 ㊍: 削除前にスナップショットを undo stack に積むので、押した直後でも
+  //              取り消せる (上の handleUndoReverse から復元)。
   async function handleReverseToInbox(id: string) {
     const ok = window.confirm(
       "この仕訳と紐付く領収書レコードを削除して、写真を「未判定」状態の受信箱に戻します。\n\n" +
         "戻したあと、受信箱の「いますぐ仕訳化」または「領収書として登録」から再仕訳できます。\n\n" +
+        "(押した直後なら「直近の差し戻しを取り消す」ボタンで復元可能)\n\n" +
         "続行しますか?",
     );
     if (!ok) return;
@@ -69,6 +96,7 @@ export default function JournalsPage() {
         toast.info("仕訳と領収書を削除しました (受信箱由来ではないので戻し先なし)");
       }
       setJournals((prev) => prev.filter((j) => j.id !== id));
+      setUndoCount(await getReverseUndoCount());
     } catch (e) {
       toast.error(`差し戻しに失敗: ${(e as Error).message}`);
     }
@@ -90,12 +118,22 @@ export default function JournalsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">仕訳帳</h1>
-        <Link href="/journals/new">
-          <Button>
-            <Plus className="h-4 w-4 mr-1" />
-            新規仕訳
-          </Button>
-        </Link>
+        <div className="flex gap-2">
+          {/* ㊍ 直近の差し戻しを取り消すボタン (stack に 1 件以上ある時のみ) */}
+          {undoCount > 0 && (
+            <Button variant="outline" onClick={handleUndoReverse} title="直近の差し戻しを取り消して仕訳を復元">
+              <RotateCcw className="h-4 w-4 mr-1" />
+              直近の差し戻しを取り消す
+              <Badge variant="secondary" className="ml-2 text-[10px]">{undoCount}</Badge>
+            </Button>
+          )}
+          <Link href="/journals/new">
+            <Button>
+              <Plus className="h-4 w-4 mr-1" />
+              新規仕訳
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="flex gap-2">

@@ -12,9 +12,8 @@
 #   db-dump <table>          DB テーブルを JSON 配列でダンプ
 #   tail-log [<n>]           scan.log の末尾 n 行 (既定 50)
 #   activate                 KAIKEI LOCAL を最前面に持ってくる
-#   open-page <route>        例: open-page /inbox  (URL は appURL? 未対応のため
-#                            アプリ内ナビゲーションは現時点では osascript の
-#                            キー操作 fallback)
+#   navigate <route>         起動中アプリを <route> に遷移させる (例: /inbox)
+#                            (CLI から control file を書く → Frontend が poll)
 #   smoke                    スキャン → DB ダンプ → スクショまでを順に実行
 #   smoke-report [<file>]    smoke を Markdown レポートに書き出す
 #                            (既定: /tmp/kaikei-verify-<UTC>.md)
@@ -82,6 +81,18 @@ cmd_tail_log() {
   require_bin
   local n="${1:-50}"
   "$KAIKEI_BIN" --tail-scan-log="$n"
+}
+
+cmd_navigate() {
+  require_bin
+  local route="${1:-/dashboard}"
+  # CLI から control file を書き、起動中の Frontend NavigateBridge が
+  # 1 秒以内に拾って router.push する。osascript の TCC を回避する迂回路。
+  "$KAIKEI_BIN" --navigate="$route"
+  # アプリを前面に持ってきて UI を更新させる
+  cmd_activate
+  # 1.5 秒待つ (poll 周期 1 秒 + 余裕)
+  sleep 1.5
 }
 
 cmd_smoke() {
@@ -183,6 +194,7 @@ main() {
     db-dump|db)                cmd_db_dump "$@" ;;
     tail-log|log)              cmd_tail_log "$@" ;;
     activate)                  cmd_activate ;;
+    navigate|nav)              cmd_navigate "$@" ;;
     smoke)                     cmd_smoke ;;
     smoke-report|report)       cmd_smoke_report "$@" ;;
     help|-h|--help)            usage ;;
