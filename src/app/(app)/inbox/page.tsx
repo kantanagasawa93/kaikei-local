@@ -215,7 +215,11 @@ export default function InboxPage() {
         const receiptMsg = result.receiptCount > 0
           ? ` (うち領収書 ${result.receiptCount} 枚)`
           : "";
-        toast.success(`新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}`);
+        // Round 7 ㊑: 自動破棄件数があれば併記 (学習効果を見える化)
+        const autoMsg = result.autoDismissed && result.autoDismissed > 0
+          ? ` / 過去パターンと類似で ${result.autoDismissed} 枚を自動破棄`
+          : "";
+        toast.success(`新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}${autoMsg}`);
       } else if (result.scanned === 0) {
         toast.info("新規の写真はありませんでした");
       } else {

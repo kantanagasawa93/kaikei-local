@@ -212,6 +212,13 @@ export interface OcrResult {
   date: string | null;
   suggested_account_code: string | null;
   suggested_account_name: string | null;
+  /**
+   * Round 7 ㊐: Claude OCR が返す品目テキスト一覧 (例: ["コーヒー", "ノート", "ペン"])。
+   * 領収書 1 枚に複数カテゴリの品目が混じる時、auto-journal でこれを
+   * suggestAccount でグループ化して journal_lines を分割するのに使う。
+   * 価格付きでないので分割は数で按分 (将来は items_with_price を別フィールドに)。
+   */
+  items?: string[];
 }
 
 // Phase 2: 口座・クレカ連携

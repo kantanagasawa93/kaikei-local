@@ -114,16 +114,27 @@ cmd_smoke() {
 }
 
 # ㊄ smoke 結果を Markdown レポートとして書き出す。
-# Round 4 で導入: ラウンド完了時に「最後の検証はこういう状態だった」を
-# 残してユーザに引き継ぎやすくするため。
+# Round 4 で導入、Round 7 ㊓ で複数ページのスクショに拡張。
+# ラウンド完了時に「最後の検証はこういう状態だった」を残してユーザに引き継ぎ
+# やすくするため。
 cmd_smoke_report() {
   local ts
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   local out="${1:-/tmp/kaikei-verify-${ts}.md}"
   local app_ver
   app_ver=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$SCRIPT_DIR/../src-tauri/tauri.conf.json" 2>/dev/null || echo "?")
-  local shot
-  shot=$(cmd_ui_screenshot 2>/dev/null) || shot=""
+
+  # ㊓ Round 7: 複数ページのスクショを取って Markdown に並べる。
+  # navigate を使ってアプリ内 SPA ナビゲーション → 1.5 秒待ってスクショ。
+  local shot_dashboard shot_inbox shot_journals shot_logs
+  cmd_navigate "/dashboard" >/dev/null 2>&1 || true
+  shot_dashboard=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-dashboard.png" 2>/dev/null) || shot_dashboard=""
+  cmd_navigate "/inbox" >/dev/null 2>&1 || true
+  shot_inbox=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-inbox.png" 2>/dev/null) || shot_inbox=""
+  cmd_navigate "/journals" >/dev/null 2>&1 || true
+  shot_journals=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-journals.png" 2>/dev/null) || shot_journals=""
+  cmd_navigate "/settings/ai-ocr-log" >/dev/null 2>&1 || true
+  shot_logs=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-ai-ocr-log.png" 2>/dev/null) || shot_logs=""
 
   local scan_json inbox_json log_lines
   scan_json=$(cmd_simulate_scan 2>&1 || true)
@@ -170,14 +181,27 @@ for k in sorted(buckets):
     echo "$log_lines"
     echo '```'
     echo ""
-    if [ -n "$shot" ]; then
-      echo "## UI スクリーンショット"
-      echo ""
-      echo "ファイル: \`$shot\`"
-      echo ""
-      echo "(Markdown プレビュアの Local Image でこのパスを開いて確認)"
-      echo ""
-    fi
+    echo "## UI スクリーンショット (㊓ 複数ページ)"
+    echo ""
+    for pair in \
+      "ダッシュボード:$shot_dashboard" \
+      "受信箱:$shot_inbox" \
+      "仕訳帳:$shot_journals" \
+      "AI OCR ログ:$shot_logs" ; do
+      label="${pair%%:*}"
+      path="${pair#*:}"
+      if [ -n "$path" ]; then
+        echo "### $label"
+        echo ""
+        echo "ファイル: \`$path\`"
+        if command -v file >/dev/null 2>&1 && [ -f "$path" ]; then
+          # Markdown 画像埋込: file:// URL で参照 (ローカル MD ビューアなら表示可)
+          echo ""
+          echo "![${label}](file://${path})"
+        fi
+        echo ""
+      fi
+    done
     echo "---"
     echo "_このレポートは \`scripts/verify-app.sh smoke-report\` で生成されました_"
   } > "$out"

@@ -53,9 +53,12 @@ export async function ocrWithClaude(
   const json = await response.json();
 
   // 勘定科目を推測
+  const items: string[] = Array.isArray(json.items)
+    ? (json.items as unknown[]).filter((x) => typeof x === "string") as string[]
+    : [];
   const combinedText = [
     json.vendor_name || "",
-    ...(json.items || []),
+    ...items,
     json.raw_text || "",
   ].join(" ");
   const suggested = suggestAccount(combinedText);
@@ -67,6 +70,7 @@ export async function ocrWithClaude(
     date: json.date || null,
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
+    items, // Round 7 ㊐: 仕訳分割で参照
     usage: json.usage,
   };
 }
@@ -164,7 +168,9 @@ export async function ocrWithClaudeStream(
     // パース失敗。partial が取れていれば最低限の result を返す。
   }
 
-  const items = Array.isArray(finalParsed.items) ? (finalParsed.items as string[]) : [];
+  const items = Array.isArray(finalParsed.items)
+    ? (finalParsed.items as unknown[]).filter((x) => typeof x === "string") as string[]
+    : [];
   const combinedText = [
     (finalParsed.vendor_name as string) || "",
     ...items,
@@ -185,6 +191,7 @@ export async function ocrWithClaudeStream(
     date: (finalParsed.date as string) || null,
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
+    items, // Round 7 ㊐: 仕訳分割で参照
     usage,
   };
 }

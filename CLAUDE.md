@@ -75,48 +75,46 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 7) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 8) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊏ → ㊐ → ㊑ → ㊒ → ㊓。
+推し優先順は ㊔ → ㊕ → ㊖ → ㊗ → ㊘。
 
-### ㊏ v0.3.0 公証付きリリース実発火 (再オファー) ★★★★★
-- 状況: Round 4-5 で precheck/changelog/build-all.sh 動的 version + NOTARIZE_SKIP
-  まで揃え、Round 6 で verify-release.sh で公開後の自動検証も整備済み。
-  あとはユーザが Apple ID + app-specific password を keychain に保存して
-  release.sh v0.3.0 を打つだけ
-- 手元手順 (再掲): CLAUDE.md 上部の「自律検証」直下にコマンドあり
+### ㊔ v0.3.0 公証付きリリース実発火 (再々オファー) ★★★★★
+- 状況: Round 4-7 で precheck / changelog / NOTARIZE_SKIP / verify-release /
+  smoke-report の navigate 統合まで揃った。あとは APPLE_* env を渡して
+  scripts/release.sh v0.3.0 を打つだけ。Claude チャット側からは
+  Apple ID + app-specific password が用意できないので毎回保留に
+- 手元手順 (再掲、CLAUDE.md 上部の「自律検証」を参照)
 
-### ㊐ AI OCR 結果から仕訳明細の自動分割 ★★★★
-- 目的: 領収書 1 枚に複数カテゴリの品目 (例: 文具と雑費) が混じっている時、
-  Claude OCR の items[] を勘定科目ごとに別 journal_line に分割
-- 対象: src/lib/auto-journal.ts
-- やること: ocr.items[] を suggestAccount でグループ化 → 各グループを別の
-  journal_line に。合計が ocr.amount と一致すること検証
-- commit サイズ: 中 (~150 行)
+### ㊕ Claude OCR の items[] に price 付きを試す ★★★★
+- 目的: Round 7 ㊐ で品目数による按分はできたが、価格までは取れない。
+  Claude API のプロンプトを「items: [{name, price}]」形式で返すよう更新
+- 対象: api-server (Vercel functions or 同等) の prompt
+- やること: API レスポンスを `items: [{name, price}]` 拡張、Frontend の
+  OcrResult.items を string[] と {name,price}[] の union 型に
+- commit サイズ: 中 (~150 行 — 主に api-server)
 
-### ㊑ 受信箱の自動破棄ルール ★★★
-- 目的: 「Wi-Fi 案内」「機器ラベル」のような明らかに領収書じゃないものを、
-  ユーザーが過去に dismissed したパターンから学習して、今後の new candidate
-  を初期 state='dismissed' にする
-- 対象: src/lib/receipt-classifier.ts に学習層追加
-- やること: dismissed 行の OCR テキストを TF-IDF 等で代表ベクトル化、
-  新規 candidate と類似度 > 0.7 なら直接 dismissed に
-- commit サイズ: 中〜大 (~200 行)
+### ㊖ 受信箱の自動破棄ルールに「ホワイトリスト」を ★★★
+- 目的: Round 7 ㊑ の自動破棄が領収書を間違って弾く事故を防ぐ。
+  「店名」「合計」を含む写真は絶対に dismiss しない安全策
+- 対象: src/lib/receipt-classifier.ts: shouldAutoDismiss の前段で
+  classifyReceipt の score を見て score >= 0.4 なら問答無用で false
+- commit サイズ: 小 (~30 行 + テスト)
 
-### ㊒ 仕訳エクスポート CSV のスマート分類 ★★★
-- 目的: e-Tax XTX の前段で、仕訳帳を会計ソフト互換 CSV (freee/弥生/MFC) に
-  エクスポートする時、receipt 紐付き仕訳に画像 URL コラムを足す
-- 対象: src/lib/journal-import.ts (export 関数追加)
+### ㊗ 自動破棄判定の透明性 ★★★
+- 目的: ユーザが「これ自動破棄されたんだ」と気づけるよう、photo_inbox に
+  auto_dismissed_reason カラムを追加 (どの過去パターンと類似で消したか記録)
+- 対象: migrations.rs に v6 SQL + photo-scanner.ts で記録
+- 受信箱「破棄」タブのカードに reason を見せる
 - commit サイズ: 中 (~120 行)
 
-### ㊓ verify-app.sh navigate と smoke-report の統合 ★★
-- 目的: smoke-report が現状はダッシュボードのスクショ 1 枚のみ。受信箱・
-  仕訳帳・設定 (AI OCR ログ) もスクショして Markdown に貼る
-- 対象: scripts/verify-app.sh の cmd_smoke_report
-- やること: 内部で `cmd_navigate /inbox` → screenshot → `/journals` →
-  screenshot → `/settings/ai-ocr-log` → screenshot して Markdown に列挙
-- commit サイズ: 小 (~50 行)
+### ㊘ verify-app.sh の error-collector ★★
+- 目的: 起動中アプリのコンソールエラーを Markdown レポートに自動収集
+- 対象: scripts/verify-app.sh + Tauri 側で console.error を log file へ転送
+- やること: webview の error event を Tauri command 経由で
+  `~/Library/Logs/KAIKEI LOCAL/console.log` に追記、smoke-report で末尾を表示
+- commit サイズ: 中 (~150 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
