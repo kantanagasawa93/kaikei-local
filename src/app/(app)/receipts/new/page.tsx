@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ReceiptUpload } from "@/components/receipt-upload";
 import { AccountSelect } from "@/components/account-select";
 import { Button } from "@/components/ui/button";
@@ -21,13 +21,28 @@ import {
 import { compressImageForOcr } from "@/lib/image-compression";
 import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
 import { supabase } from "@/lib/supabase";
+import { db } from "@/lib/localDb";
+import { prefillFromOcr } from "@/lib/receipt-classifier";
 import { toast } from "@/lib/toast";
 import type { OcrResult } from "@/types";
-import { ArrowLeft, Sparkles, Save, Zap } from "lucide-react";
+import { ArrowLeft, Sparkles, Save, Zap, Inbox as InboxIcon } from "lucide-react";
 import Link from "next/link";
 
 export default function NewReceiptPage() {
+  // Next.js 16: useSearchParams を使う Component は Suspense 境界の中に置く必要がある。
+  // 出力は static export のため、ssr 時には searchParams が null になる前提で
+  // Suspense fallback で 1 フレーム遅延させる。
+  return (
+    <Suspense fallback={<div className="text-sm text-muted-foreground p-4">読み込み中...</div>}>
+      <NewReceiptPageInner />
+    </Suspense>
+  );
+}
+
+function NewReceiptPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inboxId = searchParams.get("inbox");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +54,11 @@ export default function NewReceiptPage() {
   // 同意ダイアログ: pendingFile を保持しておき、同意後に再試行する
   const [consentOpen, setConsentOpen] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  // ㊇ 受信箱から開いた時のソース表示用
+  const [inboxSource, setInboxSource] = useState<{
+    id: string;
+    fromClaudeJson: boolean;
+  } | null>(null);
 
   const [vendorName, setVendorName] = useState("");
   const [amount, setAmount] = useState("");
@@ -53,6 +73,104 @@ export default function NewReceiptPage() {
       if (!key) setUseAiOcr(false);
     });
   });
+
+  // Round 5 ㊇ + ㊉: ?inbox=<id> で開かれたら photo_inbox から読み出して pre-fill
+  // - claude_result_json があれば「前回の AI OCR 結果」を再利用 (㊉)
+  // - 無ければ ocr_text を classifyReceiptLines で行分類して候補を埋める (㊇)
+  // 画像ファイルは Tauri の read_image_file で読んで File 化し、既存の保存
+  // フローに乗せる (Storage upload までは現状の handleSave がやってくれる)
+  useEffect(() => {
+    if (!inboxId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data } = await db
+          .from("photo_inbox")
+          .select("id, file_path, ocr_text, claude_result_json")
+          .eq("id", inboxId)
+          .single();
+        const row = data as
+          | {
+              id: string;
+              file_path: string | null;
+              ocr_text: string | null;
+              claude_result_json: string | null;
+            }
+          | null;
+        if (!row || cancelled) return;
+
+        let usedClaude = false;
+        // ㊉ claude_result_json があれば優先 (再 OCR せずに同じ結果を再利用)
+        if (row.claude_result_json) {
+          try {
+            const r = JSON.parse(row.claude_result_json);
+            if (r.vendor_name) setVendorName(r.vendor_name);
+            if (r.amount != null) setAmount(String(r.amount));
+            if (r.date) setDate(r.date);
+            if (r.suggested_account_code) {
+              setAccountCode(r.suggested_account_code);
+              setAccountName(r.suggested_account_name ?? "");
+            }
+            usedClaude = true;
+          } catch {
+            // 壊れた JSON は無視して classifier に fallback
+          }
+        }
+        // ㊇ Vision OCR テキストから候補抽出 (claude が無い、または取れなかった場合)
+        if (!usedClaude && row.ocr_text) {
+          const pf = prefillFromOcr(row.ocr_text);
+          if (pf.vendor_name) setVendorName(pf.vendor_name);
+          if (pf.amount != null) setAmount(String(pf.amount));
+          if (pf.date) setDate(pf.date);
+        }
+
+        // 画像ファイルを File 化して既存の保存フローに乗せる
+        if (row.file_path) {
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            const raw = (await invoke("read_image_file", {
+              path: row.file_path,
+            })) as Uint8Array | number[];
+            const u8 = raw instanceof Uint8Array ? raw : Uint8Array.from(raw);
+            // 簡易 MIME 判定
+            let mime = "image/jpeg";
+            if (
+              u8.length >= 4 &&
+              u8[0] === 0x89 &&
+              u8[1] === 0x50 &&
+              u8[2] === 0x4e &&
+              u8[3] === 0x47
+            ) {
+              mime = "image/png";
+            }
+            const fileName = row.file_path.split("/").pop() || "inbox.jpg";
+            const file = new File([new Uint8Array(u8).buffer], fileName, { type: mime });
+            if (!cancelled) setSelectedFile(file);
+          } catch (e) {
+            console.warn("[receipts/new] inbox 画像の読込に失敗:", e);
+          }
+        }
+
+        // フォームを表示するため最小限の ocrResult をセット (raw_text だけ詰める)
+        if (!cancelled) {
+          setOcrResult({
+            raw_text: row.ocr_text ?? "",
+            vendor_name: null,
+            amount: null,
+            date: null,
+            suggested_account_code: null,
+            suggested_account_name: null,
+          });
+          setInboxSource({ id: row.id, fromClaudeJson: usedClaude });
+        }
+      } catch (e) {
+        console.warn("[receipts/new] inbox= 読込で失敗:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inboxId]);
 
   const handleFileSelect = async (file: File) => {
     // AI OCR を使う場合、初回のみ同意を取る
@@ -324,7 +442,7 @@ export default function NewReceiptPage() {
         }}
       />
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <Link href="/receipts">
           <Button variant="ghost" size="sm">
             <ArrowLeft className="h-4 w-4 mr-1" />
@@ -332,6 +450,16 @@ export default function NewReceiptPage() {
           </Button>
         </Link>
         <h1 className="text-2xl font-bold">領収書を登録</h1>
+        {inboxSource && (
+          // ㊇/㊉: 受信箱から開かれた時に source を明示。
+          // 「OCR を再実行せず候補が埋まっている」のは怪しく見える可能性があるため
+          // バッジでユーザに伝える。
+          <Badge variant="secondary" className="gap-1">
+            <InboxIcon className="h-3 w-3" />
+            受信箱から
+            {inboxSource.fromClaudeJson ? " (前回 AI OCR 結果を再利用)" : " (Vision OCR で pre-fill)"}
+          </Badge>
+        )}
       </div>
 
       <Card>

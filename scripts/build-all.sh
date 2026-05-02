@@ -8,9 +8,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY 未設定}"
-: "${APPLE_ID:?APPLE_ID 未設定}"
-: "${APPLE_PASSWORD:?APPLE_PASSWORD 未設定}"
-: "${APPLE_TEAM_ID:?APPLE_TEAM_ID 未設定}"
+# Round 5 ㊅: NOTARIZE_SKIP=1 で APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID を
+# 省略可能にする。署名のみ DMG (公証なし → Gatekeeper 警告は出るが、開発者
+# 配布前の動作確認や CI ローカル検証に使える)。
+if [ -z "${NOTARIZE_SKIP:-}" ]; then
+  : "${APPLE_ID:?APPLE_ID 未設定 (NOTARIZE_SKIP=1 で公証スキップ可能)}"
+  : "${APPLE_PASSWORD:?APPLE_PASSWORD 未設定}"
+  : "${APPLE_TEAM_ID:?APPLE_TEAM_ID 未設定}"
+fi
 
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1090
@@ -72,16 +77,20 @@ build_arch() {
   # DMG 自体にも署名（友達に渡す時 Gatekeeper がスムーズに通るように）
   codesign --force --sign "$APPLE_SIGNING_IDENTITY" "$dmg_file"
 
-  # 公証
-  echo "==> Submit to Apple notary ($arch_name)"
-  xcrun notarytool submit "$dmg_file" \
-    --apple-id "$APPLE_ID" \
-    --password "$APPLE_PASSWORD" \
-    --team-id "$APPLE_TEAM_ID" \
-    --wait
+  # 公証 (NOTARIZE_SKIP=1 で skip 可能 — Gatekeeper 警告は残る)
+  if [ -n "${NOTARIZE_SKIP:-}" ]; then
+    echo "==> notarize skipped (NOTARIZE_SKIP=1) — DMG is signed but not notarized"
+  else
+    echo "==> Submit to Apple notary ($arch_name)"
+    xcrun notarytool submit "$dmg_file" \
+      --apple-id "$APPLE_ID" \
+      --password "$APPLE_PASSWORD" \
+      --team-id "$APPLE_TEAM_ID" \
+      --wait
 
-  echo "==> staple ($arch_name)"
-  xcrun stapler staple "$dmg_file"
+    echo "==> staple ($arch_name)"
+    xcrun stapler staple "$dmg_file"
+  fi
 
   echo "==> Gatekeeper check"
   spctl -a -vv --type install "$dmg_file" || true

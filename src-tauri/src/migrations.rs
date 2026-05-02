@@ -484,3 +484,33 @@ CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
 CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
 "#;
 
+/// v5: v4 二重実行で残るゴミテーブルの掃除。
+///
+/// 経緯:
+///   - v4 は CREATE TABLE photo_inbox_v4 → INSERT SELECT → DROP photo_inbox →
+///     RENAME photo_inbox_v4 to photo_inbox という重い段取り
+///   - 通常は 1 回しか走らないので問題ないが、Round 3 ⓐ で実装した auto-recovery
+///     (sqlx checksum mismatch 時に `_sqlx_migrations` を消して再 load) が起きた
+///     後に v4 が再実行されると、新規 photo_inbox_v4 を作って既存 photo_inbox の
+///     v4 列 (claude_result_json/last_error/attempts) は SELECT に含まれず初期化
+///     されてしまうリスクがある (= 失敗履歴と再利用可能な OCR 結果が消失)
+///   - Round 5 ⓂG では「v4 を冪等化」ではなく、もう一段保険として「v5 で
+///     ゴミテーブル掃除 + 通常運用上は no-op」のマイグレーションを足す。
+///     恒久対策 (v4 の冪等化) は Round 6 以降で別 migration として実装予定
+///
+/// やること:
+///   - photo_inbox_v4 が万一残っていれば DROP (auto-recovery 直後の異常状態の掃除)
+///   - photo_inbox にインデックスを冪等に再宣言 (DROP+RENAME で消えるケースの保険)
+///
+/// 注意: SCHEMA_V4_SQL は決して書き換えない。書き換えると既存 user で
+/// checksum mismatch が起き、毎回 auto-recovery が発動して逆に v4 二重実行を
+/// 招く。v5 を新設するのが安全。
+pub const SCHEMA_V5_SQL: &str = r#"
+DROP TABLE IF EXISTS photo_inbox_v4;
+
+-- インデックスは v4 の最後で IF NOT EXISTS 付きで作っているが、テーブル DROP
+-- とともに消える可能性があるので念のため再宣言 (idempotent)
+CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
+CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
+"#;
+
