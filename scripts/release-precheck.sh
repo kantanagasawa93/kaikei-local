@@ -105,6 +105,20 @@ echo ""
 echo "==> 6. Apple 署名・公証 env"
 if [ -n "${UNSIGNED:-}" ]; then
   warn "UNSIGNED=1 が指定されています — 未署名 DMG (Gatekeeper 警告あり) になります"
+elif [ -n "${NOTARIZE_SKIP:-}" ]; then
+  # 署名はするが公証はスキップ。APPLE_SIGNING_IDENTITY だけ必要
+  warn "NOTARIZE_SKIP=1 が指定されています — 署名のみ (公証なし) DMG。配布前の動作確認用"
+  if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+    pass "APPLE_SIGNING_IDENTITY: SET"
+    if command -v security >/dev/null 2>&1 \
+       && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$APPLE_SIGNING_IDENTITY"; then
+      pass "APPLE_SIGNING_IDENTITY が keychain に存在"
+    else
+      warn "APPLE_SIGNING_IDENTITY が keychain で見つかりません — 名前のタイポ?"
+    fi
+  else
+    fail "APPLE_SIGNING_IDENTITY が UNSET です (NOTARIZE_SKIP でも署名は必要)"
+  fi
 else
   for v in APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
     if [ -n "${!v:-}" ]; then
@@ -153,6 +167,8 @@ if [ "$failures" -eq 0 ]; then
   echo "次のコマンドでリリースを発火できます:"
   if [ -n "${UNSIGNED:-}" ]; then
     echo "  UNSIGNED=1 scripts/release.sh ${TAG:-vX.Y.Z}"
+  elif [ -n "${NOTARIZE_SKIP:-}" ]; then
+    echo "  NOTARIZE_SKIP=1 scripts/release.sh ${TAG:-vX.Y.Z}"
   else
     echo "  scripts/release.sh ${TAG:-vX.Y.Z}"
   fi

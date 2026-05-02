@@ -140,9 +140,23 @@ export default function InboxPage() {
       toast.info("領収書状態の写真がありません");
       return;
     }
+
+    // ㊆ Round 5: スマートトリミング — 直近の失敗バケットを参照し、actionable
+    // な原因 (license/consent) が支配的なら「設定を直してから実行」を促す。
+    // 「とりあえず押した → 全件 license_limit で落ちる → 月次上限を浪費」を防ぐ。
+    let warnMsg = "";
+    if (failureStats?.top && failureStats.top.count >= 2) {
+      const b = failureStats.top.bucket;
+      if (b === "license" || b === "consent") {
+        warnMsg =
+          `\n\n⚠️ 直近の失敗 ${failureStats.total} 件中 ${failureStats.top.count} 件は「${failureStats.top.hint}」で落ちています。\n` +
+          `先に設定を直してから実行することをおすすめします。`;
+      }
+    }
+
     const ok = window.confirm(
       `${count} 枚の領収書を Claude OCR にかけて自動仕訳します。\n\n` +
-        `Claude API への画像送信が ${count} 回発生します (ライセンスキーの月次使用量を消費)。\n\n` +
+        `Claude API への画像送信が ${count} 回発生します (ライセンスキーの月次使用量を消費)。${warnMsg}\n\n` +
         `続行しますか?`
     );
     if (!ok) return;

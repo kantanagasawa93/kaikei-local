@@ -63,64 +63,57 @@ scripts/verify-app.sh smoke          # 上記を順に
 
 CLI 直叩き: `/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei --verify-help`
 
-## 次ラウンド (Round 5) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 6) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊅ → ㊆ → ㊇ → ㊈ → ㊉。
+推し優先順は ㊊ → ㊋ → ㊌ → ㊍ → ㊎。
 
-### ㊅ v0.3.0 実発火 (再オファー) ★★★★★
-- 目的: Round 4 ㊀ で precheck/changelog/build-all.sh の動的 version まで
-  揃えた。あとは APPLE_* env を渡して `scripts/release.sh v0.3.0` を打つだけ
-- 対象: ユーザ手元シェル (Claude チャット側からは認証情報無く打てない)
-- 確認手順:
+### ㊊ v0.3.0 公証付きリリース実発火 ★★★★★
+- 目的: Round 5 までで NOTARIZE_SKIP=1 までは Claude で打てるが、Gatekeeper 警告が
+  出ない正式 DMG はユーザの手元で公証付き発火が必要
+- 手元手順 (再掲):
   ```
-  export APPLE_SIGNING_IDENTITY="..."
-  export APPLE_ID="..."
+  # Apple Developer Account: https://appleid.apple.com で app-specific password 生成
+  xcrun notarytool store-credentials AC_PASSWORD \
+    --apple-id "k.nagasawa.pc@gmail.com" \
+    --team-id "6FU765RJ9M" \
+    --password "<app-specific-password>"
+  export APPLE_SIGNING_IDENTITY="Developer ID Application: kanta nagasawa (6FU765RJ9M)"
+  export APPLE_ID="k.nagasawa.pc@gmail.com"
   export APPLE_PASSWORD="@keychain:AC_PASSWORD"
-  export APPLE_TEAM_ID="..."
-  scripts/release-precheck.sh v0.3.0   # 全項目 ✓ になることを確認
-  scripts/release.sh v0.3.0            # 実発火
+  export APPLE_TEAM_ID="6FU765RJ9M"
+  scripts/release-precheck.sh v0.3.0   # 全項目 ✓
+  scripts/release.sh v0.3.0            # 公証付きリリース
   ```
 
-### ㊆ 受信箱「自動仕訳予定」のスマートトリミング ★★★
-- 目的: 「領収書をすべて自動仕訳」を押す前に、Round 4 ㊁ の失敗バケット情報を
-  使って「これ押すと N 件はライセンス上限で必ず落ちますがそれでも実行?」と確認
-- 対象: `src/app/(app)/inbox/page.tsx` の handleJournalizeAll
-- やること:
-  - getFailureStats() で top バケットを参照
-  - actionable な原因 (license/consent) があれば対処を促すモーダル
-  - 「設定を開く」「無視して実行」「キャンセル」の三択
-- commit サイズ: 小 (~80 行)
+### ㊋ 受信箱「いますぐ仕訳化」の事前 warn (1 件単位) ★★★
+- 目的: Round 5 ㊆ で「全部仕訳化」前の事前 warn は付けたが、quickConfirmOne
+  にも同じロジックを入れる。1 件押す前にも license/consent エラーを止める
+- 対象: src/lib/auto-journal.ts: quickConfirmOne 冒頭で getFailureStats →
+  actionable な top 原因が 2 件以上で confirm
+- commit サイズ: 小 (~50 行)
 
-### ㊇ Vision OCR の hint 候補で receipts.new を pre-fill ★★★★
-- 目的: Round 3 ⓔ + Round 4 ㊃ の rich preview 分類器を、領収書手動登録の
-  入力欄に流し込む。AI OCR 不使用ユーザにも便利
-- 対象: `src/app/(app)/receipts/new/page.tsx` (inbox= クエリ受け取り側)
-- やること:
-  - inbox=ID で開いた時に photo_inbox から ocr_text を読み、
-    classifyReceiptLines で分類 → 最初の vendor 行を vendor_name に、
-    最初の total or amount 行から数字抽出して amount に、最初の date 行から
-    日付パースして date に流し込む
-  - 既存値があったら上書きしない
-- commit サイズ: 中 (~120 行)
+### ㊌ 受信箱から領収書詳細を直接 hover プレビュー ★★★
+- 目的: 受信箱カードを hover すると右側に領収書のフル画像 + Vision OCR の
+  rich preview が拡大表示されて、確定前にどんな写真かよく分かる
+- 対象: src/app/(app)/inbox/page.tsx
+- やること: portal で固定位置の preview pane、hover 出入り debounce
+- commit サイズ: 中 (~150 行)
 
-### ㊈ migration v4 の二重実行で attempts が 0 にリセットされる問題 ★★
-- 目的: Round 3 ⓐ の migration recovery で v4 が再 run された時に
-  attempts/claude_result_json/last_error が初期値に戻る
-  (CREATE TABLE photo_inbox_v4 の SELECT が新規カラムを含まないため)
-- 対象: `src-tauri/src/migrations.rs` の SCHEMA_V4_SQL
-- やること:
-  - "v4 が既に当たっている" ことを検出して skip するガードを冒頭に
-    (例: `SELECT 1 FROM pragma_table_info('photo_inbox') WHERE name='claude_result_json'`)
-  - もしくは v5 で「冪等な復旧用 v4」として上書き
-- commit サイズ: 小 (~60 行)
+### ㊍ 仕訳の「差し戻し」アクションを安全な undo に拡張 ★★★★
+- 目的: Round 4 ㊂ で「受信箱に戻す」を入れたが、誤操作で押しても元に戻せない
+- 対象: src/lib/auto-journal.ts: reverseJournalToInbox の前にスナップショット
+  を取っておき、直近 N 件は復元できるようにする (app_settings に JSON で保存)
+- UI: 仕訳帳に「直近の差し戻しを取り消す」ボタン
+- commit サイズ: 中〜大 (~200 行)
 
-### ㊉ 受信箱→領収書の手動登録動線で claude_result_json を再利用 ★★
-- 目的: 一度 AI OCR したけど未確定の photo_inbox 行 (例: state='receipt' で
-  Claude 結果を貰ったが json 解析に失敗) を、receipts.new で再利用
-- 対象: `src/app/(app)/receipts/new/page.tsx` + `src/lib/auto-journal.ts`
-- 機能: claude_result_json があれば「前回の OCR 結果を使う」ボタンを出す
-- commit サイズ: 小〜中 (~80 行)
+### ㊎ verify-app.sh の追加サブコマンド: navigate ★★
+- 目的: 「受信箱に飛んでスクショ」「設定 → AI OCR ログに飛んでスクショ」を
+  Claude 単独でやる動線。現状 osascript でキー操作が出来ない (TCC) のを
+  Tauri command 経由 (window.location 操作) で代替
+- 対象: src-tauri/src/lib.rs に navigate_to コマンド + scripts/verify-app.sh
+  に navigate サブコマンド
+- commit サイズ: 小〜中 (~100 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

@@ -617,6 +617,12 @@ pub fn run() {
             sql: migrations::SCHEMA_V4_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "photo_inbox_v4_cleanup",
+            sql: migrations::SCHEMA_V5_SQL,
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

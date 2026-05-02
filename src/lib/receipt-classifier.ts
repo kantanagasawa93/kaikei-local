@@ -290,3 +290,80 @@ export function classifyReceiptLines(text: string): { line: string; kind: LineKi
 
   return result;
 }
+
+// ────────────────────────────────────────────────────────────
+// Round 5 ㊇: receipts/new の pre-fill 用ヘルパ
+//
+// Vision OCR の生テキストから店名候補・金額・日付を抜いて、
+// 領収書手動登録フォームの初期値を作る。AI OCR を回さなくても
+// "そこそこ埋まっている" 状態を提供するのが目的。
+// ────────────────────────────────────────────────────────────
+
+export interface PrefillFromOcr {
+  vendor_name: string | null;
+  amount: number | null; // 数字のみ
+  date: string | null; // YYYY-MM-DD
+}
+
+/**
+ * OCR テキストから領収書フォームの初期値を抽出する。
+ *
+ * 規則:
+ *   - vendor_name: 最初の kind='vendor' 行 (trim)
+ *   - amount: 最初の kind='total' 行があればそこから、無ければ最後の
+ *     kind='amount' 行から (最大の数値が「合計っぽい」ヒューリスティック)
+ *   - date: 最初の kind='date' 行を ISO 形式に変換
+ */
+export function prefillFromOcr(text: string): PrefillFromOcr {
+  const lines = classifyReceiptLines(text);
+
+  const vendorLine = lines.find((l) => l.kind === "vendor");
+
+  // total があれば優先、なければ最後の amount 行 (合計は通常 receipt の下にある)
+  const totalLine = lines.find((l) => l.kind === "total");
+  const amountLines = lines.filter((l) => l.kind === "amount");
+  const amountSource = totalLine ?? amountLines[amountLines.length - 1];
+
+  let amount: number | null = null;
+  if (amountSource) {
+    // ¥1,234 / 1,234 円 / 1234 から数字を全部抜き、最大値を採用
+    const matches = amountSource.line.match(/[\d,]+/g) ?? [];
+    const nums = matches
+      .map((s) => parseInt(s.replace(/,/g, ""), 10))
+      .filter((n) => !isNaN(n) && n > 0);
+    if (nums.length > 0) {
+      amount = Math.max(...nums);
+    }
+  }
+
+  let date: string | null = null;
+  const dateLine = lines.find((l) => l.kind === "date");
+  if (dateLine) {
+    // 2025/01/02 / 2025-01-02
+    const slash = dateLine.line.match(/(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})/);
+    if (slash) {
+      const [, y, m, d] = slash;
+      date = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+    } else {
+      // 2025年1月2日
+      const jp = dateLine.line.match(/(\d{4})年\s?(\d{1,2})月\s?(\d{1,2})/);
+      if (jp) {
+        const [, y, m, d] = jp;
+        date = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+      }
+      // 令和7年1月2日 → 2025-01-02 (令和元年=2019)
+      const reiwa = dateLine.line.match(/令和\s?(\d+)年\s?(\d{1,2})月\s?(\d{1,2})/);
+      if (!date && reiwa) {
+        const [, ry, m, d] = reiwa;
+        const y = 2018 + parseInt(ry, 10);
+        date = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+      }
+    }
+  }
+
+  return {
+    vendor_name: vendorLine ? vendorLine.line.trim() : null,
+    amount,
+    date,
+  };
+}
