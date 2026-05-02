@@ -32,6 +32,92 @@ export interface AutoJournalResult {
   errors: string[];
 }
 
+/**
+ * Round 7 ㊐ 借方を品目で分割するヘルパ。
+ *
+ * items を suggestAccount で分類 → 同じ勘定科目の品目をグループ化 → 各
+ * グループに金額を「品目数で按分 (端数は最初のグループに寄せる)」して返す。
+ *
+ * 1 グループしかない場合は単一行になる (従来挙動を保つ)。
+ */
+interface DebitGroup {
+  account_code: string;
+  account_name: string;
+  amount: number;
+  memo: string | null;
+}
+
+export function splitDebitByItems(
+  items: string[],
+  defaultCode: string,
+  defaultName: string,
+  totalAmount: number,
+): DebitGroup[] {
+  const trimmed = items.map((s) => s.trim()).filter((s) => s.length > 0);
+  if (trimmed.length < 2 || totalAmount <= 0) {
+    return [
+      {
+        account_code: defaultCode,
+        account_name: defaultName,
+        amount: totalAmount,
+        memo: null,
+      },
+    ];
+  }
+
+  // 各品目に suggestAccount をかける
+  const buckets = new Map<string, { name: string; items: string[] }>();
+  for (const item of trimmed) {
+    const acc = suggestAccount(item);
+    const code = acc?.code ?? defaultCode;
+    const name = acc?.name ?? defaultName;
+    const cur = buckets.get(code);
+    if (cur) {
+      cur.items.push(item);
+    } else {
+      buckets.set(code, { name, items: [item] });
+    }
+  }
+
+  // 1 グループなら単一行
+  if (buckets.size < 2) {
+    return [
+      {
+        account_code: defaultCode,
+        account_name: defaultName,
+        amount: totalAmount,
+        memo: null,
+      },
+    ];
+  }
+
+  // 2 グループ以上: 件数で按分。端数 (1 円差) は最初のグループに加算
+  const groups: DebitGroup[] = [];
+  let allocated = 0;
+  const entries = Array.from(buckets.entries());
+  for (let i = 0; i < entries.length; i++) {
+    const [code, info] = entries[i];
+    const ratio = info.items.length / trimmed.length;
+    let amount = Math.floor(totalAmount * ratio);
+    if (i === 0) {
+      // 最後に端数を first に足す処理は二重ループ避けで仮置き
+    }
+    allocated += amount;
+    groups.push({
+      account_code: code,
+      account_name: info.name,
+      amount,
+      memo: `自動分割 (${info.items.length}品: ${info.items.join("/").slice(0, 40)})`,
+    });
+  }
+  // 端数調整: 配分済みと total の差を first group に寄せる
+  const diff = totalAmount - allocated;
+  if (diff !== 0 && groups.length > 0) {
+    groups[0].amount += diff;
+  }
+  return groups;
+}
+
 async function readFileAsBase64(path: string): Promise<{ base64: string; mediaType: string }> {
   // Rust 側の read_image_file コマンドで読む (plugin-fs のスコープ問題を回避)
   const { invoke } = await import("@tauri-apps/api/core");
@@ -145,7 +231,10 @@ export async function autoJournalizeOne(
     doc_type: "receipt",
   });
 
-  // journals 行 + journal_lines 2 行 (借方: 経費 / 貸方: 現金)
+  // journals 行 + journal_lines (借方: 経費 / 貸方: 現金)
+  // Round 7 ㊐: items[] が複数の異なる勘定科目候補を含む時は、勘定科目ごとに
+  // 別 journal_line に分割する (品目数で按分。価格までは取れていない)。
+  // 1 グループ (品目なし or 全部同じ科目) なら従来通り単一 line。
   const journalDate = ocr.date || new Date().toISOString().slice(0, 10);
   const amount = ocr.amount ?? 0;
   const journalId = crypto.randomUUID();
@@ -156,17 +245,23 @@ export async function autoJournalizeOne(
     receipt_id: receiptId,
   });
 
-  const taxAmount = Math.floor((amount * 10) / 110);
-  await db.from("journal_lines").insert({
-    id: crypto.randomUUID(),
-    journal_id: journalId,
-    account_code: accountCode,
-    account_name: accountName,
-    debit_amount: amount,
-    credit_amount: 0,
-    tax_code: "P10",
-    tax_amount: taxAmount,
-  });
+  // 借方分割: items を suggestAccount でグループ化
+  const debitGroups = splitDebitByItems(ocr.items ?? [], accountCode, accountName, amount);
+  for (const g of debitGroups) {
+    const taxAmount = Math.floor((g.amount * 10) / 110);
+    await db.from("journal_lines").insert({
+      id: crypto.randomUUID(),
+      journal_id: journalId,
+      account_code: g.account_code,
+      account_name: g.account_name,
+      debit_amount: g.amount,
+      credit_amount: 0,
+      tax_code: "P10",
+      tax_amount: taxAmount,
+      memo: g.memo ?? null,
+    });
+  }
+  // 貸方は合計を 1 行で
   await db.from("journal_lines").insert({
     id: crypto.randomUUID(),
     journal_id: journalId,

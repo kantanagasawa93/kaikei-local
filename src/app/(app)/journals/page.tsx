@@ -14,13 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw } from "lucide-react";
+import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw, Download } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   reverseJournalToInbox,
   undoLastReverse,
   getReverseUndoCount,
 } from "@/lib/auto-journal";
+import { buildJournalsCsv, downloadCsv } from "@/lib/journal-export";
 import { toast } from "@/lib/toast";
 import type { Journal, JournalLine } from "@/types";
 
@@ -50,6 +51,28 @@ export default function JournalsPage() {
       .select("*, journal_lines(*)")
       .order("date", { ascending: false });
     if (data) setJournals(data);
+  }
+
+  // ㊒ Round 7: 仕訳 CSV エクスポート (画像 URL コラム + 受信箱由来フラグ込み)
+  async function handleExportCsv() {
+    try {
+      // monthFilter ("YYYY-MM") があれば、その月の 1 日〜末日でフィルタ
+      let from: string | null = null;
+      let to: string | null = null;
+      if (monthFilter) {
+        from = `${monthFilter}-01`;
+        // 月末は次月 1 日 - 1 日。シンプルに各月 31 日として lte で十分 (実 SQL は文字列比較)
+        const [y, m] = monthFilter.split("-").map(Number);
+        const last = new Date(y, m, 0).getDate(); // m は 1-12 → 月末
+        to = `${monthFilter}-${String(last).padStart(2, "0")}`;
+      }
+      const csv = await buildJournalsCsv({ fromDate: from, toDate: to });
+      const fname = `kaikei_journals${monthFilter ? `_${monthFilter}` : ""}_${new Date().toISOString().slice(0, 10)}.csv`;
+      downloadCsv(csv, fname);
+      toast.success(`CSV を書き出しました (${fname})`);
+    } catch (e) {
+      toast.error(`CSV 書き出しに失敗: ${(e as Error).message}`);
+    }
   }
 
   // ㊍ undo: app_settings に積んでおいた直近の差し戻しスナップショットから
@@ -127,6 +150,11 @@ export default function JournalsPage() {
               <Badge variant="secondary" className="ml-2 text-[10px]">{undoCount}</Badge>
             </Button>
           )}
+          {/* ㊒ CSV エクスポート — 月フィルタ適用、画像 URL + 受信箱フラグ込み */}
+          <Button variant="outline" onClick={handleExportCsv} title="仕訳帳を CSV でダウンロード (画像 URL + 受信箱由来フラグ込み)">
+            <Download className="h-4 w-4 mr-1" />
+            CSV
+          </Button>
           <Link href="/journals/new">
             <Button>
               <Plus className="h-4 w-4 mr-1" />

@@ -367,3 +367,69 @@ export function prefillFromOcr(text: string): PrefillFromOcr {
     date,
   };
 }
+
+// ────────────────────────────────────────────────────────────
+// Round 7 ㊑ 自動破棄ルール (dismissed パターン学習)
+//
+// ユーザーが過去に「破棄」「違う」とマークした写真の OCR テキストを使って、
+// 新しい candidate がそれらと十分似ていれば初期 state を 'dismissed' にする。
+//
+// 似ている = ジャッカード類似度 (キーワード集合の |A∩B| / |A∪B|) が
+// 閾値以上 (デフォルト 0.5) という単純実装。本格的な ML はやらないが、
+// 「Wi-Fi 案内」「機器ラベル」「メニュー写真」のような繰り返しの偽陽性が
+// 受信箱に並ばなくなる効果が大きい。
+// ────────────────────────────────────────────────────────────
+
+/** OCR テキストから distinctive な短いキーワードを取り出す */
+export function extractKeywordSet(text: string): Set<string> {
+  if (!text) return new Set();
+  const set = new Set<string>();
+  // 日本語: 2 文字以上の漢字/カナ連続を拾う
+  const jpRe = /[一-鿿぀-ゟ゠-ヿ]{2,}/g;
+  for (const m of text.matchAll(jpRe)) {
+    if (m[0].length >= 2 && m[0].length <= 12) set.add(m[0]);
+  }
+  // 英数字: 3 文字以上の英単語
+  const enRe = /[A-Za-z][A-Za-z0-9]{2,}/g;
+  for (const m of text.matchAll(enRe)) {
+    set.add(m[0].toLowerCase());
+  }
+  return set;
+}
+
+/** ジャッカード類似度 (0.0〜1.0) */
+export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersect = 0;
+  for (const x of a) if (b.has(x)) intersect++;
+  const union = a.size + b.size - intersect;
+  if (union === 0) return 0;
+  return intersect / union;
+}
+
+/**
+ * 過去に dismissed / not_receipt にされた写真の OCR テキスト集合を渡し、
+ * 新規 candidate のテキストがどれかと十分似ているか判定する。
+ *
+ * @param newText 新しい OCR テキスト
+ * @param pastTexts 過去の dismissed / not_receipt OCR テキスト一覧
+ * @param threshold 0.0〜1.0 (既定 0.5)
+ * @returns 似ていれば true (= 自動 dismissed にすべき)
+ */
+export function shouldAutoDismiss(
+  newText: string | null | undefined,
+  pastTexts: string[],
+  threshold = 0.5,
+): boolean {
+  if (!newText || pastTexts.length === 0) return false;
+  const newSet = extractKeywordSet(newText);
+  if (newSet.size < 3) return false; // 短すぎるテキストは判定不能 (誤判定避ける)
+  for (const past of pastTexts) {
+    const pastSet = extractKeywordSet(past);
+    if (pastSet.size < 3) continue;
+    if (jaccardSimilarity(newSet, pastSet) >= threshold) {
+      return true;
+    }
+  }
+  return false;
+}

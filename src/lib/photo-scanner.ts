@@ -16,7 +16,7 @@
  */
 
 import { db } from "@/lib/localDb";
-import { classifyReceipt } from "@/lib/receipt-classifier";
+import { classifyReceipt, shouldAutoDismiss } from "@/lib/receipt-classifier";
 
 export interface ScannedPhoto {
   asset_id: string;
@@ -96,6 +96,8 @@ export interface ScanResult {
   newPhotos: number;
   receiptCount: number;
   errors: string[];
+  /** Round 7 ㊑: 自動破棄ルールで初期 dismissed になった件数 */
+  autoDismissed?: number;
 }
 
 /**
@@ -147,8 +149,20 @@ export async function scanNow(
     throw new Error(msg);
   }
 
+  // Round 7 ㊑ 自動破棄ルール: ユーザーが過去に dismissed / not_receipt と
+  // マークしたテキスト集合を取り、新規 candidate と類似していれば直接 dismissed。
+  // 大量ライブラリでも速いように 1 回だけ取得して in-memory で照合。
+  const { data: dismissedRows } = await db
+    .from("photo_inbox")
+    .select("ocr_text")
+    .in("state", ["dismissed", "not_receipt"]);
+  const dismissedTexts = ((dismissedRows as { ocr_text: string | null }[] | null) ?? [])
+    .map((r) => r.ocr_text)
+    .filter((t): t is string => !!t);
+
   let newPhotos = 0;
   let receiptCount = 0;
+  let autoDismissed = 0;
   for (const photo of scanned) {
     try {
       // 既存の asset_id があるかチェック
@@ -162,7 +176,7 @@ export async function scanNow(
       // Vision OCR + 領収書スコアリング (完全ローカル)
       let ocrText: string | null = null;
       let score: number | null = null;
-      let initialState: "candidate" | "receipt" | "not_receipt" = "candidate";
+      let initialState: "candidate" | "receipt" | "not_receipt" | "dismissed" = "candidate";
       try {
         const visionRes = await invoke<{ lines: string[]; joined: string; language: string }>(
           "vision_recognize_text",
@@ -174,6 +188,14 @@ export async function scanNow(
         initialState = cls.state;
       } catch (e) {
         console.warn(`vision OCR failed for ${photo.asset_id}:`, e);
+      }
+
+      // Round 7 ㊑: classify 結果が receipt になっていない場合のみ、
+      // 過去の dismissed パターンと類似度を見て自動破棄。
+      // (receipt 判定の写真は確実に領収書なので学習で潰さない)
+      if (initialState !== "receipt" && ocrText && shouldAutoDismiss(ocrText, dismissedTexts)) {
+        initialState = "dismissed";
+        autoDismissed++;
       }
 
       await db.from("photo_inbox").insert({
@@ -215,7 +237,7 @@ export async function scanNow(
     })
     .eq("id", logId);
 
-  return { scanned: scanned.length, newPhotos, receiptCount, errors };
+  return { scanned: scanned.length, newPhotos, receiptCount, errors, autoDismissed };
 }
 
 export interface InboxRow {
