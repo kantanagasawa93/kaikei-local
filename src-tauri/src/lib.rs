@@ -605,6 +605,24 @@ pub fn run() {
             }
         }
 
+        // Round 12 ㉬ --start-route=/route — exit せず、起動完了後に
+        // NavigateBridge が control file を pickup する形で初回ナビゲート。
+        // 用途: dev 中に `kaikei --start-route=/inbox` で起動直後に受信箱を開く。
+        // last_route 復元 (Round 11 ㉩) よりも優先 (NavigateBridge poll で
+        // 上書きされる)。
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--start-route=")) {
+            let route = arg.strip_prefix("--start-route=").unwrap_or("/");
+            let app_data = verify_app_data_dir();
+            let _ = std::fs::create_dir_all(&app_data);
+            let target = app_data.join(".navigate-target");
+            if let Err(e) = std::fs::write(&target, route) {
+                eprintln!("--start-route: failed to write navigate target: {}", e);
+            } else {
+                eprintln!("[start-route] {} (control file = {})", route, target.display());
+            }
+            // exit せず通常の Builder フローに進む
+        }
+
         if args.iter().any(|a| a == "--verify-help") {
             println!(
                 "{}",
@@ -620,6 +638,8 @@ pub fn run() {
                     "                           [+ --errors-only で WARN/ERR 行のみ]\n",
                     "  --navigate=<route>       起動中のアプリに次のルートへ遷移するよう指示\n",
                     "                           (例: --navigate=/inbox)\n",
+                    "  --start-route=<route>    GUI 起動時に直接そのルートに飛ぶ\n",
+                    "                           (例: --start-route=/inbox)\n",
                     "  --test-ocr=<path>        画像を Vision OCR にかけて結果を表示\n",
                     "  --test-doc=<path>        画像に文書矩形が検出されるか表示\n",
                     "  --launchd-status         LaunchAgent の状態を JSON 表示\n",

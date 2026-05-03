@@ -791,6 +791,44 @@ export async function reverseJournalToInbox(journalId: string): Promise<string |
 }
 
 /**
+ * Round 12 ㉭: 仕訳編集画面から「AI OCR で再仕訳化」を 1 クリックで。
+ *
+ * 流れ:
+ *   1. reverseJournalToInbox(journalId) で受信箱に戻す (undo stack に記録される)
+ *   2. 戻した photo_inbox 行を 'receipt' に上げる
+ *   3. autoJournalizeOne を呼んで AI OCR + 仕訳作成
+ *   4. 新しい receipt_id を返す (UI で /journals に戻れる)
+ *
+ * 失敗ケース:
+ *   - 受信箱由来でない仕訳 (photo_inbox に紐付かない) → エラー throw
+ *   - AI OCR 失敗 → photo_inbox は state='receipt_failed' に落ちる
+ *     (autoJournalizeOne で永続化済み)、呼出元に throw
+ */
+export async function rejournalize(journalId: string): Promise<string> {
+  const inboxId = await reverseJournalToInbox(journalId);
+  if (!inboxId) {
+    throw new Error("受信箱由来でない仕訳のため再仕訳化できません");
+  }
+  // photo_inbox を 'receipt' 状態に上げてから autoJournalizeOne
+  await db
+    .from("photo_inbox")
+    .update({ state: "receipt", last_error: null })
+    .eq("id", inboxId);
+  const { data } = await db
+    .from("photo_inbox")
+    .select("id, file_path, ocr_text, attempts")
+    .eq("id", inboxId)
+    .single();
+  const row = data as
+    | { id: string; file_path: string | null; ocr_text: string | null; attempts: number | null }
+    | null;
+  if (!row) throw new Error("受信箱行が見つかりません");
+  const newReceiptId = await autoJournalizeOne(row);
+  if (!newReceiptId) throw new Error("再仕訳化が空の結果を返しました");
+  return newReceiptId;
+}
+
+/**
  * 直近の差し戻しを取り消して、journal/lines/receipt/photo_inbox を全部
  * 元に戻す (Round 6 ㊍).
  *

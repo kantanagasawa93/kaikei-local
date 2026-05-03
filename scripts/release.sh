@@ -50,6 +50,32 @@ if [ -z "${SKIP_PRECHECK:-}" ]; then
   fi
 fi
 
+# 0.5 Round 12 ㉪: リモート main との同期確認。
+# gh release create は HEAD の commit にタグを打つので、未 push の commit が
+# あると「DMG はビルドされたが、release は古い commit を指している」事故が
+# 起きる。事前に同期チェックして必要なら push する。
+if [ -z "${SKIP_PUSH_CHECK:-}" ]; then
+  echo ""
+  echo "==> 0.5 リモート main との同期確認"
+  git fetch origin >/dev/null 2>&1 || true
+  AHEAD=$(git rev-list --count "@{u}..HEAD" 2>/dev/null || echo "0")
+  BEHIND=$(git rev-list --count "HEAD..@{u}" 2>/dev/null || echo "0")
+  if [ "$BEHIND" -gt 0 ]; then
+    echo "ERROR: ローカルがリモートより $BEHIND コミット遅れています — git pull してから再実行"
+    exit 1
+  fi
+  if [ "$AHEAD" -gt 0 ]; then
+    echo "  ローカルがリモートより $AHEAD コミット進んでいます。push してから release を打ちます。"
+    if [ -z "${SKIP_PUSH:-}" ]; then
+      git push origin HEAD
+    else
+      echo "  (SKIP_PUSH=1 のため push を skip — gh release create が失敗する可能性大)"
+    fi
+  else
+    echo "  ✓ リモートと同期済み"
+  fi
+fi
+
 # Rust toolchain
 if [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1090
