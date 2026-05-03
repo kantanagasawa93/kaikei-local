@@ -192,16 +192,25 @@ export async function scanNow(
       if (existing) continue;
 
       // Vision OCR + 領収書スコアリング (完全ローカル)
-      // Round 10 ㉡: customWords に partners + 過去 vendors を渡す
+      // Round 10 ㉡ + Round 11 ㉦: customWords + ヒット数のレポート
       let ocrText: string | null = null;
       let score: number | null = null;
       let initialState: "candidate" | "receipt" | "not_receipt" | "dismissed" = "candidate";
       try {
-        const visionRes = await invoke<{ lines: string[]; joined: string; language: string }>(
-          "vision_recognize_text",
-          { filePath: photo.file_path, customWords }
-        );
+        const visionRes = await invoke<{
+          lines: string[];
+          joined: string;
+          language: string;
+          custom_word_hits?: Record<string, number>;
+        }>("vision_recognize_text", { filePath: photo.file_path, customWords });
         ocrText = visionRes.joined;
+        // ㉦: ヒットしたドメイン語があれば console に出して効果可視化
+        if (visionRes.custom_word_hits && Object.keys(visionRes.custom_word_hits).length > 0) {
+          const summary = Object.entries(visionRes.custom_word_hits)
+            .map(([w, c]) => `${w}×${c}`)
+            .join(", ");
+          console.info(`[vision] customWords hits for ${photo.asset_id}: ${summary}`);
+        }
         const cls = classifyReceipt(ocrText);
         score = cls.score;
         initialState = cls.state;

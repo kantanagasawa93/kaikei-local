@@ -75,39 +75,41 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 11) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 12) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉥ → ㉦ → ㉧ → ㉨ → ㉩。
+推し優先順は ㉪ → ㉫ → ㉬ → ㉭ → ㉮。
 
-### ㉥ v0.3.0 リリース ★★★★★
-- 手順: `scripts/release-setup-credentials.sh` を 1 度実行 (Round 10 で新設)
-  → `source ~/.kaikei-release.env && scripts/release.sh v0.3.0`
-- release.sh 末尾で verify-release.sh が自動健康診断、失敗時は
-  release-rollback.sh で取り消し可
+### ㉪ v0.3.0 リリース ★★★★★
+- Round 10 ㉠ + Round 11 ㉥ で動線完璧。あとは:
+  ```
+  scripts/release-setup-credentials.sh        # 1 度だけ対話
+  scripts/release.sh v0.3.0                   # 自動 source + 公証 + 健康診断
+  ```
 
-### ㉦ Vision customWords の効き具合を計測 ★★★
-- 目的: Round 10 ㉡ で customWords を入れたが、効いているかをユーザに
-  見せられない。OCR 結果に「customWords ヒット数」を返してログ出力
-- 対象: src-tauri/src/vision.rs に hit count 追加 + photo_inbox.ocr_text の
-  別カラムまたは inline タグで「ヒットした語」を保持
-- commit サイズ: 中 (~120 行)
+### ㉫ photo_inbox の自動破棄理由を Markdown レポートに集計 ★★★
+- 目的: Round 8 ㊗ の `auto_dismissed_reason` JSON を smoke-report で集計
+  「自動破棄 12 件中 8 件は『Wi-Fi/案内』パターン」と表示
+- 対象: scripts/verify-app.sh の cmd_smoke_report* に集計追加
+- commit サイズ: 小 (~60 行)
 
-### ㉧ 受信箱のキーボードショートカット拡張 ★★★
-- 目的: Round 10 ㉢ の続き。? でショートカット一覧モーダル / / で検索フォーカス
-- 対象: inbox/page.tsx
-- commit サイズ: 小 (~80 行)
+### ㉬ Tauri 起動引数 --start-route= ★★★
+- 目的: dev 中に `--start-route=/inbox` でアプリ起動直後に該当ページを開く
+  (Round 11 ㉩ の last_route とは別に、CLI から起動時に強制ページ遷移)
+- 対象: lib.rs の CLI + NavigateBridge の初回処理
+- commit サイズ: 小〜中 (~100 行)
 
-### ㉨ verify-app.sh smoke-report の HTML 出力モード ★★
-- 目的: Markdown だと iCloud スクショへの file:// 参照が壊れる。HTML 出力で
-  data-uri 埋込みも選べるように
-- 対象: scripts/verify-app.sh
+### ㉭ 仕訳明細編集に「再仕訳化」ボタン ★★★★
+- 目的: 編集画面で receipt_id がある仕訳に「AI OCR で再仕訳化」を出す。
+  押すと journal+receipt を消して photo_inbox.state='receipt' に戻し、
+  そのまま autoJournalizeOne を呼ぶ
+- 対象: src/app/(app)/journals/edit/page.tsx + src/lib/auto-journal.ts
 - commit サイズ: 中 (~150 行)
 
-### ㉩ Tauri ウィンドウ起動時に最後の URL を記憶 ★★
-- 目的: アプリを終了 → 再起動した時に、前回見ていた page (例: /inbox) に
-  戻るとユーザの作業効率が上がる
-- 対象: layout.tsx + app_settings に last_route を保存
+### ㉮ verify-app.sh の demo 動画にナレーションテキスト ★★
+- 目的: Round 10 ㉤ の demo 動画にシーンタイトル overlay を入れる
+  (ffmpeg drawtext で「ダッシュボード」「受信箱」等の白テキスト重ね)
+- 対象: scripts/verify-app.sh の cmd_demo
 - commit サイズ: 小 (~60 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
