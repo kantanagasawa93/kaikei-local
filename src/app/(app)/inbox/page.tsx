@@ -66,7 +66,12 @@ export default function InboxPage() {
   const [filter, setFilter] = useState<InboxState | "all">("candidate");
   const [, setAutoMode] = useState(false);
   const [journalizing, setJournalizing] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{
+    done: number;
+    total: number;
+    lastLabel?: string;
+    lastOk?: boolean;
+  } | null>(null);
   // ⓓ クイック確定中の inbox.id を持っておく (カード単位の押下中表示)
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
 
@@ -303,9 +308,22 @@ export default function InboxPage() {
     setJournalizing(true);
     setProgress({ done: 0, total: 0 });
     try {
-      const result = await autoJournalizeAllReceipts((done, total) =>
-        setProgress({ done, total })
-      );
+      // ㉱ Round 13: per-item の結果を直近ラベルとしてライブ更新
+      const result = await autoJournalizeAllReceipts((done, total, lastItem) => {
+        let lastLabel: string | undefined;
+        let lastOk: boolean | undefined;
+        if (lastItem) {
+          lastOk = lastItem.ok;
+          if (lastItem.ok) {
+            const v = lastItem.vendor || "(店名不明)";
+            const a = typeof lastItem.amount === "number" ? `¥${lastItem.amount.toLocaleString()}` : "";
+            lastLabel = `✓ ${v} ${a}`.trim();
+          } else {
+            lastLabel = `✗ ${lastItem.error?.slice(0, 50) ?? "失敗"}`;
+          }
+        }
+        setProgress({ done, total, lastLabel, lastOk });
+      });
       if (result.imported > 0) {
         toast.success(
           `${result.imported} 件を自動仕訳しました${
@@ -587,6 +605,23 @@ export default function InboxPage() {
         </div>
       </div>
 
+      {/* ㉱ Round 13: 仕訳化進行中の最新 1 件をライブ表示。直前 1 件の店名/金額で
+          「ちゃんと進んでいる」がひと目で分かる + 失敗時の理由も即時に見える */}
+      {journalizing && progress && progress.lastLabel && (
+        <div
+          className={`flex items-center gap-2 text-xs px-3 py-2 rounded border ${
+            progress.lastOk === false
+              ? "border-red-300 bg-red-50 text-red-900"
+              : "border-emerald-300 bg-emerald-50 text-emerald-900"
+          }`}
+        >
+          <span className="font-mono tabular-nums">
+            [{progress.done}/{progress.total}]
+          </span>
+          <span className="flex-1 truncate">{progress.lastLabel}</span>
+        </div>
+      )}
+
       {!isAuthorized && (
         <Card className="border-amber-300 bg-amber-50">
           <CardContent className="pt-6 flex items-start gap-3">
@@ -844,9 +879,15 @@ function InboxCard({
           )}
         </button>
         {row.receipt_score !== null && (
+          // ㉰ Round 13: score_signals_json があれば tooltip で内訳を見せる
           <Badge
             variant="secondary"
-            className="absolute top-2 right-2 text-[10px] font-mono"
+            className="absolute top-2 right-2 text-[10px] font-mono cursor-help"
+            title={
+              row.score_signals_json
+                ? formatScoreSignalsForTooltip(row.score_signals_json)
+                : undefined
+            }
           >
             score {row.receipt_score.toFixed(2)}
           </Badge>
@@ -960,6 +1001,29 @@ function InboxCard({
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * ㉰ Round 13: score_signals_json を tooltip 用テキストに整形。
+ * 例: 'score 0.85: + "領収書" (0.40), + "合計" (0.15), + 金額×2 (0.25), + 日付 (0.10)'
+ * 改行できないので " / " 区切り、最大 6 件までに切る。
+ */
+function formatScoreSignalsForTooltip(json: string): string | undefined {
+  try {
+    const parsed = JSON.parse(json) as {
+      score?: number;
+      signals?: { score?: number; reason?: string }[];
+    };
+    const sigs = parsed.signals ?? [];
+    if (sigs.length === 0) return undefined;
+    const items = sigs
+      .slice(0, 6)
+      .map((s) => `${s.reason} (${(s.score ?? 0) >= 0 ? "+" : ""}${(s.score ?? 0).toFixed(2)})`);
+    const more = sigs.length > 6 ? ` … 他 ${sigs.length - 6} 件` : "";
+    return `score ${(parsed.score ?? 0).toFixed(2)}: ${items.join(" / ")}${more}`;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

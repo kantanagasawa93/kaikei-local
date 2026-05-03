@@ -484,6 +484,16 @@ CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
 CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
 "#;
 
+/// v7: classifier の signals[] (なぜ score=X になったか) を JSON で保存。
+///
+/// Round 13 ㉰: photo_inbox のカードで「receipt_score 0.85 がどこから来た?」
+/// を tooltip で見せられるよう、scanNow が JSON 化して保存する。
+/// SQLite ALTER TABLE ADD COLUMN は idempotent (デフォルト NULL) なので
+/// テーブル再作成不要。
+pub const SCHEMA_V7_SQL: &str = r#"
+ALTER TABLE photo_inbox ADD COLUMN score_signals_json TEXT;
+"#;
+
 /// v6: 自動破棄ルール (Round 7 ㊑) の判定理由を保存するカラム追加。
 ///
 /// Round 8 ㊗ 「透明性」のため、photo_inbox.auto_dismissed_reason に

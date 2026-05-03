@@ -27,6 +27,8 @@
 #                            smoke-report を回す (Ctrl+C で停止)
 #   demo [<out.mp4>]         主要 4 画面を screencapture x4 → ffmpeg で MP4
 #                            (既定: /tmp/kaikei-demo-<UTC>.mp4) ffmpeg 必要
+#   autorun [<msg>]          AUTOPUSH=1 必須。ビルド → smoke-report → commit
+#                            + push まで自動。main ブランチでは不可
 #   help                     ヘルプ
 #
 # 環境変数:
@@ -321,6 +323,68 @@ HTML
   echo "$out"
 }
 
+# Round 13 ㉳ — autorun: ビルド → smoke-report → 成功なら git commit + push
+#
+# Claude が PDCA を「人手介入なしで 1 ラウンド」走らせる時の自走モード。
+#
+# 安全策:
+#   - 必ず main 以外のブランチで実行 (current branch != main)
+#   - 環境変数 AUTOPUSH=1 が必須 (うっかり起動防止)
+#   - コミットメッセージは引数 or "PDCA autorun: <ts>" を default
+#   - smoke-report の生成に成功した時のみ commit + push
+#
+# 使い方:
+#   AUTOPUSH=1 scripts/verify-app.sh autorun "Round 13 自動コミット"
+cmd_autorun() {
+  if [ "${AUTOPUSH:-}" != "1" ]; then
+    echo "ERROR: AUTOPUSH=1 が必要です (うっかり起動防止)"
+    return 2
+  fi
+  local repo_root current_branch
+  repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+  cd "$repo_root"
+  current_branch=$(git rev-parse --abbrev-ref HEAD)
+  if [ "$current_branch" = "main" ]; then
+    echo "ERROR: main ブランチでは autorun を実行できません (別ブランチで作業してください)"
+    return 2
+  fi
+  if git diff-index --quiet HEAD --; then
+    echo "ERROR: コミット対象の変更がありません"
+    return 2
+  fi
+
+  local msg="${1:-PDCA autorun: $(date -u +%Y%m%dT%H%M%SZ)}"
+  echo "==> 1. ビルドと再差し替え"
+  osascript -e 'quit app "KAIKEI LOCAL"' 2>/dev/null || true
+  killall kaikei 2>/dev/null || true
+  sleep 1
+  if ! npm run build >/tmp/kaikei-autorun-build.log 2>&1; then
+    echo "  ✗ next build 失敗"; return 1
+  fi
+  if ! npx tauri build --bundles app --debug >/tmp/kaikei-autorun-tauri.log 2>&1; then
+    echo "  ✗ tauri build 失敗"; return 1
+  fi
+  rm -rf "/Applications/KAIKEI LOCAL.app"
+  cp -R "src-tauri/target/debug/bundle/macos/KAIKEI LOCAL.app" /Applications/
+  codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist \
+    --options runtime "/Applications/KAIKEI LOCAL.app" >/dev/null 2>&1 || true
+  open "/Applications/KAIKEI LOCAL.app"
+  sleep 5
+  echo "==> 2. smoke-report 生成"
+  local report
+  report=$(cmd_smoke_report 2>/dev/null) || true
+  if [ -z "$report" ] || [ ! -f "$report" ]; then
+    echo "  ✗ smoke-report 失敗"; return 1
+  fi
+  echo "  ✓ $report"
+
+  echo "==> 3. git commit + push"
+  git add -A
+  git commit -m "$msg" || true
+  git push origin "$current_branch"
+  echo "  ✓ pushed to origin/$current_branch"
+}
+
 cmd_smoke() {
   echo "==> simulate-scan"
   cmd_simulate_scan
@@ -587,6 +651,7 @@ main() {
     smoke-report-html|html)    cmd_smoke_report_html "$@" ;;
     watch)                     cmd_watch ;;
     demo|video)                cmd_demo "$@" ;;
+    autorun)                   cmd_autorun "$@" ;;
     help|-h|--help)            usage ;;
     *) echo "unknown subcommand: $sub" >&2; usage; exit 2 ;;
   esac

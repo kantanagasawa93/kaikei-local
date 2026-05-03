@@ -114,6 +114,31 @@ EOF
   fi
 fi
 
+# Round 13 ㉯: DRY_RUN=1 でビルド以降を全部 stub にして、何が実行されるかだけ
+# 表示する。precheck と push-check は通常通り走るので「リリース直前の最終確認」
+# として使える。
+if [ -n "${DRY_RUN:-}" ]; then
+  cat <<DRY
+
+==> DRY_RUN=1 — ビルド/署名/公証/upload は実行しません。
+
+以下のステップが実行される予定です:
+  1. tauri build --bundles app (--target x86_64-apple-darwin も)
+  2. .app 署名 (codesign with $APPLE_SIGNING_IDENTITY)
+  3. DMG 自前作成 (scripts/make-dmg.sh)
+  4. notarytool submit + stapler staple
+     ($([ -n "${NOTARIZE_SKIP:-}" ] && echo "(NOTARIZE_SKIP=1 — 公証 skip)" || echo "(公証あり)"))
+  5. CHANGELOG.md から v$VERSION セクションを抽出 → release notes
+  6. gh release create $TAG (or upload で既存 release に差し替え)
+  7. verify-release.sh QUICK=1 で URL 200 健康診断
+
+実打ちは DRY_RUN を外して再実行してください:
+  scripts/release.sh $TAG
+
+DRY
+  exit 0
+fi
+
 # 1. ビルド
 ASSETS=()
 if [ -n "${UNSIGNED:-}" ]; then

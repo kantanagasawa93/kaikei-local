@@ -217,16 +217,23 @@ async fn read_image_file(
 ///
 /// Round 10 ㉡: 第 2 引数 customWords (Optional) で取引先名・店名等の
 /// 固有名詞をバイアス用辞書として渡せる。指定なしなら従来挙動。
+/// Round 13 ㉲: 第 3 引数 twoPass=true で日英両言語の独立 OCR を結合 (約 2 倍遅い)。
 #[tauri::command]
 async fn vision_recognize_text(
     file_path: String,
     custom_words: Option<Vec<String>>,
+    two_pass: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
         let words = custom_words.unwrap_or_default();
+        let two_pass = two_pass.unwrap_or(false);
         let result = tokio::task::spawn_blocking(move || {
-            vision::recognize_text_with_words(&file_path, &words)
+            if two_pass {
+                vision::recognize_text_two_pass(&file_path, &words)
+            } else {
+                vision::recognize_text_with_words(&file_path, &words)
+            }
         })
         .await
         .map_err(|e| format!("join: {}", e))??;
@@ -234,7 +241,7 @@ async fn vision_recognize_text(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (file_path, custom_words);
+        let _ = (file_path, custom_words, two_pass);
         Err("vision OCR is only supported on macOS".into())
     }
 }
@@ -752,6 +759,12 @@ pub fn run() {
             version: 6,
             description: "photo_inbox_auto_dismissed_reason",
             sql: migrations::SCHEMA_V6_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "photo_inbox_score_signals_json",
+            sql: migrations::SCHEMA_V7_SQL,
             kind: MigrationKind::Up,
         },
     ];

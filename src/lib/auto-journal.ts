@@ -457,11 +457,27 @@ export async function getFailureStats(): Promise<FailureStats> {
 }
 
 /**
+ * Round 13 ㉱: per-item の結果を流すコールバック型。
+ * 各 1 件処理直後に呼ばれて、UI で「✓ スターバックス ¥980」のような
+ * リアルタイム feedback を出せる。
+ */
+export interface ItemProgress {
+  inboxId: string;
+  ok: boolean;
+  receiptId?: string;
+  vendor?: string | null;
+  amount?: number | null;
+  error?: string;
+}
+
+/**
  * 受信箱の state='receipt' を全部仕訳化する。
- * @param onProgress 各 1 件処理が終わるたびに呼ばれる
+ * @param onProgress (done, total, lastItem?) が各 1 件処理直後に呼ばれる。
+ *                   lastItem は Round 13 ㉱ で追加: 直前に処理した 1 件の
+ *                   詳細 (店名・金額・成否) を per-item streaming で流す
  */
 export async function autoJournalizeAllReceipts(
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number, lastItem?: ItemProgress) => void
 ): Promise<AutoJournalResult> {
   // 先にライセンス/同意のチェック (毎ループでチェックすると同じエラーが N 回出る)
   const consent = await hasAiOcrConsent();
@@ -493,17 +509,38 @@ export async function autoJournalizeAllReceipts(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const attempts = (row.attempts ?? 0) + 1;
+    let lastItem: ItemProgress;
     try {
-      await autoJournalizeOne(row);
+      const receiptId = await autoJournalizeOne(row);
       result.imported++;
+      // ㉱ 直近に保存された receipts 行から vendor / amount を引いて progress に
+      let vendor: string | null = null;
+      let amount: number | null = null;
+      if (receiptId) {
+        try {
+          const { data: rr } = await db
+            .from("receipts")
+            .select("vendor_name, amount")
+            .eq("id", receiptId)
+            .single();
+          const r = rr as { vendor_name: string | null; amount: number | null } | null;
+          vendor = r?.vendor_name ?? null;
+          amount = r?.amount ?? null;
+        } catch {
+          /* silent */
+        }
+      }
+      lastItem = {
+        inboxId: row.id,
+        ok: true,
+        receiptId: receiptId ?? undefined,
+        vendor,
+        amount,
+      };
     } catch (e) {
       result.failed++;
       const msg = (e as Error).message;
       result.errors.push(`${row.id}: ${msg}`);
-      // 失敗を photo_inbox に永続化:
-      // - state='receipt_failed' で受信箱の「失敗」タブに並ぶ
-      // - last_error に最後のエラーを残し、UI で原因を表示
-      // - attempts++ で何度失敗したか分かる
       try {
         await db
           .from("photo_inbox")
@@ -514,11 +551,11 @@ export async function autoJournalizeAllReceipts(
           })
           .eq("id", row.id);
       } catch {
-        // 永続化に失敗してもバッチ全体は止めない (受信箱は最悪 'receipt' に
-        // 戻ったままだが UI から再ボタンで復旧可能)
+        /* silent */
       }
+      lastItem = { inboxId: row.id, ok: false, error: msg };
     }
-    if (onProgress) onProgress(i + 1, rows.length);
+    if (onProgress) onProgress(i + 1, rows.length, lastItem);
   }
   return result;
 }
