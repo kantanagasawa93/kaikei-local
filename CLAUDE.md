@@ -75,42 +75,39 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 13) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 14) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉯ → ㉰ → ㉱ → ㉲ → ㉳。
+推し優先順は ㉴ → ㉵ → ㉶ → ㉷ → ㉸。
 
-### ㉯ v0.3.0 リリース ★★★★★
-- Round 12 までで release.sh は precheck / env auto-source / push-check /
-  CHANGELOG 連動 notes / verify-release / rollback 完備。
+### ㉴ v0.3.0 リリース ★★★★★
+- Round 13 までで release.sh は precheck / env auto-source / push-check /
+  notes / verify-release / rollback / DRY_RUN まで揃った。
 - 手元で 1 回: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㉰ classifier 内部の score 内訳を photo_inbox に保存 ★★★
-- 目的: なぜ score 0.85 になったかが「ブラックボックス」。signals[] を
-  JSON で保存して、受信箱カードで「なぜこの score?」を tooltip 表示
-- 対象: classifier.rs (Rust) + receipt-classifier.ts (TS) + photo_inbox に
-  score_signals_json カラム追加 (migration v7)
+### ㉵ Vision both-pass を受信箱の「再 OCR」ボタン化 ★★★★
+- 目的: Round 13 ㉲ で two-pass モードを実装したが、UI から発火する手段なし。
+  受信箱の OCR テキストプレビュー部に「再 OCR (両言語)」ボタンを追加
+- 対象: src/app/(app)/inbox/page.tsx + 新 Tauri command を直接呼ぶ
+- commit サイズ: 中 (~120 行)
+
+### ㉶ score_signals の visualization を強化 ★★★
+- 目的: Round 13 ㉰ で signals JSON を保存したが、tooltip 1 行だと読みにくい。
+  hover preview pane (Round 6 ㊌) に signals 内訳バーグラフを追加
+- 対象: src/app/(app)/inbox/page.tsx の HoverPreview
+- commit サイズ: 中 (~100 行)
+
+### ㉷ Tauri 終了時の secure data wipe ★★
+- 目的: ユーザが「アプリをアンインストールしたい」時の補助。`kaikei --wipe-data`
+  で app_data_dir 内 (kaikei.db / inbox/ / receipts/) を確認モーダル付き削除
+- 対象: lib.rs に CLI flag + UI 「データ全消去」 (要二重確認)
 - commit サイズ: 中 (~150 行)
 
-### ㉱ 受信箱の「全部 1 クリックで仕訳化 (1 件単位 streaming)」 ★★★★
-- 目的: Round 1 で「全部自動仕訳」は実装済みだが、進捗表示が「N/M」だけ。
-  各 1 件の結果 (店名・金額・科目) を逐次受信箱カード上にプレビュー
-- 対象: inbox/page.tsx の handleJournalizeAll に SSE 風の per-item callback
-- commit サイズ: 中 (~120 行)
-
-### ㉲ Vision OCR の言語自動判定改善 ★★★
-- 目的: 現在は kana/kanji 含むかで ja/en 切替の単純判定。中国語・韓国語の
-  領収書はあまりないが、混在テキスト (英字メニュー + 日本円表記) を
-  両言語で再 OCR して結合する戦略
-- 対象: vision.rs に both-pass モード追加
-- commit サイズ: 中 (~120 行)
-
-### ㉳ verify-app.sh の自動 commit + push (CI フリー) ★★
-- 目的: smoke-report が成功したら自動で git commit + push する開発モード。
-  Claude が PDCA を 1 ラウンド完了するまで人手介入なしの「自走」が可能に
-- 対象: scripts/verify-app.sh autorun (新サブコマンド)
-- 安全策: 直前に precheck 系 + main 以外のブランチ強制 + AUTOPUSH=1 必須
-- commit サイズ: 中 (~100 行)
+### ㉸ verify-app.sh autorun を CI 統合可能に ★★
+- 目的: Round 13 ㉳ の autorun は手動だが、GitHub Actions runner からも
+  使えるよう env 認識を強化 (CI=1 時は AUTOPUSH 自動 ON / branch チェック緩和)
+- 対象: .github/workflows/verify-round.yml に autorun ジョブを足す
+- commit サイズ: 中 (~80 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

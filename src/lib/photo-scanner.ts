@@ -193,9 +193,11 @@ export async function scanNow(
 
       // Vision OCR + 領収書スコアリング (完全ローカル)
       // Round 10 ㉡ + Round 11 ㉦: customWords + ヒット数のレポート
+      // Round 13 ㉰: classify の signals[] を JSON 化して保存
       let ocrText: string | null = null;
       let score: number | null = null;
       let initialState: "candidate" | "receipt" | "not_receipt" | "dismissed" = "candidate";
+      let scoreSignalsJson: string | null = null;
       try {
         const visionRes = await invoke<{
           lines: string[];
@@ -204,7 +206,6 @@ export async function scanNow(
           custom_word_hits?: Record<string, number>;
         }>("vision_recognize_text", { filePath: photo.file_path, customWords });
         ocrText = visionRes.joined;
-        // ㉦: ヒットしたドメイン語があれば console に出して効果可視化
         if (visionRes.custom_word_hits && Object.keys(visionRes.custom_word_hits).length > 0) {
           const summary = Object.entries(visionRes.custom_word_hits)
             .map(([w, c]) => `${w}×${c}`)
@@ -214,6 +215,16 @@ export async function scanNow(
         const cls = classifyReceipt(ocrText);
         score = cls.score;
         initialState = cls.state;
+        // ㉰ signals[] を JSON 化 (UI tooltip で展開する)
+        if (cls.signals && cls.signals.length > 0) {
+          scoreSignalsJson = JSON.stringify({
+            score: Number(cls.score.toFixed(3)),
+            signals: cls.signals.map((s) => ({
+              score: Number(s.score.toFixed(3)),
+              reason: s.reason,
+            })),
+          });
+        }
       } catch (e) {
         console.warn(`vision OCR failed for ${photo.asset_id}:`, e);
       }
@@ -250,6 +261,7 @@ export async function scanNow(
         state: initialState,
         receipt_score: score,
         auto_dismissed_reason: autoDismissedReason,
+        score_signals_json: scoreSignalsJson,
       });
       newPhotos++;
       if (initialState === "receipt") receiptCount++;
@@ -303,6 +315,8 @@ export interface InboxRow {
   attempts: number | null;
   // v6 追加カラム (Round 8 ㊗: 自動破棄理由 — JSON 文字列)
   auto_dismissed_reason: string | null;
+  // v7 追加カラム (Round 13 ㉰: score の内訳 signals[] — JSON 文字列)
+  score_signals_json: string | null;
 }
 
 /**
