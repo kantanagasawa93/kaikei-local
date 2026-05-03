@@ -22,6 +22,8 @@
 #   watch                    src/ src-tauri/src/ の変更を監視 →
 #                            自動で next build + tauri build + .app 差し替え +
 #                            smoke-report を回す (Ctrl+C で停止)
+#   demo [<out.mp4>]         主要 4 画面を screencapture x4 → ffmpeg で MP4
+#                            (既定: /tmp/kaikei-demo-<UTC>.mp4) ffmpeg 必要
 #   help                     ヘルプ
 #
 # 環境変数:
@@ -211,6 +213,57 @@ cmd_smoke() {
 # Round 4 で導入、Round 7 ㊓ で複数ページのスクショに拡張。
 # ラウンド完了時に「最後の検証はこういう状態だった」を残してユーザに引き継ぎ
 # やすくするため。
+# Round 10 ㉤ — 主要 UI フロー (ダッシュボード → 受信箱 → 仕訳帳 → 設定)
+# を navigate + screencapture で連続キャプチャし、ffmpeg で MP4 にまとめる。
+#
+# 出力: /tmp/kaikei-demo-<UTC>.mp4 (1 fps × 各画面 4 秒 = 16 秒程度)
+# 用途: リリース前のスモークデモを動画 1 個でユーザーに渡せる。
+#
+# ffmpeg が無ければ警告して終了。screencapture は標準。
+cmd_demo() {
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "ERROR: ffmpeg がインストールされていません — \`brew install ffmpeg\`"
+    return 1
+  fi
+  local ts
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  local out="${1:-/tmp/kaikei-demo-${ts}.mp4}"
+  local frame_dir
+  frame_dir=$(mktemp -d -t kaikei-demo-XXXXXX)
+  echo "==> demo 録画開始 (frames: $frame_dir)"
+
+  # 各シーンで 4 frame (= 4 秒@1fps) を取る
+  local frame_no=0
+  capture_scene() {
+    local route="$1"
+    local label="$2"
+    cmd_navigate "$route" >/dev/null 2>&1 || true
+    sleep 1.2  # NavigateBridge の poll 周期 + render
+    for _ in 1 2 3 4; do
+      frame_no=$((frame_no + 1))
+      local fname
+      fname=$(printf "%s/frame-%04d.png" "$frame_dir" "$frame_no")
+      cmd_ui_screenshot "$fname" >/dev/null 2>&1 || true
+      sleep 1
+    done
+    echo "  ✓ $label ($route)"
+  }
+
+  capture_scene "/dashboard" "ダッシュボード"
+  capture_scene "/inbox" "受信箱"
+  capture_scene "/journals" "仕訳帳"
+  capture_scene "/settings/ai-ocr-log" "AI OCR ログ"
+
+  echo "==> ffmpeg で MP4 化"
+  ffmpeg -y -framerate 1 \
+    -i "$frame_dir/frame-%04d.png" \
+    -c:v libx264 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
+    "$out" 2>&1 | tail -3
+
+  rm -rf "$frame_dir"
+  echo "$out"
+}
+
 cmd_smoke_report() {
   local ts
   ts=$(date -u +%Y%m%dT%H%M%SZ)
@@ -306,6 +359,23 @@ for k in sorted(buckets):
         echo ""
       fi
     done
+    # ㉣ Round 10: LLM (Claude チャット) が後から見て評価する欄をテンプレ
+    # として用意。レポート単体ではここは空のまま、チャットの Claude が
+    # 「このスクショ群を見て UI が壊れていないか」を評価して埋める。
+    echo "## LLM レビュー欄 (㉣)"
+    echo ""
+    echo "<!-- このセクションは Claude チャット側で埋める想定。"
+    echo "     スクショ群とログを基に "
+    echo "       1) 致命的な UI 異常 (空白画面 / クラッシュ / レンダー乱れ) があるか"
+    echo "       2) 直近ラウンドの新機能 (Round N の主要 PR) がスクショに映っているか"
+    echo "       3) アプリ本体ログ (WARN/ERR) に新規エラーが増えていないか"
+    echo "     を 3〜5 行でコメント -->"
+    echo ""
+    echo "- [ ] 致命的 UI 異常: なし / あり (詳細)"
+    echo "- [ ] 新機能の表示確認: <該当する場合の所見>"
+    echo "- [ ] ログに新規エラー: なし / あり (詳細)"
+    echo "- [ ] 全体所見: "
+    echo ""
     echo "---"
     echo "_このレポートは \`scripts/verify-app.sh smoke-report\` で生成されました_"
   } > "$out"
@@ -327,6 +397,7 @@ main() {
     smoke)                     cmd_smoke ;;
     smoke-report|report)       cmd_smoke_report "$@" ;;
     watch)                     cmd_watch ;;
+    demo|video)                cmd_demo "$@" ;;
     help|-h|--help)            usage ;;
     *) echo "unknown subcommand: $sub" >&2; usage; exit 2 ;;
   esac

@@ -70,6 +70,9 @@ export default function InboxPage() {
   // ⓓ クイック確定中の inbox.id を持っておく (カード単位の押下中表示)
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
 
+  // ㉢ Round 10: フォーカス対象カードの index (キーボード操作の基点)
+  const [focusIdx, setFocusIdx] = useState<number>(-1);
+
   // ㊌ hover preview ハンドラ: enter で 250ms 後に表示、leave で 100ms 後に消す
   const handleHoverEnter = (row: InboxRow) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
@@ -84,6 +87,88 @@ export default function InboxPage() {
       if (hoverTimer.current) clearTimeout(hoverTimer.current);
     };
   }, []);
+
+  // ㉢ Round 10: グローバルキーボードショートカット
+  // - ↑↓: focusIdx を移動
+  // - A: 領収書 / X: 違う / D: 破棄 / R: 未判定に戻す
+  // - Enter: receipt なら登録に進む、candidate なら「いますぐ仕訳化」
+  // - Space: hover preview をトグル
+  // - Esc: 選択解除 + フォーカスクリア
+  // 入力中 (input/textarea/contenteditable) は無効化
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (items.length === 0) return;
+
+      if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault();
+        setFocusIdx((i) => Math.min(items.length - 1, i < 0 ? 0 : i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault();
+        setFocusIdx((i) => Math.max(0, i < 0 ? 0 : i - 1));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        clearSelection();
+        setFocusIdx(-1);
+        setHovered(null);
+        return;
+      }
+
+      if (focusIdx < 0 || focusIdx >= items.length) return;
+      const row = items[focusIdx];
+
+      if (e.key === " ") {
+        e.preventDefault();
+        // Space で hover preview を toggle
+        setHovered((cur) => (cur && cur.id === row.id ? null : row));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (row.state === "receipt") {
+          router.push(`/receipts/new?inbox=${row.id}`);
+        } else if (row.state === "candidate" || row.state === "receipt_failed") {
+          void quickConfirm(row.id);
+        }
+        return;
+      }
+      const k = e.key.toLowerCase();
+      if (k === "a") {
+        e.preventDefault();
+        void markReceipt(row.id);
+      } else if (k === "x") {
+        e.preventDefault();
+        void markNotReceipt(row.id);
+      } else if (k === "d") {
+        e.preventDefault();
+        void dismiss(row.id);
+      } else if (k === "r") {
+        e.preventDefault();
+        void restoreToCandidate(row.id);
+      } else if (k === "s") {
+        // S = select / unselect (Cmd+クリックの代替)
+        e.preventDefault();
+        toggleSelected(row.id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, focusIdx]);
   // ㊁ 失敗パターン集計 (top バケットを「失敗」タブの近くにヒント表示)
   const [failureStats, setFailureStats] = useState<FailureStats | null>(null);
   // ㊌ Round 6: hover プレビュー対象 (右側 pane に拡大画像 + OCR を表示)
@@ -398,6 +483,10 @@ export default function InboxPage() {
             <p className="text-sm text-muted-foreground">
               iCloud 写真から文書検出 + キーワード判定で抽出した領収書候補
             </p>
+            {/* ㉢ Round 10: キーボードショートカットヒント (PC ユーザ向け) */}
+            <p className="text-[10px] text-muted-foreground/80 mt-1 font-mono">
+              ↑↓: 移動 / A: 領収書 / X: 違う / D: 破棄 / R: 未判定 / S: 選択 / Space: プレビュー / Enter: 確定
+            </p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -572,12 +661,13 @@ export default function InboxPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {items.map((it) => (
+          {items.map((it, idx) => (
             <InboxCard
               key={it.id}
               row={it}
               quickConfirming={quickConfirming === it.id}
               isSelected={selected.has(it.id)}
+              isFocused={focusIdx === idx}
               onToggleSelected={() => toggleSelected(it.id)}
               onHoverEnter={() => handleHoverEnter(it)}
               onHoverLeave={handleHoverLeave}
@@ -602,6 +692,7 @@ function InboxCard({
   row,
   quickConfirming,
   isSelected,
+  isFocused,
   onToggleSelected,
   onHoverEnter,
   onHoverLeave,
@@ -616,6 +707,7 @@ function InboxCard({
   row: InboxRow;
   quickConfirming: boolean;
   isSelected: boolean;
+  isFocused: boolean;
   onToggleSelected: () => void;
   onHoverEnter: () => void;
   onHoverLeave: () => void;
@@ -659,7 +751,7 @@ function InboxCard({
     <Card
       className={`overflow-hidden flex flex-col transition-shadow ${
         isSelected ? "ring-2 ring-primary shadow-md" : ""
-      }`}
+      } ${isFocused ? "ring-2 ring-amber-400 shadow-lg" : ""}`}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
     >

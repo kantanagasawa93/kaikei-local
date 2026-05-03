@@ -160,6 +160,24 @@ export async function scanNow(
     .map((r) => r.ocr_text)
     .filter((t): t is string => !!t);
 
+  // Round 10 ㉡: Vision OCR の customWords にドメイン語を注入する。
+  // partners.name (登録済み取引先) + receipts.vendor_name (過去 OCR で確定した
+  // 店名) を集めて固有名詞辞書を作る。重複排除 + 短すぎる語を除外。
+  const customWordsSet = new Set<string>();
+  try {
+    const { data: partners } = await db.from("partners").select("name");
+    for (const p of (partners as { name: string | null }[] | null) ?? []) {
+      if (p.name && p.name.length >= 2) customWordsSet.add(p.name.trim());
+    }
+    const { data: vendors } = await db.from("receipts").select("vendor_name");
+    for (const r of (vendors as { vendor_name: string | null }[] | null) ?? []) {
+      if (r.vendor_name && r.vendor_name.length >= 2) customWordsSet.add(r.vendor_name.trim());
+    }
+  } catch {
+    // 失敗しても OCR は走らせる (空配列 fallback)
+  }
+  const customWords = Array.from(customWordsSet).slice(0, 200); // Vision 上限気にして 200 で打ち切り
+
   let newPhotos = 0;
   let receiptCount = 0;
   let autoDismissed = 0;
@@ -174,13 +192,14 @@ export async function scanNow(
       if (existing) continue;
 
       // Vision OCR + 領収書スコアリング (完全ローカル)
+      // Round 10 ㉡: customWords に partners + 過去 vendors を渡す
       let ocrText: string | null = null;
       let score: number | null = null;
       let initialState: "candidate" | "receipt" | "not_receipt" | "dismissed" = "candidate";
       try {
         const visionRes = await invoke<{ lines: string[]; joined: string; language: string }>(
           "vision_recognize_text",
-          { filePath: photo.file_path }
+          { filePath: photo.file_path, customWords }
         );
         ocrText = visionRes.joined;
         const cls = classifyReceipt(ocrText);
