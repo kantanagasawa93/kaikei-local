@@ -110,3 +110,49 @@ jobs:
           name: KAIKEI-LOCAL-debug-app
           path: src-tauri/target/debug/bundle/macos/KAIKEI LOCAL.app
           retention-days: 7
+
+  # Round 14 ㉸ — autorun (NO_GUI smoke-report を CI でも回せる)
+  # GUI 起動不要モードで Markdown レポートだけ生成 → artifact 上げ。
+  # 通常の sanity ジョブの後、bundle と並列で動く。
+  autorun:
+    name: smoke-report (NO_GUI)
+    needs: sanity
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: tauri build (debug)
+        run: |
+          npm run build
+          npx tauri build --bundles app --debug
+
+      - name: smoke-report (NO_GUI)
+        run: |
+          # CI runner には PhotoKit 権限も TCC も無いので GUI 系を全 skip。
+          # DB は新規作成、photo_inbox 0 行だが Markdown は生成される。
+          # KAIKEI_BIN を指定しないと require_bin が失敗するので、ビルド済みの
+          # バイナリを直接指す
+          export KAIKEI_BIN="$PWD/src-tauri/target/debug/kaikei"
+          export NO_GUI=1
+          mkdir -p artifacts
+          out=$(./scripts/verify-app.sh smoke-report "artifacts/smoke-report.md")
+          echo "report: $out"
+
+      - name: Upload smoke-report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-report-md
+          path: artifacts/
+          retention-days: 14

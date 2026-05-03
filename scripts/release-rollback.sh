@@ -42,6 +42,12 @@ RESET="\033[0m"
 confirm() {
   local prompt="$1"
   if [ -n "${FORCE:-}" ] || [ -n "$DRY" ]; then return 0; fi
+  # Round 14 ㉴: CI=1 or 非対話シェル (stdin が tty でない) なら自動 NO
+  # ロールバックは破壊的なので、明示的な FORCE=1 が無い限り CI からは弾く
+  if [ -n "${CI:-}" ] || [ ! -t 0 ]; then
+    echo "${prompt} → (非対話シェル: skip。FORCE=1 で強制実行)" >&2
+    return 1
+  fi
   read -r -p "$prompt [y/N] " ans
   case "$ans" in
     [yY]|[yY][eE][sS]) return 0 ;;

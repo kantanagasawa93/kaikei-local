@@ -28,6 +28,7 @@ import {
   CheckSquare,
   Square,
   Search,
+  ScanText,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { db } from "@/lib/localDb";
@@ -38,6 +39,7 @@ import {
   scanNow,
   listInbox,
   setInboxState,
+  reocrInboxRow,
   getAuthStatus,
   type AuthStatus,
   type InboxRow,
@@ -74,6 +76,8 @@ export default function InboxPage() {
   } | null>(null);
   // ⓓ クイック確定中の inbox.id を持っておく (カード単位の押下中表示)
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
+  // ㉵ Round 14: 再 OCR 実行中の inbox.id (カード単位のスピナー)
+  const [reocrInProgress, setReocrInProgress] = useState<string | null>(null);
 
   // ㉢ Round 10: フォーカス対象カードの index (キーボード操作の基点)
   const [focusIdx, setFocusIdx] = useState<number>(-1);
@@ -435,6 +439,24 @@ export default function InboxPage() {
     }
   };
 
+  // ㉵ Round 14: 受信箱の 1 件を Vision で再 OCR (両言語独立 two-pass)。
+  // 英字メニューがひらがな化された等の OCR 失敗を救済する用途。
+  const reocrOne = async (inboxId: string, twoPass: boolean) => {
+    if (reocrInProgress) return;
+    setReocrInProgress(inboxId);
+    try {
+      const res = await reocrInboxRow(inboxId, { twoPass });
+      toast.success(
+        `再 OCR 完了 — score ${res.score?.toFixed(2) ?? "-"} / state ${res.state}`,
+      );
+      await refresh();
+    } catch (e) {
+      toast.error(`再 OCR 失敗: ${(e as Error).message}`);
+    } finally {
+      setReocrInProgress(null);
+    }
+  };
+
   // ⓓ クイック確定: 1 クリックで Claude OCR → receipt + journal 作成
   // Round 6 ㊋: BlockedByPattern (license/consent エラーが 2 件以上連続) は
   // 個別 modal で「設定を開く」を促し、それ以外のエラーは普通の toast.error
@@ -765,6 +787,7 @@ export default function InboxPage() {
               key={it.id}
               row={it}
               quickConfirming={quickConfirming === it.id}
+              reocring={reocrInProgress === it.id}
               isSelected={selected.has(it.id)}
               isFocused={focusIdx === idx}
               onToggleSelected={() => toggleSelected(it.id)}
@@ -776,6 +799,7 @@ export default function InboxPage() {
               onRestore={() => restoreToCandidate(it.id)}
               onRetryFailed={() => retryFailed(it.id)}
               onQuickConfirm={() => quickConfirm(it.id)}
+              onReocr={(twoPass) => reocrOne(it.id, twoPass)}
               onOpenForReceipt={() => {
                 router.push(`/receipts/new?inbox=${it.id}`);
               }}
@@ -790,6 +814,7 @@ export default function InboxPage() {
 function InboxCard({
   row,
   quickConfirming,
+  reocring,
   isSelected,
   isFocused,
   onToggleSelected,
@@ -801,10 +826,12 @@ function InboxCard({
   onRestore,
   onRetryFailed,
   onQuickConfirm,
+  onReocr,
   onOpenForReceipt,
 }: {
   row: InboxRow;
   quickConfirming: boolean;
+  reocring: boolean;
   isSelected: boolean;
   isFocused: boolean;
   onToggleSelected: () => void;
@@ -816,6 +843,7 @@ function InboxCard({
   onRestore: () => void;
   onRetryFailed: () => void;
   onQuickConfirm: () => void;
+  onReocr: (twoPass: boolean) => void;
   onOpenForReceipt: () => void;
 }) {
   // 画像表示は plugin-fs で生バイトを読んで Blob URL 化する。
@@ -997,6 +1025,23 @@ function InboxCard({
               未判定に戻す
             </Button>
           )}
+          {/* ㉵ Round 14: Vision OCR 再実行ボタン (Shift+クリックで両言語 two-pass)
+              imported / dismissed のカードでは出さない (= 既に確定/破棄済み) */}
+          {(row.state === "candidate" ||
+            row.state === "receipt" ||
+            row.state === "receipt_failed") && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={reocring}
+              onClick={(e) => onReocr(e.shiftKey)}
+              className="text-xs px-2 h-7 text-muted-foreground hover:text-foreground"
+              title="Vision OCR を再実行 (Shift+クリックで日英両言語の two-pass)"
+            >
+              <ScanText className={`h-3 w-3 mr-1 ${reocring ? "animate-pulse" : ""}`} />
+              {reocring ? "OCR中..." : "再 OCR"}
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1134,11 +1179,64 @@ function HoverPreview({
           {row.taken_at ? new Date(row.taken_at).toLocaleString("ja-JP") : "-"}
         </span>
       </div>
+      {/* ㉶ Round 14: signals[] のバーグラフ — どのキーワードがどれだけ score
+          に効いたかを横棒で。Round 13 ㉰ の tooltip より読みやすい */}
+      {row.score_signals_json && <SignalsBarChart json={row.score_signals_json} />}
       {row.ocr_text ? (
         <RichOcrPreview text={row.ocr_text} />
       ) : (
         <div className="text-[11px] text-muted-foreground italic">(OCR テキストなし)</div>
       )}
+    </div>
+  );
+}
+
+/**
+ * ㉶ Round 14: signals[] を 横棒バーグラフで表示。
+ * 各 signal を「絶対値で正規化した幅%」で並べ、+ は emerald、- は red で。
+ * 上位 8 件まで表示し、それ以下は折りたたみ。
+ */
+function SignalsBarChart({ json }: { json: string }) {
+  let parsed:
+    | { score?: number; signals?: { score?: number; reason?: string }[] }
+    | null = null;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  const sigs = (parsed?.signals ?? []).slice(0, 8);
+  if (sigs.length === 0) return null;
+  const maxAbs = Math.max(...sigs.map((s) => Math.abs(s.score ?? 0)), 0.01);
+  return (
+    <div className="my-2 p-2 bg-muted rounded text-[10px]">
+      <div className="text-muted-foreground mb-1 font-mono">
+        score 内訳 (上位 {sigs.length})
+      </div>
+      <ul className="space-y-0.5">
+        {sigs.map((s, i) => {
+          const v = s.score ?? 0;
+          const w = Math.max(2, Math.round((Math.abs(v) / maxAbs) * 100));
+          const positive = v >= 0;
+          return (
+            <li key={i} className="flex items-center gap-1.5">
+              <span className="font-mono tabular-nums w-12 text-right">
+                {positive ? "+" : ""}
+                {v.toFixed(2)}
+              </span>
+              <div className="flex-1 h-3 bg-background rounded overflow-hidden relative">
+                <div
+                  className={positive ? "bg-emerald-400/70" : "bg-red-400/70"}
+                  style={{ width: `${w}%`, height: "100%" }}
+                />
+              </div>
+              <span className="flex-shrink min-w-0 truncate" title={s.reason}>
+                {s.reason}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

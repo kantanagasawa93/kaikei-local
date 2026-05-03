@@ -630,6 +630,76 @@ pub fn run() {
             // exit せず通常の Builder フローに進む
         }
 
+        // Round 14 ㉷ --wipe-data: アンインストール補助。
+        // app_data_dir 配下 (kaikei.db / inbox/ / receipts/ / snapshots/ / 等) を
+        // バックアップしてから削除。--wipe-data --yes で確認 skip。
+        if args.iter().any(|a| a == "--wipe-data") {
+            let confirmed = args.iter().any(|a| a == "--yes" || a == "-y");
+            let app_data = verify_app_data_dir();
+            if !app_data.exists() {
+                println!("app data dir が存在しません: {}", app_data.display());
+                std::process::exit(0);
+            }
+            // 中身を一覧
+            let mut total_bytes: u64 = 0;
+            let mut entries: Vec<String> = Vec::new();
+            if let Ok(read) = std::fs::read_dir(&app_data) {
+                for e in read.flatten() {
+                    let p = e.path();
+                    let name = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    let size = e.metadata().ok().map(|m| m.len()).unwrap_or(0);
+                    total_bytes += size;
+                    entries.push(format!("  - {} ({} bytes)", name, size));
+                }
+            }
+            println!("削除対象: {}", app_data.display());
+            for e in &entries {
+                println!("{}", e);
+            }
+            println!("合計: {} bytes ({:.1} MB)", total_bytes, total_bytes as f64 / 1024.0 / 1024.0);
+
+            if !confirmed {
+                println!();
+                println!("これらを完全削除します。実行する場合は --yes を付けて再実行してください:");
+                println!("  kaikei --wipe-data --yes");
+                println!();
+                println!("バックアップが欲しい場合は手動で:");
+                println!("  cp -R \"{}\" \"{}.bak-$(date +%s)\"", app_data.display(), app_data.display());
+                std::process::exit(0);
+            }
+
+            // バックアップを必ず取る
+            let ts = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+            let backup = app_data.with_file_name(format!("dev.kaikei.app.bak-{}", ts));
+            match std::process::Command::new("cp")
+                .arg("-R")
+                .arg(&app_data)
+                .arg(&backup)
+                .status()
+            {
+                Ok(s) if s.success() => {
+                    println!("バックアップ: {}", backup.display());
+                }
+                _ => {
+                    eprintln!("バックアップ失敗 — 中止");
+                    std::process::exit(1);
+                }
+            }
+
+            // 削除
+            match std::fs::remove_dir_all(&app_data) {
+                Ok(_) => {
+                    println!("削除完了: {}", app_data.display());
+                    println!("(バックアップ: {})", backup.display());
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("削除失敗: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         if args.iter().any(|a| a == "--verify-help") {
             println!(
                 "{}",
@@ -652,6 +722,8 @@ pub fn run() {
                     "  --launchd-status         LaunchAgent の状態を JSON 表示\n",
                     "  --install-launchd=HH:MM  LaunchAgent を指定時刻でインストール\n",
                     "  --uninstall-launchd      LaunchAgent をアンインストール\n",
+                    "  --wipe-data [--yes]      app data dir をバックアップしてから完全削除\n",
+                    "                           (DB / inbox / receipts / snapshots) アンインストール補助\n",
                 ),
             );
             std::process::exit(0);
