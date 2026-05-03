@@ -5,7 +5,43 @@
 
 import { suggestAccount } from "@/lib/accounts";
 import { extractOcrFields, type PartialOcrFields } from "@/lib/partial-json";
-import type { OcrResult } from "@/types";
+import type { OcrResult, OcrItem } from "@/types";
+
+/**
+ * Round 8 ㊕: API レスポンスの items[] を string | {name, price} 混在で受けて
+ * OcrItem[] (string | {name, price | null}) に正規化する。
+ *
+ * - 文字列はそのまま (旧形式)
+ * - オブジェクトは name を必須、price を Number() で正規化 (失敗で null)
+ * - それ以外は捨てる
+ */
+function normalizeOcrItems(raw: unknown): OcrItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OcrItem[] = [];
+  for (const x of raw) {
+    if (typeof x === "string") {
+      if (x.trim().length > 0) out.push(x);
+    } else if (x && typeof x === "object") {
+      const obj = x as Record<string, unknown>;
+      const name = typeof obj.name === "string" ? obj.name.trim() : "";
+      if (!name) continue;
+      const priceRaw = obj.price;
+      let price: number | null = null;
+      if (typeof priceRaw === "number" && isFinite(priceRaw)) price = priceRaw;
+      else if (typeof priceRaw === "string") {
+        const n = Number(priceRaw.replace(/[,¥￥\s]/g, ""));
+        if (isFinite(n)) price = n;
+      }
+      out.push({ name, price });
+    }
+  }
+  return out;
+}
+
+/** items 配列から組合わせるテキスト (suggestAccount への入力用) */
+function itemsToCombinedText(items: OcrItem[]): string {
+  return items.map((it) => (typeof it === "string" ? it : it.name)).join(" ");
+}
 
 // デフォルトのAPIベース（独自ドメインが紐付くまでは Vercel のURL）
 const DEFAULT_API_BASE = "https://api.kaikei-local.com";
@@ -53,14 +89,8 @@ export async function ocrWithClaude(
   const json = await response.json();
 
   // 勘定科目を推測
-  const items: string[] = Array.isArray(json.items)
-    ? (json.items as unknown[]).filter((x) => typeof x === "string") as string[]
-    : [];
-  const combinedText = [
-    json.vendor_name || "",
-    ...items,
-    json.raw_text || "",
-  ].join(" ");
+  const items = normalizeOcrItems(json.items);
+  const combinedText = [json.vendor_name || "", itemsToCombinedText(items), json.raw_text || ""].join(" ");
   const suggested = suggestAccount(combinedText);
 
   return {
@@ -70,7 +100,7 @@ export async function ocrWithClaude(
     date: json.date || null,
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
-    items, // Round 7 ㊐: 仕訳分割で参照
+    items, // Round 7 ㊐ + Round 8 ㊕: 仕訳分割で参照 (price 付き対応)
     usage: json.usage,
   };
 }
@@ -168,12 +198,10 @@ export async function ocrWithClaudeStream(
     // パース失敗。partial が取れていれば最低限の result を返す。
   }
 
-  const items = Array.isArray(finalParsed.items)
-    ? (finalParsed.items as unknown[]).filter((x) => typeof x === "string") as string[]
-    : [];
+  const items = normalizeOcrItems(finalParsed.items);
   const combinedText = [
     (finalParsed.vendor_name as string) || "",
-    ...items,
+    itemsToCombinedText(items),
     (finalParsed.raw_text as string) || "",
   ].join(" ");
   const suggested = suggestAccount(combinedText);
@@ -191,7 +219,7 @@ export async function ocrWithClaudeStream(
     date: (finalParsed.date as string) || null,
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
-    items, // Round 7 ㊐: 仕訳分割で参照
+    items, // Round 7 ㊐ + Round 8 ㊕
     usage,
   };
 }

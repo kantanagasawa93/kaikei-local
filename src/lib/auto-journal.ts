@@ -33,10 +33,12 @@ export interface AutoJournalResult {
 }
 
 /**
- * Round 7 ㊐ 借方を品目で分割するヘルパ。
+ * Round 7 ㊐ + Round 8 ㊕: 借方を品目で分割するヘルパ。
  *
  * items を suggestAccount で分類 → 同じ勘定科目の品目をグループ化 → 各
- * グループに金額を「品目数で按分 (端数は最初のグループに寄せる)」して返す。
+ * グループに金額を按分する。Round 8 ㊕ から price 付き品目に対応:
+ *   - price が全品目に揃っている → 価格按分 (正確)
+ *   - price が無い品目があれば → 件数按分 (Round 7 と同じ近似)
  *
  * 1 グループしかない場合は単一行になる (従来挙動を保つ)。
  */
@@ -47,73 +49,104 @@ interface DebitGroup {
   memo: string | null;
 }
 
+interface NormalizedItem {
+  name: string;
+  price: number | null;
+}
+
 export function splitDebitByItems(
-  items: string[],
+  items: import("@/types").OcrItem[] | string[],
   defaultCode: string,
   defaultName: string,
   totalAmount: number,
 ): DebitGroup[] {
-  const trimmed = items.map((s) => s.trim()).filter((s) => s.length > 0);
-  if (trimmed.length < 2 || totalAmount <= 0) {
+  // 旧形式 (string[]) と新形式 ({name,price}[]) を NormalizedItem に揃える
+  const norm: NormalizedItem[] = [];
+  for (const it of items) {
+    if (typeof it === "string") {
+      const n = it.trim();
+      if (n.length > 0) norm.push({ name: n, price: null });
+    } else if (it && typeof it === "object") {
+      const name = (it as { name?: string }).name?.trim() ?? "";
+      if (!name) continue;
+      const p = (it as { price?: number | null }).price;
+      norm.push({ name, price: typeof p === "number" && isFinite(p) && p > 0 ? p : null });
+    }
+  }
+  if (norm.length < 2 || totalAmount <= 0) {
     return [
-      {
-        account_code: defaultCode,
-        account_name: defaultName,
-        amount: totalAmount,
-        memo: null,
-      },
+      { account_code: defaultCode, account_name: defaultName, amount: totalAmount, memo: null },
     ];
   }
 
-  // 各品目に suggestAccount をかける
-  const buckets = new Map<string, { name: string; items: string[] }>();
-  for (const item of trimmed) {
-    const acc = suggestAccount(item);
+  // 各品目に suggestAccount をかけてグループ化
+  interface Bucket {
+    name: string;
+    items: NormalizedItem[];
+    sumPrice: number; // null は 0 扱い (allHavePrice 判定で別途見る)
+  }
+  const buckets = new Map<string, Bucket>();
+  for (const item of norm) {
+    const acc = suggestAccount(item.name);
     const code = acc?.code ?? defaultCode;
     const name = acc?.name ?? defaultName;
     const cur = buckets.get(code);
     if (cur) {
       cur.items.push(item);
+      if (item.price !== null) cur.sumPrice += item.price;
     } else {
-      buckets.set(code, { name, items: [item] });
+      buckets.set(code, {
+        name,
+        items: [item],
+        sumPrice: item.price !== null ? item.price : 0,
+      });
     }
   }
-
-  // 1 グループなら単一行
   if (buckets.size < 2) {
     return [
-      {
-        account_code: defaultCode,
-        account_name: defaultName,
-        amount: totalAmount,
-        memo: null,
-      },
+      { account_code: defaultCode, account_name: defaultName, amount: totalAmount, memo: null },
     ];
   }
 
-  // 2 グループ以上: 件数で按分。端数 (1 円差) は最初のグループに加算
+  // Round 8 ㊕: 全品目に price が付いているなら価格按分
+  const allHavePrice = norm.every((n) => n.price !== null && n.price > 0);
+  const totalPrice = norm.reduce((acc, n) => acc + (n.price ?? 0), 0);
+
   const groups: DebitGroup[] = [];
   let allocated = 0;
   const entries = Array.from(buckets.entries());
-  for (let i = 0; i < entries.length; i++) {
-    const [code, info] = entries[i];
-    const ratio = info.items.length / trimmed.length;
-    let amount = Math.floor(totalAmount * ratio);
-    if (i === 0) {
-      // 最後に端数を first に足す処理は二重ループ避けで仮置き
+  for (const [code, info] of entries) {
+    let amount: number;
+    let memoNote: string;
+    if (allHavePrice && totalPrice > 0) {
+      // 価格按分 (端数は四捨五入)
+      const ratio = info.sumPrice / totalPrice;
+      amount = Math.round(totalAmount * ratio);
+      memoNote = `自動分割 (価格按分 ${info.sumPrice}/${totalPrice}円, ${info.items.length}品)`;
+    } else {
+      // 件数按分 (旧 Round 7 ㊐ ロジック)
+      const ratio = info.items.length / norm.length;
+      amount = Math.floor(totalAmount * ratio);
+      const sample = info.items.map((x) => x.name).join("/").slice(0, 40);
+      memoNote = `自動分割 (件数按分: ${sample})`;
     }
     allocated += amount;
     groups.push({
       account_code: code,
       account_name: info.name,
       amount,
-      memo: `自動分割 (${info.items.length}品: ${info.items.join("/").slice(0, 40)})`,
+      memo: memoNote,
     });
   }
-  // 端数調整: 配分済みと total の差を first group に寄せる
+
+  // 端数調整: 合計と total の差を最大グループに寄せる (見栄えのため)
   const diff = totalAmount - allocated;
   if (diff !== 0 && groups.length > 0) {
-    groups[0].amount += diff;
+    let maxIdx = 0;
+    for (let i = 1; i < groups.length; i++) {
+      if (groups[i].amount > groups[maxIdx].amount) maxIdx = i;
+    }
+    groups[maxIdx].amount += diff;
   }
   return groups;
 }

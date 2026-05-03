@@ -484,6 +484,19 @@ CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
 CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
 "#;
 
+/// v6: 自動破棄ルール (Round 7 ㊑) の判定理由を保存するカラム追加。
+///
+/// Round 8 ㊗ 「透明性」のため、photo_inbox.auto_dismissed_reason に
+/// 「どの過去パターンと類似 (similarity, matched_keywords, snippet) で
+/// 自動 dismissed されたか」を JSON 文字列で保存する。受信箱「破棄」タブで
+/// 該当行を表示する時にユーザに "なぜ消えたか" を説明できる。
+///
+/// SQLite は ALTER TABLE ADD COLUMN のみで列追加可能。値は default NULL。
+/// CHECK 制約は触らないので Round 5 ㊈ と違ってテーブル再作成は不要。
+pub const SCHEMA_V6_SQL: &str = r#"
+ALTER TABLE photo_inbox ADD COLUMN auto_dismissed_reason TEXT;
+"#;
+
 /// v5: v4 二重実行で残るゴミテーブルの掃除。
 ///
 /// 経緯:

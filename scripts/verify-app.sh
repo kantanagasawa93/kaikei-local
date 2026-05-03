@@ -11,6 +11,8 @@
 #   simulate-scan            ヘッドレススキャンを走らせて JSON 出力
 #   db-dump <table>          DB テーブルを JSON 配列でダンプ
 #   tail-log [<n>]           scan.log の末尾 n 行 (既定 50)
+#   app-log [<n>] [--errors-only]
+#                            アプリ本体ログ (webview console 含む) の末尾
 #   activate                 KAIKEI LOCAL を最前面に持ってくる
 #   navigate <route>         起動中アプリを <route> に遷移させる (例: /inbox)
 #                            (CLI から control file を書く → Frontend が poll)
@@ -83,6 +85,17 @@ cmd_tail_log() {
   "$KAIKEI_BIN" --tail-scan-log="$n"
 }
 
+# Round 8 ㊘ — Tauri plugin-log の本体ログ (webview console.error 含む) を tail
+cmd_app_log() {
+  require_bin
+  local n="${1:-50}"
+  if [ "${2:-}" = "--errors-only" ] || [ "${ERRORS_ONLY:-}" = "1" ]; then
+    "$KAIKEI_BIN" --tail-app-log="$n" --errors-only
+  else
+    "$KAIKEI_BIN" --tail-app-log="$n"
+  fi
+}
+
 cmd_navigate() {
   require_bin
   local route="${1:-/dashboard}"
@@ -136,10 +149,12 @@ cmd_smoke_report() {
   cmd_navigate "/settings/ai-ocr-log" >/dev/null 2>&1 || true
   shot_logs=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-ai-ocr-log.png" 2>/dev/null) || shot_logs=""
 
-  local scan_json inbox_json log_lines
+  local scan_json inbox_json log_lines app_errors
   scan_json=$(cmd_simulate_scan 2>&1 || true)
   inbox_json=$(cmd_db_dump photo_inbox 2>/dev/null || echo "[]")
   log_lines=$(cmd_tail_log 20 2>/dev/null || true)
+  # ㊘ Round 8: アプリ本体ログから WARN/ERR 行のみを 30 行抽出
+  app_errors=$(ERRORS_ONLY=1 cmd_app_log 30 2>/dev/null || true)
 
   # python で JSON を要約 (件数・state 別カウント)
   local inbox_summary
@@ -181,6 +196,14 @@ for k in sorted(buckets):
     echo "$log_lines"
     echo '```'
     echo ""
+    if [ -n "$app_errors" ]; then
+      echo "## アプリ本体ログの WARN/ERR (㊘ webview console.error 含む)"
+      echo ""
+      echo '```'
+      echo "$app_errors"
+      echo '```'
+      echo ""
+    fi
     echo "## UI スクリーンショット (㊓ 複数ページ)"
     echo ""
     for pair in \
@@ -217,6 +240,7 @@ main() {
     simulate-scan|scan)        cmd_simulate_scan "$@" ;;
     db-dump|db)                cmd_db_dump "$@" ;;
     tail-log|log)              cmd_tail_log "$@" ;;
+    app-log|errors)            cmd_app_log "$@" ;;
     activate)                  cmd_activate ;;
     navigate|nav)              cmd_navigate "$@" ;;
     smoke)                     cmd_smoke ;;

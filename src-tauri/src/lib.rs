@@ -504,6 +504,39 @@ fn run_tail_scan_log_and_exit(n: usize) -> ! {
     std::process::exit(0);
 }
 
+/// Round 8 ㊘: `--tail-app-log[=N]` で
+/// `~/Library/Logs/dev.kaikei.app/kaikei.log` (Tauri plugin-log の出力先) を
+/// tail する。`error-reporter.ts` が webview の console.error /
+/// unhandledrejection を全部ここに流しているので、Claude が CLI から
+/// アプリ実行時エラーを拾える。
+///
+/// `--errors-only` を別 flag で同時に受けると ERR / WARN の行のみフィルタ。
+#[cfg(target_os = "macos")]
+fn run_tail_app_log_and_exit(n: usize, errors_only: bool) -> ! {
+    let path = dirs::home_dir()
+        .map(|h| h.join("Library/Logs/dev.kaikei.app/kaikei.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/kaikei.log"));
+    if !path.exists() {
+        std::process::exit(0);
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("read app log: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let mut lines: Vec<&str> = content.lines().collect();
+    if errors_only {
+        lines.retain(|l| l.contains("[ERROR]") || l.contains("[WARN]") || l.contains("[ERR]"));
+    }
+    let start = lines.len().saturating_sub(n);
+    for line in &lines[start..] {
+        println!("{}", line);
+    }
+    std::process::exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // CLI/LaunchAgent 経由で `--auto-scan` が来た場合は GUI を立ち上げず即スキャン
@@ -534,6 +567,14 @@ pub fn run() {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(50);
             run_tail_scan_log_and_exit(n);
+        }
+        if let Some(arg) = args.iter().find(|a| a == &"--tail-app-log" || a.starts_with("--tail-app-log=")) {
+            let n: usize = arg
+                .strip_prefix("--tail-app-log=")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50);
+            let errors_only = args.iter().any(|a| a == "--errors-only");
+            run_tail_app_log_and_exit(n, errors_only);
         }
         // --navigate=/route — 起動中のアプリに「次の polling でこのルートに遷移して」
         // と control file 経由で指示。CLI なので別プロセスから webview に直接命令
@@ -567,6 +608,8 @@ pub fn run() {
                     "                           対象: photo_inbox / photo_scan_log / ai_ocr_log /\n",
                     "                                 app_settings / receipts / journals / journal_lines\n",
                     "  --tail-scan-log[=N]      ~/Library/Logs/KAIKEI LOCAL/scan.log の末尾 N 行 (既定 50)\n",
+                    "  --tail-app-log[=N]       ~/Library/Logs/dev.kaikei.app/kaikei.log の末尾 N 行\n",
+                    "                           [+ --errors-only で WARN/ERR 行のみ]\n",
                     "  --navigate=<route>       起動中のアプリに次のルートへ遷移するよう指示\n",
                     "                           (例: --navigate=/inbox)\n",
                     "  --test-ocr=<path>        画像を Vision OCR にかけて結果を表示\n",
@@ -675,6 +718,12 @@ pub fn run() {
             version: 5,
             description: "photo_inbox_v4_cleanup",
             sql: migrations::SCHEMA_V5_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "photo_inbox_auto_dismissed_reason",
+            sql: migrations::SCHEMA_V6_SQL,
             kind: MigrationKind::Up,
         },
     ];

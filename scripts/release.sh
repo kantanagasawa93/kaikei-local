@@ -108,23 +108,65 @@ for f in "${ASSETS[@]}"; do
   echo "   $(basename "$f") ($(du -h "$f" | awk '{print $1}'))"
 done
 
-# 2. GitHub Release 作成 (既にあれば再利用)
-if gh release view "$TAG" >/dev/null 2>&1; then
-  echo ""
-  echo "==> Release $TAG は既存。アセットを差し替えます"
-  gh release upload "$TAG" "${ASSETS[@]}" --clobber
-else
-  echo ""
-  echo "==> Release $TAG を新規作成"
-  gh release create "$TAG" \
-    --title "KAIKEI LOCAL $VERSION" \
-    --notes "自動生成された KAIKEI LOCAL のリリースです。
+# 1.5. CHANGELOG.md の対応バージョンセクションを抜き出して release notes に。
+#       Round 8 ㊔ で導入: ハードコード → CHANGELOG 連動 にして「リリースノートが
+#       存在しないバージョンを誤公開する」事故を防ぐ。
+NOTES_FILE=$(mktemp)
+trap 'rm -f "$NOTES_FILE"' EXIT
+if [ -f CHANGELOG.md ]; then
+  # `## v0.3.0` から次の `## v` までを抽出 (awk で 1pass)
+  awk -v ver="$VERSION" '
+    BEGIN { capturing = 0 }
+    # "## v0.3.0" or "## v0.3.0 <space>"
+    /^## v[0-9]/ {
+      if (capturing) { exit }
+      if ($2 == "v" ver || index($0, "v" ver " ") > 0 || index($0, "v" ver "$") > 0) {
+        capturing = 1
+        print
+        next
+      }
+    }
+    capturing == 1 { print }
+  ' CHANGELOG.md > "$NOTES_FILE"
+fi
+
+# CHANGELOG にセクションが無ければハードコードを fallback にする (壊さない)
+if [ ! -s "$NOTES_FILE" ]; then
+  cat > "$NOTES_FILE" <<EOF
+KAIKEI LOCAL $VERSION
 
 ダウンロード:
 - Apple Silicon (M1〜M4): KAIKEI_LOCAL.dmg または KAIKEI_LOCAL_arm64.dmg
 - Intel Mac: KAIKEI_LOCAL_x64.dmg
 
-詳しい変更点は CHANGELOG または commit 履歴を参照してください。" \
+詳しい変更点は CHANGELOG.md または commit 履歴を参照してください。
+EOF
+  echo "==> CHANGELOG.md に v$VERSION のセクションが見つかりません。fallback notes を使用"
+else
+  # ダウンロードリンクを末尾に追記
+  cat >> "$NOTES_FILE" <<EOF
+
+---
+**ダウンロード:**
+- Apple Silicon (M1〜M4): \`KAIKEI_LOCAL.dmg\` / \`KAIKEI_LOCAL_arm64.dmg\`
+- Intel Mac: \`KAIKEI_LOCAL_x64.dmg\`
+EOF
+  echo "==> CHANGELOG.md から v$VERSION のリリースノートを抽出しました ($(wc -l < "$NOTES_FILE") 行)"
+fi
+
+# 2. GitHub Release 作成 (既にあれば再利用)
+if gh release view "$TAG" >/dev/null 2>&1; then
+  echo ""
+  echo "==> Release $TAG は既存。アセットを差し替えます"
+  gh release upload "$TAG" "${ASSETS[@]}" --clobber
+  # notes も更新
+  gh release edit "$TAG" --notes-file "$NOTES_FILE" >/dev/null
+else
+  echo ""
+  echo "==> Release $TAG を新規作成"
+  gh release create "$TAG" \
+    --title "KAIKEI LOCAL $VERSION" \
+    --notes-file "$NOTES_FILE" \
     "${ASSETS[@]}"
 fi
 

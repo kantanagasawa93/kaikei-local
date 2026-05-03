@@ -16,7 +16,7 @@
  */
 
 import { db } from "@/lib/localDb";
-import { classifyReceipt, shouldAutoDismiss } from "@/lib/receipt-classifier";
+import { classifyReceipt, shouldAutoDismiss, explainAutoDismiss } from "@/lib/receipt-classifier";
 
 export interface ScannedPhoto {
   asset_id: string;
@@ -190,12 +190,24 @@ export async function scanNow(
         console.warn(`vision OCR failed for ${photo.asset_id}:`, e);
       }
 
-      // Round 7 ㊑: classify 結果が receipt になっていない場合のみ、
+      // Round 7 ㊑ + Round 8 ㊗: classify 結果が receipt になっていない場合のみ、
       // 過去の dismissed パターンと類似度を見て自動破棄。
       // (receipt 判定の写真は確実に領収書なので学習で潰さない)
-      if (initialState !== "receipt" && ocrText && shouldAutoDismiss(ocrText, dismissedTexts)) {
-        initialState = "dismissed";
-        autoDismissed++;
+      // 自動破棄になった時は理由 (類似度・共通キーワード・snippet) を JSON で
+      // photo_inbox.auto_dismissed_reason に保存して透明性を担保する。
+      let autoDismissedReason: string | null = null;
+      if (initialState !== "receipt" && ocrText) {
+        const reason = explainAutoDismiss(ocrText, dismissedTexts);
+        if (reason.matched) {
+          initialState = "dismissed";
+          autoDismissed++;
+          autoDismissedReason = JSON.stringify({
+            similarity: Number(reason.similarity.toFixed(3)),
+            matched_keywords: reason.matchedKeywords,
+            matched_past_snippet: reason.matchedPastSnippet,
+            decided_at: new Date().toISOString(),
+          });
+        }
       }
 
       await db.from("photo_inbox").insert({
@@ -209,6 +221,7 @@ export async function scanNow(
         ocr_text: ocrText,
         state: initialState,
         receipt_score: score,
+        auto_dismissed_reason: autoDismissedReason,
       });
       newPhotos++;
       if (initialState === "receipt") receiptCount++;
@@ -260,6 +273,8 @@ export interface InboxRow {
   claude_result_json: string | null;
   last_error: string | null;
   attempts: number | null;
+  // v6 追加カラム (Round 8 ㊗: 自動破棄理由 — JSON 文字列)
+  auto_dismissed_reason: string | null;
 }
 
 export async function listInbox(state?: InboxRow["state"]): Promise<InboxRow[]> {
