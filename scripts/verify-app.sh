@@ -488,18 +488,25 @@ cmd_smoke_report() {
 
   # ㊓ Round 7: 複数ページのスクショを取って Markdown に並べる。
   # navigate を使ってアプリ内 SPA ナビゲーション → 1.5 秒待ってスクショ。
+  # ㉸ Round 14: NO_GUI=1 (CI 等で GUI 起動不可) なら全部 skip
   local shot_dashboard shot_inbox shot_journals shot_logs
-  cmd_navigate "/dashboard" >/dev/null 2>&1 || true
-  shot_dashboard=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-dashboard.png" 2>/dev/null) || shot_dashboard=""
-  cmd_navigate "/inbox" >/dev/null 2>&1 || true
-  shot_inbox=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-inbox.png" 2>/dev/null) || shot_inbox=""
-  cmd_navigate "/journals" >/dev/null 2>&1 || true
-  shot_journals=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-journals.png" 2>/dev/null) || shot_journals=""
-  cmd_navigate "/settings/ai-ocr-log" >/dev/null 2>&1 || true
-  shot_logs=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-ai-ocr-log.png" 2>/dev/null) || shot_logs=""
+  if [ -z "${NO_GUI:-}" ]; then
+    cmd_navigate "/dashboard" >/dev/null 2>&1 || true
+    shot_dashboard=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-dashboard.png" 2>/dev/null) || shot_dashboard=""
+    cmd_navigate "/inbox" >/dev/null 2>&1 || true
+    shot_inbox=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-inbox.png" 2>/dev/null) || shot_inbox=""
+    cmd_navigate "/journals" >/dev/null 2>&1 || true
+    shot_journals=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-journals.png" 2>/dev/null) || shot_journals=""
+    cmd_navigate "/settings/ai-ocr-log" >/dev/null 2>&1 || true
+    shot_logs=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-ai-ocr-log.png" 2>/dev/null) || shot_logs=""
+  fi
 
   local scan_json inbox_json log_lines app_errors
-  scan_json=$(cmd_simulate_scan 2>&1 || true)
+  if [ -n "${NO_GUI:-}" ]; then
+    scan_json='{"skipped":"NO_GUI=1 のため simulate-scan は実行しない"}'
+  else
+    scan_json=$(cmd_simulate_scan 2>&1 || true)
+  fi
   inbox_json=$(cmd_db_dump photo_inbox 2>/dev/null || echo "[]")
   log_lines=$(cmd_tail_log 20 2>/dev/null || true)
   # ㊘ Round 8: アプリ本体ログから WARN/ERR 行のみを 30 行抽出

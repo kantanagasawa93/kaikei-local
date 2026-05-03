@@ -351,6 +351,89 @@ export async function setInboxState(
   await db.from("photo_inbox").update({ state }).eq("id", id);
 }
 
+/**
+ * Round 14 ㉵: 受信箱の 1 件を Vision OCR で再認識する。
+ *
+ * - twoPass=true で両言語独立 OCR + 結合 (Round 13 ㉲)。英字メニューが
+ *   ja モデルでひらがな化される事故の救済に有効
+ * - 再分類した結果で score / state / score_signals_json / ocr_text を更新
+ *
+ * @returns 更新後の score
+ */
+export async function reocrInboxRow(
+  inboxId: string,
+  options: { twoPass?: boolean } = {},
+): Promise<{ score: number | null; state: InboxRow["state"] }> {
+  const { data } = await db
+    .from("photo_inbox")
+    .select("id, file_path")
+    .eq("id", inboxId)
+    .single();
+  const row = data as { id: string; file_path: string | null } | null;
+  if (!row || !row.file_path) {
+    throw new Error("対象の写真または file_path がありません");
+  }
+
+  // customWords を partners + receipts.vendor_name から再構築
+  const set = new Set<string>();
+  try {
+    const { data: ps } = await db.from("partners").select("name");
+    for (const p of (ps as { name: string | null }[] | null) ?? []) {
+      if (p.name && p.name.length >= 2) set.add(p.name.trim());
+    }
+    const { data: rs } = await db.from("receipts").select("vendor_name");
+    for (const r of (rs as { vendor_name: string | null }[] | null) ?? []) {
+      if (r.vendor_name && r.vendor_name.length >= 2) set.add(r.vendor_name.trim());
+    }
+  } catch {
+    /* silent */
+  }
+  const customWords = Array.from(set).slice(0, 200);
+
+  const visionRes = await invoke<{
+    lines: string[];
+    joined: string;
+    language: string;
+    custom_word_hits?: Record<string, number>;
+  }>("vision_recognize_text", {
+    filePath: row.file_path,
+    customWords,
+    twoPass: options.twoPass === true,
+  });
+
+  const cls = classifyReceipt(visionRes.joined);
+  const signalsJson =
+    cls.signals && cls.signals.length > 0
+      ? JSON.stringify({
+          score: Number(cls.score.toFixed(3)),
+          signals: cls.signals.map((s) => ({
+            score: Number(s.score.toFixed(3)),
+            reason: s.reason,
+          })),
+        })
+      : null;
+
+  // state は「現状から悪化させない」方針: 既に dismissed/imported なら触らない、
+  // candidate / receipt / receipt_failed のみ classify 結果で上書き
+  const { data: cur } = await db
+    .from("photo_inbox")
+    .select("state")
+    .eq("id", inboxId)
+    .single();
+  const curState = (cur as { state: string } | null)?.state;
+  const update: Record<string, unknown> = {
+    ocr_text: visionRes.joined,
+    receipt_score: cls.score,
+    score_signals_json: signalsJson,
+  };
+  if (curState === "candidate" || curState === "receipt" || curState === "receipt_failed") {
+    update.state = cls.state;
+  }
+  await db.from("photo_inbox").update(update).eq("id", inboxId);
+
+  return { score: cls.score, state: (update.state as InboxRow["state"]) ?? (curState as InboxRow["state"]) };
+}
+
 // ────────────────────────────────────────────────────────────
 // LaunchAgent (定期スキャン)
 // ────────────────────────────────────────────────────────────

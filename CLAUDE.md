@@ -75,39 +75,38 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 14) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 15) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉴ → ㉵ → ㉶ → ㉷ → ㉸。
+推し優先順は ㉹ → ㉺ → ㉻ → ㉼ → ㉽。
 
-### ㉴ v0.3.0 リリース ★★★★★
-- Round 13 までで release.sh は precheck / env auto-source / push-check /
-  notes / verify-release / rollback / DRY_RUN まで揃った。
-- 手元で 1 回: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+### ㉹ v0.3.0 リリース ★★★★★
+- Round 14 までで release-rollback の CI 対応 + DRY_RUN まで完備。
+- 手元: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㉵ Vision both-pass を受信箱の「再 OCR」ボタン化 ★★★★
-- 目的: Round 13 ㉲ で two-pass モードを実装したが、UI から発火する手段なし。
-  受信箱の OCR テキストプレビュー部に「再 OCR (両言語)」ボタンを追加
-- 対象: src/app/(app)/inbox/page.tsx + 新 Tauri command を直接呼ぶ
-- commit サイズ: 中 (~120 行)
-
-### ㉶ score_signals の visualization を強化 ★★★
-- 目的: Round 13 ㉰ で signals JSON を保存したが、tooltip 1 行だと読みにくい。
-  hover preview pane (Round 6 ㊌) に signals 内訳バーグラフを追加
-- 対象: src/app/(app)/inbox/page.tsx の HoverPreview
+### ㉺ 受信箱「再 OCR」モーダルでオプション選択 ★★★
+- 目的: Round 14 ㉵ は Shift+クリックで two-pass を発火するが分かりにくい。
+  ボタン押下で {ja-only / en-only / two-pass} 選択モーダル
+- 対象: inbox/page.tsx の InboxCard
 - commit サイズ: 中 (~100 行)
 
-### ㉷ Tauri 終了時の secure data wipe ★★
-- 目的: ユーザが「アプリをアンインストールしたい」時の補助。`kaikei --wipe-data`
-  で app_data_dir 内 (kaikei.db / inbox/ / receipts/) を確認モーダル付き削除
-- 対象: lib.rs に CLI flag + UI 「データ全消去」 (要二重確認)
+### ㉻ アンインストール GUI 「データ全消去」 ★★★
+- 目的: Round 14 ㉷ の `--wipe-data` を設定画面から発火できる UI ボタンに。
+  二重確認 (text input で "DELETE" 入力) → Tauri command 経由で削除
+- 対象: src/app/(app)/settings/page.tsx + lib.rs に Tauri command 露出
 - commit サイズ: 中 (~150 行)
 
-### ㉸ verify-app.sh autorun を CI 統合可能に ★★
-- 目的: Round 13 ㉳ の autorun は手動だが、GitHub Actions runner からも
-  使えるよう env 認識を強化 (CI=1 時は AUTOPUSH 自動 ON / branch チェック緩和)
-- 対象: .github/workflows/verify-round.yml に autorun ジョブを足す
-- commit サイズ: 中 (~80 行)
+### ㉼ verify-app.sh の自己診断 doctor サブコマンド ★★★
+- 目的: 「verify-app.sh 自体が動かない」時の最初の確認 (KAIKEI_BIN /
+  fswatch / ffmpeg / Python3 / app data dir / app_settings の存在等)
+- 対象: scripts/verify-app.sh に cmd_doctor を追加
+- commit サイズ: 小〜中 (~120 行)
+
+### ㉽ migration history を Tauri command で公開 ★★
+- 目的: 「DB migration が v6 まで適用されてるか」を UI / verify-app.sh から
+  確認できるよう、_sqlx_migrations を JSON で返す Tauri command
+- 対象: lib.rs に migrations_status command + verify-app.sh 経由でも引ける
+- commit サイズ: 小 (~80 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
