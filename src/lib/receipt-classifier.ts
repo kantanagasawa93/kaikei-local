@@ -411,6 +411,10 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  * 過去に dismissed / not_receipt にされた写真の OCR テキスト集合を渡し、
  * 新規 candidate のテキストがどれかと十分似ているか判定する。
  *
+ * Round 8 ㊖ で「ホワイトリスト」を追加: classifyReceipt の score が 0.4
+ * 以上 (= 領収書らしさが高い) の場合は問答無用で false を返す。
+ * 過去の dismissed と表面上似ているだけで本当の領収書を弾く事故を防ぐ。
+ *
  * @param newText 新しい OCR テキスト
  * @param pastTexts 過去の dismissed / not_receipt OCR テキスト一覧
  * @param threshold 0.0〜1.0 (既定 0.5)
@@ -422,6 +426,14 @@ export function shouldAutoDismiss(
   threshold = 0.5,
 ): boolean {
   if (!newText || pastTexts.length === 0) return false;
+
+  // Round 8 ㊖ ホワイトリスト: 「領収書らしさ」スコアが既に高い物は絶対に
+  // 自動破棄しない。ユーザの過去 dismissed と部分一致していても、
+  // FORCE_RECEIPT_KEYWORDS / インボイス番号 / 合計+金額パターン がある
+  // 写真は本物の領収書の可能性が高い。
+  const cls = classifyReceipt(newText);
+  if (cls.score >= 0.4) return false;
+
   const newSet = extractKeywordSet(newText);
   if (newSet.size < 3) return false; // 短すぎるテキストは判定不能 (誤判定避ける)
   for (const past of pastTexts) {
@@ -432,4 +444,53 @@ export function shouldAutoDismiss(
     }
   }
   return false;
+}
+
+/**
+ * Round 8 ㊗: 自動破棄判定の透明性のため、なぜ dismiss されたかを返す。
+ * shouldAutoDismiss が true 判定を返した時の「最も類似度が高かった過去テキスト」
+ * のキーワード集合 (上位 5 個) と類似度を一緒に返す。UI で「○○ と似てたので
+ * 自動破棄しました」と説明できるようにする。
+ */
+export interface AutoDismissReason {
+  matched: boolean;
+  similarity: number; // 0.0-1.0
+  matchedKeywords: string[]; // 共通キーワード上位 5
+  matchedPastSnippet: string; // どの past text と似たか (先頭 60 文字)
+}
+
+export function explainAutoDismiss(
+  newText: string | null | undefined,
+  pastTexts: string[],
+  threshold = 0.5,
+): AutoDismissReason {
+  const empty: AutoDismissReason = {
+    matched: false,
+    similarity: 0,
+    matchedKeywords: [],
+    matchedPastSnippet: "",
+  };
+  if (!newText || pastTexts.length === 0) return empty;
+  const cls = classifyReceipt(newText);
+  if (cls.score >= 0.4) return empty;
+  const newSet = extractKeywordSet(newText);
+  if (newSet.size < 3) return empty;
+
+  let best: AutoDismissReason = empty;
+  for (const past of pastTexts) {
+    const pastSet = extractKeywordSet(past);
+    if (pastSet.size < 3) continue;
+    const sim = jaccardSimilarity(newSet, pastSet);
+    if (sim >= threshold && sim > best.similarity) {
+      const inter: string[] = [];
+      for (const k of newSet) if (pastSet.has(k)) inter.push(k);
+      best = {
+        matched: true,
+        similarity: sim,
+        matchedKeywords: inter.slice(0, 5),
+        matchedPastSnippet: past.slice(0, 60).replace(/\s+/g, " "),
+      };
+    }
+  }
+  return best;
 }

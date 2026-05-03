@@ -205,6 +205,13 @@ export interface Account {
   is_default: boolean;
 }
 
+/**
+ * Round 8 ㊕: 品目+価格付き形式 (新). API server の SYSTEM_PROMPT が
+ * `[{name, price}]` で返すよう更新済み。古いライセンスキー用キャッシュ等で
+ * `string` で返ってくるケースもあるので Union 型にしている。
+ */
+export type OcrItem = string | { name: string; price: number | null };
+
 export interface OcrResult {
   raw_text: string;
   vendor_name: string | null;
@@ -213,12 +220,12 @@ export interface OcrResult {
   suggested_account_code: string | null;
   suggested_account_name: string | null;
   /**
-   * Round 7 ㊐: Claude OCR が返す品目テキスト一覧 (例: ["コーヒー", "ノート", "ペン"])。
-   * 領収書 1 枚に複数カテゴリの品目が混じる時、auto-journal でこれを
-   * suggestAccount でグループ化して journal_lines を分割するのに使う。
-   * 価格付きでないので分割は数で按分 (将来は items_with_price を別フィールドに)。
+   * Claude OCR が返す品目一覧。
+   * 旧形式: ["コーヒー", "ノート"]  (Round 7 ㊐)
+   * 新形式: [{ name: "コーヒー", price: 580 }, { name: "ノート", price: 220 }]
+   *         (Round 8 ㊕ — 価格按分による正確な仕訳分割が可能に)
    */
-  items?: string[];
+  items?: OcrItem[];
 }
 
 // Phase 2: 口座・クレカ連携
