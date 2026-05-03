@@ -53,6 +53,22 @@ pub struct VisionOcrResult {
 }
 
 pub fn recognize_text<P: AsRef<Path>>(path: P) -> Result<VisionOcrResult, String> {
+    recognize_text_with_words(path, &[])
+}
+
+/// Round 10 ㉡: VNRecognizeTextRequest.customWords にドメイン語彙
+/// (取引先名・過去領収書の店名など) を渡して認識バイアスを掛ける。
+///
+/// Apple のドキュメント: customWords は "additional words to use during the
+/// language correction process" — つまり Vision の internal LM の補助辞書。
+/// 屋号 (例: "ホクシン", "メルセデスベンツ" 等の固有名詞) を渡すと、
+/// 同じ綴りの普通名詞より優先的にこちらを採用する。
+///
+/// 空配列なら従来挙動。
+pub fn recognize_text_with_words<P: AsRef<Path>>(
+    path: P,
+    custom_words: &[String],
+) -> Result<VisionOcrResult, String> {
     let path = path.as_ref();
     if !path.exists() {
         return Err(format!("file not found: {}", path.display()));
@@ -145,6 +161,24 @@ pub fn recognize_text<P: AsRef<Path>>(path: P) -> Result<VisionOcrResult, String
             arrayWithObjects: langs_array.as_ptr()
             count: 2u64];
         let _: () = msg_send![request, setRecognitionLanguages: langs];
+
+        // Round 10 ㉡: customWords (NSArray<NSString *>) で語彙バイアス
+        // 空配列の時は API 呼出を skip (デフォルト挙動を維持)
+        if !custom_words.is_empty() {
+            let mut ns_words: Vec<id> = Vec::with_capacity(custom_words.len());
+            for w in custom_words {
+                if w.is_empty() {
+                    continue;
+                }
+                ns_words.push(NSString::alloc(nil).init_str(w));
+            }
+            if !ns_words.is_empty() {
+                let words_array: id = msg_send![class!(NSArray),
+                    arrayWithObjects: ns_words.as_ptr()
+                    count: ns_words.len() as u64];
+                let _: () = msg_send![request, setCustomWords: words_array];
+            }
+        }
 
         // perform requests
         let requests_array: [id; 1] = [request];

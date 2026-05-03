@@ -214,19 +214,27 @@ async fn read_image_file(
 
 /// Vision.framework で画像のテキストを認識して返す。完全ローカル、ネット送信なし。
 /// 結果: { lines: string[], joined: string, language: "ja"|"en" }
+///
+/// Round 10 ㉡: 第 2 引数 customWords (Optional) で取引先名・店名等の
+/// 固有名詞をバイアス用辞書として渡せる。指定なしなら従来挙動。
 #[tauri::command]
-async fn vision_recognize_text(file_path: String) -> Result<serde_json::Value, String> {
+async fn vision_recognize_text(
+    file_path: String,
+    custom_words: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
-        let result =
-            tokio::task::spawn_blocking(move || vision::recognize_text(&file_path))
-                .await
-                .map_err(|e| format!("join: {}", e))??;
+        let words = custom_words.unwrap_or_default();
+        let result = tokio::task::spawn_blocking(move || {
+            vision::recognize_text_with_words(&file_path, &words)
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))??;
         Ok(serde_json::to_value(result).unwrap_or(serde_json::Value::Null))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = file_path;
+        let _ = (file_path, custom_words);
         Err("vision OCR is only supported on macOS".into())
     }
 }

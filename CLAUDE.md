@@ -75,44 +75,40 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 10) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 11) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉠ → ㉡ → ㉢ → ㉣ → ㉤。
+推し優先順は ㉥ → ㉦ → ㉧ → ㉨ → ㉩。
 
-### ㉠ v0.3.0 公証付きリリース実発火 ★★★★★
-- 状況: Round 4-9 で precheck / NOTARIZE_SKIP / verify-release / rollback /
-  notes 連動 / multi-screenshot smoke-report まで揃い完璧。
-  あとは APPLE_* env を渡して `scripts/release.sh v0.3.0` を打つだけ。
-  release.sh の末尾で verify-release.sh が自動で叩かれる
-- 手元手順 (再掲): CLAUDE.md 上部の「自律検証」セクション参照
+### ㉥ v0.3.0 リリース ★★★★★
+- 手順: `scripts/release-setup-credentials.sh` を 1 度実行 (Round 10 で新設)
+  → `source ~/.kaikei-release.env && scripts/release.sh v0.3.0`
+- release.sh 末尾で verify-release.sh が自動健康診断、失敗時は
+  release-rollback.sh で取り消し可
 
-### ㉡ Vision OCR の精度を Apple のスタイル設定で上げる ★★★★
-- 目的: vision.rs の `setRecognitionLevel` 等で更にチューニング。`customWords`
-  を渡して屋号・取引先名などのドメイン語を辞書に注入
-- 対象: src-tauri/src/vision.rs + DB から partner_name 一覧を取って
-  `setCustomWords:` に渡す
+### ㉦ Vision customWords の効き具合を計測 ★★★
+- 目的: Round 10 ㉡ で customWords を入れたが、効いているかをユーザに
+  見せられない。OCR 結果に「customWords ヒット数」を返してログ出力
+- 対象: src-tauri/src/vision.rs に hit count 追加 + photo_inbox.ocr_text の
+  別カラムまたは inline タグで「ヒットした語」を保持
 - commit サイズ: 中 (~120 行)
 
-### ㉢ 受信箱の selection をキーボードショートカットで操作 ★★★
-- 目的: A=領収書 / X=違う / D=破棄 / Space=hover, ↑↓ で navigate, Enter で開く
-- 対象: src/app/(app)/inbox/page.tsx に keydown listener
+### ㉧ 受信箱のキーボードショートカット拡張 ★★★
+- 目的: Round 10 ㉢ の続き。? でショートカット一覧モーダル / / で検索フォーカス
+- 対象: inbox/page.tsx
+- commit サイズ: 小 (~80 行)
+
+### ㉨ verify-app.sh smoke-report の HTML 出力モード ★★
+- 目的: Markdown だと iCloud スクショへの file:// 参照が壊れる。HTML 出力で
+  data-uri 埋込みも選べるように
+- 対象: scripts/verify-app.sh
 - commit サイズ: 中 (~150 行)
 
-### ㉣ verify-app.sh smoke-report に「ユーザ視点の評価」を入れる ★★★
-- 目的: Markdown レポートに「LLM (Claude) が見て、UI が壊れてないか / どこ
-  が変か」をプロンプトで評価する欄を入れる。実際のチェックは Claude チャット
-  側で行うが、レポート生成時に「↓ここに Claude のコメント」テンプレを残す
-- 対象: scripts/verify-app.sh の cmd_smoke_report
-- commit サイズ: 小 (~50 行)
-
-### ㉤ 受信箱→仕訳のフローを e2e でデモる動画自動生成 ★★
-- 目的: smoke-report の発展形。1 サンプル写真をスキャン → クイック確定 →
-  仕訳帳でバッジ確認 → CSV エクスポート、までを ffmpeg で動画化
-- 対象: scripts/verify-app.sh demo (新サブコマンド)
-- やること: cmd_navigate + screencapture を 200ms 間隔で連続キャプチャし、
-  ffmpeg でつないで MP4 にする
-- commit サイズ: 中 (~150 行)
+### ㉩ Tauri ウィンドウ起動時に最後の URL を記憶 ★★
+- 目的: アプリを終了 → 再起動した時に、前回見ていた page (例: /inbox) に
+  戻るとユーザの作業効率が上がる
+- 対象: layout.tsx + app_settings に last_route を保存
+- commit サイズ: 小 (~60 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
