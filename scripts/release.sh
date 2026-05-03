@@ -179,3 +179,18 @@ echo "   Apple Silicon (明示):"
 echo "   https://github.com/$REPO_OWNER/releases/latest/download/KAIKEI_LOCAL_arm64.dmg"
 echo "   Intel Mac:"
 echo "   https://github.com/$REPO_OWNER/releases/latest/download/KAIKEI_LOCAL_x64.dmg"
+
+# Round 9 ㊙: リリース直後の自動健康診断。
+# 公証なし版でも URL 200 と asset 3 種類の存在は確認できる。
+# CDN 反映に少し遅延があるので 5 秒待ってから。
+if [ -z "${SKIP_VERIFY:-}" ]; then
+  echo ""
+  echo "==> 5 秒待って verify-release.sh で健康診断"
+  sleep 5
+  if QUICK=1 "$(dirname "$0")/verify-release.sh" "$TAG"; then
+    echo "✅ verify-release.sh: OK"
+  else
+    echo "⚠️  verify-release.sh: 警告あり — 手動で内容を確認してください"
+    echo "   問題があれば: scripts/release-rollback.sh $TAG で取り消せます"
+  fi
+fi

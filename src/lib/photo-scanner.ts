@@ -277,9 +277,27 @@ export interface InboxRow {
   auto_dismissed_reason: string | null;
 }
 
-export async function listInbox(state?: InboxRow["state"]): Promise<InboxRow[]> {
+/**
+ * Round 9 ㉞ で拡張: state に加えて検索クエリ + 撮影日範囲を受ける。
+ * - q: ocr_text に対する LIKE %q% (大文字小文字は SQLite の LIKE 仕様に従う)
+ * - fromDate / toDate: ISO 文字列で taken_at の前後制限
+ */
+export async function listInbox(
+  state?: InboxRow["state"],
+  opts: { q?: string; fromDate?: string; toDate?: string } = {},
+): Promise<InboxRow[]> {
   let query = db.from("photo_inbox").select("*").order("taken_at", { ascending: false });
   if (state) query = query.eq("state", state);
+  if (opts.q && opts.q.trim().length > 0) {
+    query = query.like("ocr_text", `%${opts.q.trim()}%`);
+  }
+  if (opts.fromDate) {
+    query = query.gte("taken_at", opts.fromDate);
+  }
+  if (opts.toDate) {
+    // 終日の 23:59:59 まで含めるため日付末尾の "T23:59:59" を補う
+    query = query.lte("taken_at", `${opts.toDate}T23:59:59`);
+  }
   const { data } = await query;
   return (data as InboxRow[] | null) ?? [];
 }
