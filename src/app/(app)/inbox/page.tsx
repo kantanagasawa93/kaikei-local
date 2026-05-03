@@ -72,6 +72,10 @@ export default function InboxPage() {
 
   // ㉢ Round 10: フォーカス対象カードの index (キーボード操作の基点)
   const [focusIdx, setFocusIdx] = useState<number>(-1);
+  // ㉧ Round 11: ヘルプモーダル表示
+  const [helpOpen, setHelpOpen] = useState(false);
+  // ㉧ Round 11: 検索 input にフォーカスを当てたい時のフラグ
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // ㊌ hover preview ハンドラ: enter で 250ms 後に表示、leave で 100ms 後に消す
   const handleHoverEnter = (row: InboxRow) => {
@@ -125,6 +129,20 @@ export default function InboxPage() {
         clearSelection();
         setFocusIdx(-1);
         setHovered(null);
+        setHelpOpen(false);
+        return;
+      }
+      // ㉧ Round 11: ? でヘルプモーダル / / で検索フォーカス
+      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+        e.preventDefault();
+        setHelpOpen((o) => !o);
+        return;
+      }
+      if (e.key === "/") {
+        e.preventDefault();
+        setShowSearch(true);
+        // 1 frame 後に input にフォーカス
+        setTimeout(() => searchInputRef.current?.focus(), 50);
         return;
       }
 
@@ -428,6 +446,51 @@ export default function InboxPage() {
 
   return (
     <div className="space-y-6">
+      {/* ㉧ Round 11: ?ヘルプモーダル */}
+      {helpOpen && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setHelpOpen(false)}
+        >
+          <div
+            className="bg-card border rounded-lg shadow-2xl max-w-md w-full p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold mb-3">キーボードショートカット</h2>
+            <table className="w-full text-sm">
+              <tbody>
+                {[
+                  ["↑↓ / j k", "フォーカス移動"],
+                  ["A", "領収書として確定"],
+                  ["X", "違う"],
+                  ["D", "破棄"],
+                  ["R", "未判定に戻す"],
+                  ["S", "選択 (チェック) トグル"],
+                  ["Space", "プレビュー toggle"],
+                  ["Enter", "登録 / クイック確定"],
+                  ["/", "検索フォーカス"],
+                  ["?", "このヘルプ"],
+                  ["Esc", "選択解除 / 閉じる"],
+                ].map(([k, v]) => (
+                  <tr key={k} className="border-b last:border-b-0">
+                    <td className="py-1.5 pr-3 font-mono text-xs">{k}</td>
+                    <td className="py-1.5 text-muted-foreground">{v}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-[11px] text-muted-foreground mt-3">
+              入力欄にフォーカスがある時は無効。Cmd/Ctrl + キーは普通通り動きます。
+            </p>
+            <div className="mt-4 text-right">
+              <Button size="sm" variant="outline" onClick={() => setHelpOpen(false)}>
+                閉じる (Esc)
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ㊌ Round 6: hover preview pane — 右上に固定。マウスがカード外に出ても
           少し残り、その間に preview 自体に hover すれば消えない。 */}
       {hovered && (
@@ -483,9 +546,9 @@ export default function InboxPage() {
             <p className="text-sm text-muted-foreground">
               iCloud 写真から文書検出 + キーワード判定で抽出した領収書候補
             </p>
-            {/* ㉢ Round 10: キーボードショートカットヒント (PC ユーザ向け) */}
+            {/* ㉢ Round 10 + ㉧ Round 11: キーボードショートカットヒント */}
             <p className="text-[10px] text-muted-foreground/80 mt-1 font-mono">
-              ↑↓: 移動 / A: 領収書 / X: 違う / D: 破棄 / R: 未判定 / S: 選択 / Space: プレビュー / Enter: 確定
+              ↑↓: 移動 / A: 領収書 / X: 違う / D: 破棄 / R: 未判定 / S: 選択 / /: 検索 / ?: ヘルプ
             </p>
           </div>
         </div>
@@ -605,6 +668,7 @@ export default function InboxPage() {
         {showSearch && (
           <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
             <Input
+              ref={searchInputRef}
               placeholder="OCR テキストで検索 (例: スターバックス)"
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}

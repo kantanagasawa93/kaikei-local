@@ -50,6 +50,12 @@ pub struct VisionOcrResult {
     pub lines: Vec<String>,
     pub joined: String,
     pub language: String,
+    /// Round 11 ㉦: customWords の各語がいくつヒットしたか (語: 出現回数)。
+    /// 空辞書 (custom_words=[]) や OCR 結果が空の時は空 map。
+    /// "ヒット" は joined 文字列内の case-sensitive 部分一致 (vendor 名は
+    /// 漢字主体なので case 区別は実害なし)。
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub custom_word_hits: std::collections::HashMap<String, u32>,
 }
 
 pub fn recognize_text<P: AsRef<Path>>(path: P) -> Result<VisionOcrResult, String> {
@@ -209,10 +215,30 @@ pub fn recognize_text_with_words<P: AsRef<Path>>(
         }
         let lines = g.take().unwrap_or_else(|| Err("no result".into()))?;
         let joined = lines.join("\n");
+        // Round 11 ㉦: customWords ヒット数を集計
+        let mut hits: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        if !custom_words.is_empty() && !joined.is_empty() {
+            for w in custom_words {
+                if w.is_empty() {
+                    continue;
+                }
+                let mut count: u32 = 0;
+                let mut start = 0usize;
+                while let Some(pos) = joined[start..].find(w.as_str()) {
+                    count += 1;
+                    start += pos + w.len();
+                    if count >= 100 { break; } // 暴走防止
+                }
+                if count > 0 {
+                    hits.insert(w.clone(), count);
+                }
+            }
+        }
         Ok(VisionOcrResult {
             language: detect_language(&joined),
             joined,
             lines,
+            custom_word_hits: hits,
         })
     }
 }

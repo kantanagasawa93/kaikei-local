@@ -56,6 +56,38 @@ if [ -f "$HOME/.cargo/env" ]; then
   source "$HOME/.cargo/env"
 fi
 
+# Round 11 ㉥: ユーザが既に release-setup-credentials.sh を実行済みなら
+# ~/.kaikei-release.env が存在し、APPLE_* env が一発で揃う。
+# UNSIGNED=1 / NOTARIZE_SKIP=1 が指定されている時は env なしで進める。
+if [ -z "${UNSIGNED:-}" ] && [ -z "${NOTARIZE_SKIP:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  if [ -f "$HOME/.kaikei-release.env" ]; then
+    echo "==> ~/.kaikei-release.env を自動 source (Round 11 ㉥)"
+    # shellcheck disable=SC1090
+    source "$HOME/.kaikei-release.env"
+  else
+    cat <<EOF
+
+⚠️  APPLE_* env が未設定で、~/.kaikei-release.env も見つかりません。
+
+公証付きリリースを打つには、先に下記を 1 回だけ実行してください (対話的):
+  scripts/release-setup-credentials.sh
+
+それで以下が自動で揃います:
+  - keychain に notarytool credential profile (AC_PASSWORD) を保存
+  - ~/.kaikei-release.env に APPLE_SIGNING_IDENTITY / APPLE_ID /
+    APPLE_PASSWORD (=@keychain:AC_PASSWORD) / APPLE_TEAM_ID を書き出し
+
+完了後に再度このコマンド (scripts/release.sh $TAG) を打つと、
+~/.kaikei-release.env が自動 source されます。
+
+未署名で構わない場合は:
+  UNSIGNED=1 scripts/release.sh $TAG          # 完全未署名 (arm64 のみ)
+  NOTARIZE_SKIP=1 scripts/release.sh $TAG     # 署名はする / 公証だけ skip
+EOF
+    exit 1
+  fi
+fi
+
 # 1. ビルド
 ASSETS=()
 if [ -n "${UNSIGNED:-}" ]; then

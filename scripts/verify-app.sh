@@ -19,6 +19,9 @@
 #   smoke                    スキャン → DB ダンプ → スクショまでを順に実行
 #   smoke-report [<file>]    smoke を Markdown レポートに書き出す
 #                            (既定: /tmp/kaikei-verify-<UTC>.md)
+#   smoke-report-html [<file>]
+#                            smoke を HTML (画像 data-uri 埋込み) にする
+#                            (既定: /tmp/kaikei-verify-<UTC>.html)
 #   watch                    src/ src-tauri/src/ の変更を監視 →
 #                            自動で next build + tauri build + .app 差し替え +
 #                            smoke-report を回す (Ctrl+C で停止)
@@ -189,6 +192,133 @@ cmd_watch() {
       sleep 2
     done
   fi
+}
+
+# Round 11 ㉨ — smoke-report の HTML 版。
+# Markdown だと file:// 参照が GitHub プレビュー等で表示されない問題があるので、
+# data-uri (base64 PNG) で画像を直接埋め込む単一ファイル HTML を吐く。
+# 出力: /tmp/kaikei-verify-<UTC>.html (Markdown と同時に)
+cmd_smoke_report_html() {
+  local ts
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  local out="${1:-/tmp/kaikei-verify-${ts}.html}"
+  local app_ver
+  app_ver=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$SCRIPT_DIR/../src-tauri/tauri.conf.json" 2>/dev/null || echo "?")
+
+  # 4 画面のスクショを撮る (smoke-report と同じ流れ)
+  local shot_dashboard shot_inbox shot_journals shot_logs
+  cmd_navigate "/dashboard" >/dev/null 2>&1 || true
+  shot_dashboard=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-dashboard.png" 2>/dev/null) || shot_dashboard=""
+  cmd_navigate "/inbox" >/dev/null 2>&1 || true
+  shot_inbox=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-inbox.png" 2>/dev/null) || shot_inbox=""
+  cmd_navigate "/journals" >/dev/null 2>&1 || true
+  shot_journals=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-journals.png" 2>/dev/null) || shot_journals=""
+  cmd_navigate "/settings/ai-ocr-log" >/dev/null 2>&1 || true
+  shot_logs=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-ai-ocr-log.png" 2>/dev/null) || shot_logs=""
+
+  local scan_json inbox_summary log_lines app_errors
+  scan_json=$(cmd_simulate_scan 2>&1 || true)
+  log_lines=$(cmd_tail_log 20 2>/dev/null || true)
+  app_errors=$(ERRORS_ONLY=1 cmd_app_log 30 2>/dev/null || true)
+  inbox_summary=$(cmd_db_dump photo_inbox 2>/dev/null | python3 -c "
+import json,sys
+try:
+  rows = json.load(sys.stdin)
+except Exception:
+  rows = []
+print(f'<li>行数: {len(rows)}</li>')
+buckets = {}
+for r in rows:
+  s = r.get('state', '?')
+  buckets[s] = buckets.get(s, 0) + 1
+for k in sorted(buckets):
+  print(f'<li>{k}: {buckets[k]}</li>')
+" 2>/dev/null || echo "<li>(parse 失敗)</li>")
+
+  # PNG → base64 data-uri 化
+  img_data_uri() {
+    local p="$1"
+    if [ -z "$p" ] || [ ! -f "$p" ]; then echo ""; return; fi
+    local b64
+    b64=$(base64 -i "$p" 2>/dev/null || base64 < "$p" 2>/dev/null || echo "")
+    [ -n "$b64" ] && echo "data:image/png;base64,${b64//$'\n'/}"
+  }
+  local du_dashboard du_inbox du_journals du_logs
+  du_dashboard=$(img_data_uri "$shot_dashboard")
+  du_inbox=$(img_data_uri "$shot_inbox")
+  du_journals=$(img_data_uri "$shot_journals")
+  du_logs=$(img_data_uri "$shot_logs")
+
+  # HTML 出力 — シングルファイル (CSS インライン、画像 data-uri)
+  {
+    cat <<HTML
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"/>
+<title>KAIKEI LOCAL — 検証レポート $ts</title>
+<style>
+  body { font-family: -apple-system,BlinkMacSystemFont,sans-serif; max-width:960px; margin:24px auto; padding:0 16px; color:#111; }
+  h1 { font-size:24px; }
+  h2 { font-size:18px; margin-top:32px; padding-bottom:6px; border-bottom:1px solid #e5e5e5; }
+  h3 { font-size:14px; margin-top:18px; color:#444; }
+  pre { background:#f6f7f9; padding:12px; border-radius:6px; font-size:11px; white-space:pre-wrap; max-height:300px; overflow:auto; }
+  ul { padding-left: 1.4em; }
+  img { max-width:100%; border:1px solid #e5e5e5; border-radius:6px; margin:8px 0; }
+  .meta { color:#666; font-size:12px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .checklist li { margin:4px 0; }
+</style>
+</head><body>
+<h1>KAIKEI LOCAL — 検証レポート</h1>
+<p class="meta">生成日時 (UTC): $ts &middot; アプリバージョン: v$app_ver &middot; ホスト: $(uname -srm)</p>
+
+<h2>simulate-scan</h2>
+<pre>$(printf '%s' "$scan_json" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</pre>
+
+<h2>photo_inbox サマリー</h2>
+<ul>
+$inbox_summary
+</ul>
+
+<h2>scan.log 末尾 20 行</h2>
+<pre>$(printf '%s' "$log_lines" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</pre>
+HTML
+    if [ -n "$app_errors" ]; then
+      echo "<h2>アプリ本体ログの WARN/ERR</h2>"
+      echo "<pre>$(printf '%s' "$app_errors" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</pre>"
+    fi
+    cat <<HTML
+<h2>UI スクリーンショット (4 画面)</h2>
+<div class="grid">
+HTML
+    for pair in \
+      "ダッシュボード:$du_dashboard" \
+      "受信箱:$du_inbox" \
+      "仕訳帳:$du_journals" \
+      "AI OCR ログ:$du_logs" ; do
+      label="${pair%%:*}"
+      uri="${pair#*:}"
+      if [ -n "$uri" ]; then
+        echo "  <div><h3>$label</h3><img src=\"$uri\" alt=\"$label\"/></div>"
+      fi
+    done
+    cat <<HTML
+</div>
+
+<h2>LLM レビュー欄</h2>
+<ul class="checklist">
+  <li>[ ] 致命的 UI 異常: なし / あり (詳細)</li>
+  <li>[ ] 新機能の表示確認: <em>(該当する場合の所見)</em></li>
+  <li>[ ] ログに新規エラー: なし / あり (詳細)</li>
+  <li>[ ] 全体所見: </li>
+</ul>
+
+<hr/>
+<p class="meta"><em>このレポートは <code>scripts/verify-app.sh smoke-report-html</code> で生成されました</em></p>
+</body></html>
+HTML
+  } > "$out"
+
+  echo "$out"
 }
 
 cmd_smoke() {
@@ -396,6 +526,7 @@ main() {
     navigate|nav)              cmd_navigate "$@" ;;
     smoke)                     cmd_smoke ;;
     smoke-report|report)       cmd_smoke_report "$@" ;;
+    smoke-report-html|html)    cmd_smoke_report_html "$@" ;;
     watch)                     cmd_watch ;;
     demo|video)                cmd_demo "$@" ;;
     help|-h|--help)            usage ;;
