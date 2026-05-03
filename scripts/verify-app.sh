@@ -19,6 +19,9 @@
 #   smoke                    スキャン → DB ダンプ → スクショまでを順に実行
 #   smoke-report [<file>]    smoke を Markdown レポートに書き出す
 #                            (既定: /tmp/kaikei-verify-<UTC>.md)
+#   watch                    src/ src-tauri/src/ の変更を監視 →
+#                            自動で next build + tauri build + .app 差し替え +
+#                            smoke-report を回す (Ctrl+C で停止)
 #   help                     ヘルプ
 #
 # 環境変数:
@@ -106,6 +109,84 @@ cmd_navigate() {
   cmd_activate
   # 1.5 秒待つ (poll 周期 1 秒 + 余裕)
   sleep 1.5
+}
+
+# Round 9 ㉟ — ソース変更を検知して自動で再ビルド + smoke-report
+#
+# 監視対象:
+#   - src/, src-tauri/src/, src-tauri/Cargo.toml, scripts/verify*
+# トリガ後の処理:
+#   1. アプリを quit
+#   2. npm run build (next out/)
+#   3. tauri build --bundles app --debug
+#   4. /Applications/KAIKEI LOCAL.app に差し替え + 署名
+#   5. open
+#   6. scripts/verify-app.sh smoke-report → /tmp に保存
+#   7. パスを stdout に出して、次の変更を待つ
+#
+# fswatch があれば使う (Brew install fswatch)、なければ 2 秒間隔ポーリング fallback。
+cmd_watch() {
+  local repo_root
+  repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+  cd "$repo_root"
+
+  echo "==> watch モード開始 (Ctrl+C で停止)"
+  echo "    監視: src/ src-tauri/src/ scripts/verify*"
+
+  do_rebuild() {
+    echo ""
+    echo "==> 変更検知 — 再ビルド開始 ($(date '+%H:%M:%S'))"
+    osascript -e 'quit app "KAIKEI LOCAL"' 2>/dev/null || true
+    killall kaikei 2>/dev/null || true
+    sleep 1
+    if ! npm run build >/tmp/kaikei-watch-build.log 2>&1; then
+      echo "  ✗ next build 失敗 — /tmp/kaikei-watch-build.log を確認"
+      return 1
+    fi
+    if ! npx tauri build --bundles app --debug >/tmp/kaikei-watch-tauri.log 2>&1; then
+      echo "  ✗ tauri build 失敗 — /tmp/kaikei-watch-tauri.log を確認"
+      return 1
+    fi
+    rm -rf "/Applications/KAIKEI LOCAL.app"
+    cp -R "src-tauri/target/debug/bundle/macos/KAIKEI LOCAL.app" /Applications/
+    codesign --force --deep --sign - \
+      --entitlements src-tauri/entitlements.plist --options runtime \
+      "/Applications/KAIKEI LOCAL.app" >/dev/null 2>&1 || true
+    open "/Applications/KAIKEI LOCAL.app"
+    sleep 5
+    local report
+    report=$(cmd_smoke_report 2>/dev/null) || report=""
+    echo "  ✓ ビルド成功 / smoke-report: $report"
+  }
+
+  # 初回 1 回ビルド
+  do_rebuild || true
+
+  if command -v fswatch >/dev/null 2>&1; then
+    echo "    (fswatch でリアルタイム監視中)"
+    # -1 を付けず連続監視。0.8s デバウンス相当の集約のため -l 0.8 を使う
+    fswatch -l 0.8 -o src src-tauri/src scripts | while read -r _; do
+      do_rebuild || true
+    done
+  else
+    echo "    (fswatch なし — 2 秒間隔ポーリング fallback)"
+    local last_sig=""
+    while true; do
+      local sig
+      sig=$(find src src-tauri/src scripts -type f \
+        \( -name '*.ts' -o -name '*.tsx' -o -name '*.rs' -o -name '*.toml' -o -name '*.sh' -o -name '*.applescript' \) \
+        -newer /tmp/.kaikei-watch-marker 2>/dev/null | sort | sha256sum 2>/dev/null | awk '{print $1}')
+      if [ -z "$last_sig" ]; then
+        last_sig="$sig"
+        touch /tmp/.kaikei-watch-marker
+      elif [ "$sig" != "$last_sig" ]; then
+        last_sig="$sig"
+        touch /tmp/.kaikei-watch-marker
+        do_rebuild || true
+      fi
+      sleep 2
+    done
+  fi
 }
 
 cmd_smoke() {
@@ -245,6 +326,7 @@ main() {
     navigate|nav)              cmd_navigate "$@" ;;
     smoke)                     cmd_smoke ;;
     smoke-report|report)       cmd_smoke_report "$@" ;;
+    watch)                     cmd_watch ;;
     help|-h|--help)            usage ;;
     *) echo "unknown subcommand: $sub" >&2; usage; exit 2 ;;
   esac

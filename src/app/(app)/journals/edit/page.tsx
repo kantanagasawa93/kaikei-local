@@ -6,7 +6,8 @@ import { supabase } from "@/lib/supabase";
 import { JournalForm, type JournalLineInput } from "@/components/journal-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ArrowLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
 
 function EditInner() {
@@ -110,6 +111,10 @@ function EditInner() {
         <h1 className="text-2xl font-bold">仕訳を編集</h1>
       </div>
 
+      {/* ㉝ Round 9: auto 分割サマリー — memo に「自動分割」を含む借方 line が
+          複数ある時、何がどの基準で分けられたか summary card で見せる */}
+      <AutoSplitSummary lines={initialData.lines} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">仕訳の編集</CardTitle>
@@ -119,6 +124,64 @@ function EditInner() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Round 9 ㉝: 自動分割された仕訳をハイライト表示する小さなカード。
+ *
+ * memo に "自動分割" が含まれる借方 line が 2 つ以上あれば「自動分割の内訳」
+ * カードを出す。価格按分 / 件数按分の区別、各勘定科目の amount、共通品目を
+ * 1 か所にまとめて表示するので、編集中ユーザは「なぜこの仕訳が複数行なのか」
+ * が一目で分かる。
+ */
+function AutoSplitSummary({ lines }: { lines: JournalLineInput[] }) {
+  const splitLines = lines.filter(
+    (l) => l.memo && /^自動分割/.test(l.memo) && (l.debit_amount ?? 0) > 0,
+  );
+  if (splitLines.length < 2) return null;
+
+  // 按分方式: memo 文字列に「価格按分」が含まれていれば price、件数按分なら count
+  const method = splitLines.some((l) => l.memo?.includes("価格按分"))
+    ? ("price" as const)
+    : ("count" as const);
+
+  const total = splitLines.reduce((acc, l) => acc + (l.debit_amount ?? 0), 0);
+
+  return (
+    <Card className="border-primary/30 bg-primary/5">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          自動分割の内訳
+          <Badge variant="secondary" className="text-[10px] font-normal">
+            {method === "price" ? "価格按分" : "件数按分"}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <ul className="space-y-1 text-xs">
+          {splitLines.map((l, i) => {
+            const ratio = total > 0 ? Math.round(((l.debit_amount ?? 0) / total) * 100) : 0;
+            return (
+              <li key={i} className="flex items-baseline gap-2">
+                <span className="font-mono text-muted-foreground w-12 text-right">{ratio}%</span>
+                <span className="font-medium min-w-[7em]">{l.account_name}</span>
+                <span className="font-mono tabular-nums">¥{(l.debit_amount ?? 0).toLocaleString()}</span>
+                {l.memo && (
+                  <span className="text-muted-foreground text-[10px] truncate">
+                    {l.memo.replace(/^自動分割\s*\(/, "(")}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          合計 ¥{total.toLocaleString()}。誤判定があれば下のフォームから直接編集できます。
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 

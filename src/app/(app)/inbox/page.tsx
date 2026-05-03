@@ -25,7 +25,11 @@ import {
   ArrowRight,
   Trash2,
   RotateCcw,
+  CheckSquare,
+  Square,
+  Search,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { db } from "@/lib/localDb";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +89,13 @@ export default function InboxPage() {
   // ㊌ Round 6: hover プレビュー対象 (右側 pane に拡大画像 + OCR を表示)
   const [hovered, setHovered] = useState<InboxRow | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ㉜ Round 9: マルチ選択 (Cmd/Shift+クリックでチェック → 一括判定)
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // ㉞ Round 9: 検索 (OCR テキスト + 撮影日範囲)
+  const [searchQ, setSearchQ] = useState("");
+  const [searchFrom, setSearchFrom] = useState(""); // YYYY-MM-DD
+  const [searchTo, setSearchTo] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
   // 件数バッジ用: state ごとの行数 (タブ表示の補助)
   const [counts, setCounts] = useState<Record<InboxState | "all", number>>({
     candidate: 0,
@@ -98,9 +109,15 @@ export default function InboxPage() {
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
-    setItems(await listInbox(filter === "all" ? undefined : filter));
+    setItems(
+      await listInbox(filter === "all" ? undefined : filter, {
+        q: searchQ,
+        fromDate: searchFrom || undefined,
+        toDate: searchTo || undefined,
+      }),
+    );
     setAutoMode(await getAutoJournalMode());
-    // 件数バッジ: 状態ごとに件数を取得
+    // 件数バッジ: 状態ごとに件数を取得 (検索条件は除外 — 全体を見せる)
     const all = await listInbox();
     const next: Record<InboxState | "all", number> = {
       candidate: 0,
@@ -123,7 +140,7 @@ export default function InboxPage() {
 
   useEffect(() => {
     void refresh();
-  }, [filter]);
+  }, [filter, searchQ, searchFrom, searchTo]);
 
   const handleDismissAllCandidates = async () => {
     const candidates = await listInbox("candidate");
@@ -265,6 +282,38 @@ export default function InboxPage() {
     await refresh();
   };
 
+  // ㉜ Round 9: マルチ選択ヘルパ + bulk action
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const selectAllVisible = () => {
+    setSelected(new Set(items.map((it) => it.id)));
+  };
+  const clearSelection = () => setSelected(new Set());
+
+  // 一括判定: 選択中の photo_inbox 行を 1 クエリで update する
+  const bulkSetState = async (state: InboxState) => {
+    if (selected.size === 0) {
+      toast.info("選択された写真がありません");
+      return;
+    }
+    const ids = Array.from(selected);
+    try {
+      // photo_inbox.id IN (...) で一括更新
+      await db.from("photo_inbox").update({ state }).in("id", ids);
+      toast.success(`${ids.length} 件を「${state}」に変更しました`);
+      clearSelection();
+      await refresh();
+    } catch (e) {
+      toast.error(`一括変更に失敗: ${(e as Error).message}`);
+    }
+  };
+
   // ⓓ クイック確定: 1 クリックで Claude OCR → receipt + journal 作成
   // Round 6 ㊋: BlockedByPattern (license/consent エラーが 2 件以上連続) は
   // 個別 modal で「設定を開く」を促し、それ以外のエラーは普通の toast.error
@@ -304,6 +353,42 @@ export default function InboxPage() {
           }}
           onMouseLeave={handleHoverLeave}
         />
+      )}
+
+      {/* ㉜ Round 9: bulk action bar — selection が 1 件以上で下中央に固定表示 */}
+      {selected.size > 0 && (
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50
+                     bg-card border-2 border-primary shadow-2xl rounded-full
+                     px-4 py-2 flex items-center gap-2 text-sm"
+        >
+          <Badge variant="default" className="font-mono">
+            {selected.size} 件選択中
+          </Badge>
+          <Button size="sm" variant="default" onClick={() => bulkSetState("receipt")}>
+            <Check className="h-3.5 w-3.5 mr-1" />
+            領収書
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => bulkSetState("not_receipt")}>
+            <XIcon className="h-3.5 w-3.5 mr-1" />
+            違う
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => bulkSetState("dismissed")}>
+            <Trash2 className="h-3.5 w-3.5 mr-1" />
+            破棄
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => bulkSetState("candidate")} title="未判定に戻す">
+            <RotateCcw className="h-3.5 w-3.5 mr-1" />
+            未判定
+          </Button>
+          <span className="mx-1 h-4 w-px bg-border" />
+          <Button size="sm" variant="ghost" onClick={selectAllVisible} title="表示中の全件を選択">
+            全選択
+          </Button>
+          <Button size="sm" variant="ghost" onClick={clearSelection}>
+            選択解除
+          </Button>
+        </div>
       )}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
@@ -417,6 +502,53 @@ export default function InboxPage() {
         )}
       </div>
 
+      {/* ㉞ Round 9: 検索バー — トグルで開閉、入力で即フィルタ */}
+      <div>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setShowSearch((s) => !s)}
+          className="text-xs"
+        >
+          <Search className="h-3.5 w-3.5 mr-1" />
+          検索 {(searchQ || searchFrom || searchTo) ? "(条件あり)" : ""}
+        </Button>
+        {showSearch && (
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <Input
+              placeholder="OCR テキストで検索 (例: スターバックス)"
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+            />
+            <Input
+              type="date"
+              value={searchFrom}
+              onChange={(e) => setSearchFrom(e.target.value)}
+              placeholder="撮影日 開始"
+            />
+            <Input
+              type="date"
+              value={searchTo}
+              onChange={(e) => setSearchTo(e.target.value)}
+              placeholder="撮影日 終了"
+            />
+            {(searchQ || searchFrom || searchTo) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQ("");
+                  setSearchFrom("");
+                  setSearchTo("");
+                }}
+                className="text-xs text-muted-foreground hover:text-foreground underline col-span-full justify-self-start"
+              >
+                条件をクリア
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* ㊁ 失敗パターンの一行ヒント (top バケットだけ目立たせる).
           原因が偏っている時は「再試行を勧める」より「設定を直しに行く」を促す。 */}
       {failureStats && failureStats.top && failureStats.top.count >= 2 && (
@@ -445,6 +577,8 @@ export default function InboxPage() {
               key={it.id}
               row={it}
               quickConfirming={quickConfirming === it.id}
+              isSelected={selected.has(it.id)}
+              onToggleSelected={() => toggleSelected(it.id)}
               onHoverEnter={() => handleHoverEnter(it)}
               onHoverLeave={handleHoverLeave}
               onMarkReceipt={() => markReceipt(it.id)}
@@ -467,6 +601,8 @@ export default function InboxPage() {
 function InboxCard({
   row,
   quickConfirming,
+  isSelected,
+  onToggleSelected,
   onHoverEnter,
   onHoverLeave,
   onMarkReceipt,
@@ -479,6 +615,8 @@ function InboxCard({
 }: {
   row: InboxRow;
   quickConfirming: boolean;
+  isSelected: boolean;
+  onToggleSelected: () => void;
   onHoverEnter: () => void;
   onHoverLeave: () => void;
   onMarkReceipt: () => void;
@@ -519,7 +657,9 @@ function InboxCard({
 
   return (
     <Card
-      className="overflow-hidden flex flex-col"
+      className={`overflow-hidden flex flex-col transition-shadow ${
+        isSelected ? "ring-2 ring-primary shadow-md" : ""
+      }`}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
     >
@@ -531,6 +671,22 @@ function InboxCard({
             画像読み込み中...
           </div>
         )}
+        {/* ㉜ Round 9: 左下にマルチ選択チェックボックス */}
+        <button
+          type="button"
+          onClick={onToggleSelected}
+          className={`absolute bottom-2 left-2 h-6 w-6 rounded
+                      flex items-center justify-center transition-colors
+                      ${isSelected ? "bg-primary text-primary-foreground" : "bg-background/80 backdrop-blur-sm hover:bg-background"}`}
+          title={isSelected ? "選択解除" : "選択"}
+          aria-label={isSelected ? "選択解除" : "選択"}
+        >
+          {isSelected ? (
+            <CheckSquare className="h-4 w-4" />
+          ) : (
+            <Square className="h-4 w-4 text-muted-foreground" />
+          )}
+        </button>
         {row.receipt_score !== null && (
           <Badge
             variant="secondary"

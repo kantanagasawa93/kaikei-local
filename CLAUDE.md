@@ -75,42 +75,44 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 9) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 10) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊙ → ㉜ → ㉝ → ㉞ → ㉟。
+推し優先順は ㉠ → ㉡ → ㉢ → ㉣ → ㉤。
 
-### ㊙ v0.3.0 公証付きリリース実発火 (Round 8 で notes 連動も整備済み) ★★★★★
-- 状況: Round 4-8 で precheck / NOTARIZE_SKIP / verify-release / multi-screenshot
-  smoke-report / CHANGELOG 連動 release notes まで揃い、最後の 1 ピース
-  (APPLE_ID + app-specific password) だけ。手元シェルで打つのみ
-- 手順は CLAUDE.md 上部「自律検証」参照
+### ㉠ v0.3.0 公証付きリリース実発火 ★★★★★
+- 状況: Round 4-9 で precheck / NOTARIZE_SKIP / verify-release / rollback /
+  notes 連動 / multi-screenshot smoke-report まで揃い完璧。
+  あとは APPLE_* env を渡して `scripts/release.sh v0.3.0` を打つだけ。
+  release.sh の末尾で verify-release.sh が自動で叩かれる
+- 手元手順 (再掲): CLAUDE.md 上部の「自律検証」セクション参照
 
-### ㉜ 受信箱の bulk action ★★★★
-- 目的: 「未判定 30 件」など多くなった時、ひとつずつ判定するのは負担。
-  Cmd+クリックでマルチ選択 → 一括「これ全部領収書」「これ全部破棄」
-- 対象: src/app/(app)/inbox/page.tsx の InboxCard に selection 追加 +
-  ページに selectedIds Set + bulk action 用のフローティングバー
-- commit サイズ: 中 (~180 行)
-
-### ㉝ 仕訳明細編集 UI で auto 分割を可視化 ★★★
-- 目的: Round 7 ㊐/Round 8 ㊕ で auto 分割した仕訳を編集する時、memo に
-  入っている「自動分割 (価格按分 580/1200円)」だけだと確認しにくい
-- 対象: src/app/(app)/journals/edit/page.tsx に分割サマリーカードを表示
+### ㉡ Vision OCR の精度を Apple のスタイル設定で上げる ★★★★
+- 目的: vision.rs の `setRecognitionLevel` 等で更にチューニング。`customWords`
+  を渡して屋号・取引先名などのドメイン語を辞書に注入
+- 対象: src-tauri/src/vision.rs + DB から partner_name 一覧を取って
+  `setCustomWords:` に渡す
 - commit サイズ: 中 (~120 行)
 
-### ㉞ 受信箱の検索 ★★★
-- 目的: OCR テキスト + 撮影日 + state で受信箱を絞り込み検索
-- 対象: src/app/(app)/inbox/page.tsx に検索 input
-- やること: photo_inbox.ocr_text に対して LIKE クエリ + 撮影日範囲フィルタ
-- commit サイズ: 中 (~100 行)
+### ㉢ 受信箱の selection をキーボードショートカットで操作 ★★★
+- 目的: A=領収書 / X=違う / D=破棄 / Space=hover, ↑↓ で navigate, Enter で開く
+- 対象: src/app/(app)/inbox/page.tsx に keydown listener
+- commit サイズ: 中 (~150 行)
 
-### ㉟ verify-app.sh の watch モード ★★
-- 目的: scripts/verify-app.sh watch でファイル変更検知 → next build →
-  tauri build → install → smoke-report を自動連続実行
-- 対象: scripts/verify-app.sh
-- やること: fswatch (Brew) があれば使う、なければポーリング
-- commit サイズ: 中 (~120 行)
+### ㉣ verify-app.sh smoke-report に「ユーザ視点の評価」を入れる ★★★
+- 目的: Markdown レポートに「LLM (Claude) が見て、UI が壊れてないか / どこ
+  が変か」をプロンプトで評価する欄を入れる。実際のチェックは Claude チャット
+  側で行うが、レポート生成時に「↓ここに Claude のコメント」テンプレを残す
+- 対象: scripts/verify-app.sh の cmd_smoke_report
+- commit サイズ: 小 (~50 行)
+
+### ㉤ 受信箱→仕訳のフローを e2e でデモる動画自動生成 ★★
+- 目的: smoke-report の発展形。1 サンプル写真をスキャン → クイック確定 →
+  仕訳帳でバッジ確認 → CSV エクスポート、までを ffmpeg で動画化
+- 対象: scripts/verify-app.sh demo (新サブコマンド)
+- やること: cmd_navigate + screencapture を 200ms 間隔で連続キャプチャし、
+  ffmpeg でつないで MP4 にする
+- commit サイズ: 中 (~150 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
