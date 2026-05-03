@@ -7,8 +7,10 @@ import { JournalForm, type JournalLineInput } from "@/components/journal-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, Sparkles, Wand2 } from "lucide-react";
 import Link from "next/link";
+import { rejournalize } from "@/lib/auto-journal";
+import { toast } from "@/lib/toast";
 
 function EditInner() {
   const params = useSearchParams();
@@ -20,6 +22,29 @@ function EditInner() {
     description: string;
     lines: JournalLineInput[];
   } | null>(null);
+  // ㉭ Round 12: 受信箱由来 (receipt_id 紐付き) の仕訳のみ「再仕訳化」を出す
+  const [hasReceipt, setHasReceipt] = useState(false);
+  const [rejournalizing, setRejournalizing] = useState(false);
+
+  // 再仕訳化ボタンのハンドラ
+  async function handleRejournalize() {
+    if (!id || rejournalizing) return;
+    const ok = window.confirm(
+      "現在の仕訳と領収書を削除し、写真を受信箱に戻して AI OCR で再度仕訳化します。\n\n" +
+        "(誤操作の場合は、仕訳帳の「直近の差し戻しを取り消す」で復元できます)\n\n" +
+        "続行しますか?",
+    );
+    if (!ok) return;
+    setRejournalizing(true);
+    try {
+      await rejournalize(id);
+      toast.success("AI OCR で再仕訳化しました");
+      router.push("/journals");
+    } catch (e) {
+      toast.error(`再仕訳化に失敗: ${(e as Error).message}`);
+      setRejournalizing(false);
+    }
+  }
 
   useEffect(() => {
     if (!id) {
@@ -55,6 +80,7 @@ function EditInner() {
           memo: l.memo || null,
         })),
       });
+      setHasReceipt(!!journal.receipt_id);
       setLoading(false);
     })();
   }, [id]);
@@ -101,7 +127,7 @@ function EditInner() {
 
   return (
     <div className="space-y-6 max-w-3xl">
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <Link href="/journals">
           <Button variant="ghost" size="sm">
             <ArrowLeft className="h-4 w-4 mr-1" />
@@ -109,6 +135,22 @@ function EditInner() {
           </Button>
         </Link>
         <h1 className="text-2xl font-bold">仕訳を編集</h1>
+        {/* ㉭ Round 12: 受信箱由来の仕訳のみに「AI OCR で再仕訳化」を出す.
+            押すと journal+receipt 削除 → photo_inbox を receipt 状態に戻し →
+            autoJournalizeOne で再仕訳。誤操作の救済は仕訳帳の Undo で。 */}
+        {hasReceipt && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRejournalize}
+            disabled={rejournalizing}
+            className="ml-auto"
+            title="現在の仕訳を破棄して、AI OCR で再度仕訳化する"
+          >
+            <Wand2 className={`h-4 w-4 mr-1 ${rejournalizing ? "animate-pulse" : ""}`} />
+            {rejournalizing ? "再仕訳化中..." : "AI OCR で再仕訳化"}
+          </Button>
+        )}
       </div>
 
       {/* ㉝ Round 9: auto 分割サマリー — memo に「自動分割」を含む借方 line が

@@ -363,17 +363,20 @@ cmd_demo() {
   echo "==> demo 録画開始 (frames: $frame_dir)"
 
   # 各シーンで 4 frame (= 4 秒@1fps) を取る
+  # Round 12 ㉮: シーンタイトルを別途 metadata.tsv に記録 → 後で drawtext
   local frame_no=0
+  : > "$frame_dir/labels.tsv" # frame_no \t label
   capture_scene() {
     local route="$1"
     local label="$2"
     cmd_navigate "$route" >/dev/null 2>&1 || true
-    sleep 1.2  # NavigateBridge の poll 周期 + render
+    sleep 1.2
     for _ in 1 2 3 4; do
       frame_no=$((frame_no + 1))
       local fname
       fname=$(printf "%s/frame-%04d.png" "$frame_dir" "$frame_no")
       cmd_ui_screenshot "$fname" >/dev/null 2>&1 || true
+      printf "%d\t%s\n" "$frame_no" "$label" >> "$frame_dir/labels.tsv"
       sleep 1
     done
     echo "  ✓ $label ($route)"
@@ -384,9 +387,27 @@ cmd_demo() {
   capture_scene "/journals" "仕訳帳"
   capture_scene "/settings/ai-ocr-log" "AI OCR ログ"
 
+  # Round 12 ㉮: 各 frame ごとに drawtext でシーンタイトルを焼き込み
+  # システムフォント (NotoSansCJK) を使う; 失敗したら無 overlay で MP4 化
+  local font="/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"
+  if [ ! -f "$font" ]; then
+    font="/System/Library/Fonts/Helvetica.ttc"
+  fi
+  echo "==> 各フレームにラベル overlay (font: $(basename "$font"))"
+  while IFS=$'\t' read -r fno label; do
+    local src dst
+    src=$(printf "%s/frame-%04d.png" "$frame_dir" "$fno")
+    dst=$(printf "%s/labeled-%04d.png" "$frame_dir" "$fno")
+    if [ ! -f "$src" ]; then continue; fi
+    # 左下に半透明黒帯 + 白タイトル
+    ffmpeg -y -loglevel error -i "$src" \
+      -vf "drawbox=x=20:y=ih-90:w=420:h=60:color=black@0.55:t=fill,drawtext=fontfile='$font':text='$label':x=40:y=h-72:fontsize=32:fontcolor=white" \
+      "$dst" >/dev/null 2>&1 || cp "$src" "$dst"
+  done < "$frame_dir/labels.tsv"
+
   echo "==> ffmpeg で MP4 化"
   ffmpeg -y -framerate 1 \
-    -i "$frame_dir/frame-%04d.png" \
+    -i "$frame_dir/labeled-%04d.png" \
     -c:v libx264 -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
     "$out" 2>&1 | tail -3
 
@@ -419,6 +440,37 @@ cmd_smoke_report() {
   log_lines=$(cmd_tail_log 20 2>/dev/null || true)
   # ㊘ Round 8: アプリ本体ログから WARN/ERR 行のみを 30 行抽出
   app_errors=$(ERRORS_ONLY=1 cmd_app_log 30 2>/dev/null || true)
+  # ㉫ Round 12: 自動破棄理由 (auto_dismissed_reason) を集計してパターン上位を表示
+  local autodismiss_summary
+  autodismiss_summary=$(echo "$inbox_json" | python3 -c "
+import json, sys, collections
+try:
+  rows = json.load(sys.stdin)
+except Exception:
+  rows = []
+reasons = []
+for r in rows:
+  if r.get('state') != 'dismissed':
+    continue
+  raw = r.get('auto_dismissed_reason') or ''
+  if not raw:
+    continue
+  try:
+    j = json.loads(raw)
+  except Exception:
+    continue
+  kws = j.get('matched_keywords') or []
+  if kws:
+    reasons.append(' / '.join(kws[:3]))
+total = len(reasons)
+if total == 0:
+  print('(自動破棄された行はありません)')
+else:
+  c = collections.Counter(reasons)
+  print(f'自動破棄 {total} 件のパターン上位:')
+  for kw, cnt in c.most_common(5):
+    print(f'  {cnt:>3}x  {kw}')
+" 2>/dev/null || echo "(集計失敗)")
 
   # python で JSON を要約 (件数・state 別カウント)
   local inbox_summary
@@ -468,6 +520,12 @@ for k in sorted(buckets):
       echo '```'
       echo ""
     fi
+    echo "## 自動破棄パターン上位 (㉫)"
+    echo ""
+    echo '```'
+    echo "$autodismiss_summary"
+    echo '```'
+    echo ""
     echo "## UI スクリーンショット (㊓ 複数ページ)"
     echo ""
     for pair in \

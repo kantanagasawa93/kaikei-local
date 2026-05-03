@@ -75,42 +75,42 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 12) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 13) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉪ → ㉫ → ㉬ → ㉭ → ㉮。
+推し優先順は ㉯ → ㉰ → ㉱ → ㉲ → ㉳。
 
-### ㉪ v0.3.0 リリース ★★★★★
-- Round 10 ㉠ + Round 11 ㉥ で動線完璧。あとは:
-  ```
-  scripts/release-setup-credentials.sh        # 1 度だけ対話
-  scripts/release.sh v0.3.0                   # 自動 source + 公証 + 健康診断
-  ```
+### ㉯ v0.3.0 リリース ★★★★★
+- Round 12 までで release.sh は precheck / env auto-source / push-check /
+  CHANGELOG 連動 notes / verify-release / rollback 完備。
+- 手元で 1 回: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㉫ photo_inbox の自動破棄理由を Markdown レポートに集計 ★★★
-- 目的: Round 8 ㊗ の `auto_dismissed_reason` JSON を smoke-report で集計
-  「自動破棄 12 件中 8 件は『Wi-Fi/案内』パターン」と表示
-- 対象: scripts/verify-app.sh の cmd_smoke_report* に集計追加
-- commit サイズ: 小 (~60 行)
-
-### ㉬ Tauri 起動引数 --start-route= ★★★
-- 目的: dev 中に `--start-route=/inbox` でアプリ起動直後に該当ページを開く
-  (Round 11 ㉩ の last_route とは別に、CLI から起動時に強制ページ遷移)
-- 対象: lib.rs の CLI + NavigateBridge の初回処理
-- commit サイズ: 小〜中 (~100 行)
-
-### ㉭ 仕訳明細編集に「再仕訳化」ボタン ★★★★
-- 目的: 編集画面で receipt_id がある仕訳に「AI OCR で再仕訳化」を出す。
-  押すと journal+receipt を消して photo_inbox.state='receipt' に戻し、
-  そのまま autoJournalizeOne を呼ぶ
-- 対象: src/app/(app)/journals/edit/page.tsx + src/lib/auto-journal.ts
+### ㉰ classifier 内部の score 内訳を photo_inbox に保存 ★★★
+- 目的: なぜ score 0.85 になったかが「ブラックボックス」。signals[] を
+  JSON で保存して、受信箱カードで「なぜこの score?」を tooltip 表示
+- 対象: classifier.rs (Rust) + receipt-classifier.ts (TS) + photo_inbox に
+  score_signals_json カラム追加 (migration v7)
 - commit サイズ: 中 (~150 行)
 
-### ㉮ verify-app.sh の demo 動画にナレーションテキスト ★★
-- 目的: Round 10 ㉤ の demo 動画にシーンタイトル overlay を入れる
-  (ffmpeg drawtext で「ダッシュボード」「受信箱」等の白テキスト重ね)
-- 対象: scripts/verify-app.sh の cmd_demo
-- commit サイズ: 小 (~60 行)
+### ㉱ 受信箱の「全部 1 クリックで仕訳化 (1 件単位 streaming)」 ★★★★
+- 目的: Round 1 で「全部自動仕訳」は実装済みだが、進捗表示が「N/M」だけ。
+  各 1 件の結果 (店名・金額・科目) を逐次受信箱カード上にプレビュー
+- 対象: inbox/page.tsx の handleJournalizeAll に SSE 風の per-item callback
+- commit サイズ: 中 (~120 行)
+
+### ㉲ Vision OCR の言語自動判定改善 ★★★
+- 目的: 現在は kana/kanji 含むかで ja/en 切替の単純判定。中国語・韓国語の
+  領収書はあまりないが、混在テキスト (英字メニュー + 日本円表記) を
+  両言語で再 OCR して結合する戦略
+- 対象: vision.rs に both-pass モード追加
+- commit サイズ: 中 (~120 行)
+
+### ㉳ verify-app.sh の自動 commit + push (CI フリー) ★★
+- 目的: smoke-report が成功したら自動で git commit + push する開発モード。
+  Claude が PDCA を 1 ラウンド完了するまで人手介入なしの「自走」が可能に
+- 対象: scripts/verify-app.sh autorun (新サブコマンド)
+- 安全策: 直前に precheck 系 + main 以外のブランチ強制 + AUTOPUSH=1 必須
+- commit サイズ: 中 (~100 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
