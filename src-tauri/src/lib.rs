@@ -149,6 +149,140 @@ async fn db_repair_migration_checksum(
     }
 }
 
+/// Round 15 ㉻: アプリ設定画面から呼ぶ「データ全消去」Tauri command。
+///
+/// app_data_dir 配下を:
+///   1. dev.kaikei.app.bak-<ts> にコピー (cp -R)
+///   2. std::fs::remove_dir_all で削除
+///   3. JSON {ok, backup_path, removed_size_bytes} を返す
+///
+/// UI 側は呼出前に「DELETE と入力してください」など二重確認を要求する想定。
+/// CLI の `--wipe-data --yes` (Round 14 ㉷) と同じ動きを Tauri 経由で。
+#[tauri::command]
+async fn wipe_app_data(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        if !app_data.exists() {
+            return Ok(serde_json::json!({ "ok": true, "skipped": "not_exists" }));
+        }
+        let result = tokio::task::spawn_blocking(move || -> Result<(String, u64), String> {
+            // バックアップ
+            let ts = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+            let backup = app_data.with_file_name(format!("dev.kaikei.app.bak-{}", ts));
+            let status = std::process::Command::new("cp")
+                .arg("-R")
+                .arg(&app_data)
+                .arg(&backup)
+                .status()
+                .map_err(|e| format!("cp spawn: {}", e))?;
+            if !status.success() {
+                return Err("cp -R 失敗".into());
+            }
+
+            // サイズ集計
+            let mut total: u64 = 0;
+            if let Ok(read) = std::fs::read_dir(&app_data) {
+                for e in read.flatten() {
+                    total += e.metadata().ok().map(|m| m.len()).unwrap_or(0);
+                }
+            }
+
+            // 削除
+            std::fs::remove_dir_all(&app_data).map_err(|e| format!("remove_dir_all: {}", e))?;
+            Ok((backup.to_string_lossy().to_string(), total))
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))?;
+
+        match result {
+            Ok((backup, total)) => Ok(serde_json::json!({
+                "ok": true,
+                "backup_path": backup,
+                "removed_size_bytes": total,
+            })),
+            Err(e) => Ok(serde_json::json!({ "ok": false, "error": e })),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("wipe_app_data is only supported on macOS".into())
+    }
+}
+
+/// Round 15 ㉽: `_sqlx_migrations` の現在状態を JSON で返す。
+///
+/// UI / verify-app.sh から「DB が v7 まで適用されているか」を確認する用途。
+/// Round 3 ⓐ の auto-recovery が動いた直後の状況確認にも使える。
+#[tauri::command]
+async fn migrations_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        let db_path = app_data.join("kaikei.db");
+        if !db_path.exists() {
+            return Ok(serde_json::json!({ "ok": true, "rows": [], "skipped": "db_not_found" }));
+        }
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<serde_json::Value>, String> {
+            let conn = rusqlite::Connection::open(&db_path)
+                .map_err(|e| format!("open db: {}", e))?;
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|_| true)
+                .unwrap_or(false);
+            if !exists {
+                return Ok(vec![]);
+            }
+            let mut stmt = conn
+                .prepare(
+                    "SELECT version, description, installed_on, success, execution_time \
+                     FROM _sqlx_migrations ORDER BY version",
+                )
+                .map_err(|e| format!("prepare: {}", e))?;
+            let mut rows = stmt.query([]).map_err(|e| format!("query: {}", e))?;
+            let mut out = Vec::new();
+            while let Ok(Some(row)) = rows.next() {
+                let version: i64 = row.get(0).unwrap_or(0);
+                let description: String = row.get(1).unwrap_or_default();
+                let installed_on: String = row.get(2).unwrap_or_default();
+                let success: i64 = row.get(3).unwrap_or(0);
+                let exec_us: i64 = row.get(4).unwrap_or(0);
+                out.push(serde_json::json!({
+                    "version": version,
+                    "description": description,
+                    "installed_on": installed_on,
+                    "success": success == 1,
+                    "execution_us": exec_us,
+                }));
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))?;
+
+        match result {
+            Ok(rows) => Ok(serde_json::json!({ "ok": true, "rows": rows, "count": rows.len() })),
+            Err(e) => Ok(serde_json::json!({ "ok": false, "error": e })),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("migrations_status is only supported on macOS".into())
+    }
+}
+
 /// 起動中のアプリが「ルート遷移すべきターゲット」を取りに行く。
 /// `--navigate=/route` CLI が書いた `~/Library/Application Support/dev.kaikei.app/.navigate-target`
 /// を読み、空文字を含めずに返したら呼出側 (Frontend NavigateBridge) で
@@ -218,21 +352,32 @@ async fn read_image_file(
 /// Round 10 ㉡: 第 2 引数 customWords (Optional) で取引先名・店名等の
 /// 固有名詞をバイアス用辞書として渡せる。指定なしなら従来挙動。
 /// Round 13 ㉲: 第 3 引数 twoPass=true で日英両言語の独立 OCR を結合 (約 2 倍遅い)。
+/// Round 15 ㉺: 第 4 引数 lang ("ja"|"en") で単一言語モード。指定があると
+/// twoPass より優先 (ja-only / en-only での再 OCR を選択できる)。
 #[tauri::command]
 async fn vision_recognize_text(
     file_path: String,
     custom_words: Option<Vec<String>>,
     two_pass: Option<bool>,
+    lang: Option<String>,
 ) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
         let words = custom_words.unwrap_or_default();
         let two_pass = two_pass.unwrap_or(false);
+        let lang = lang.unwrap_or_default();
         let result = tokio::task::spawn_blocking(move || {
-            if two_pass {
-                vision::recognize_text_two_pass(&file_path, &words)
-            } else {
-                vision::recognize_text_with_words(&file_path, &words)
+            // lang 指定が "ja" / "en" なら単一言語モード優先
+            match lang.as_str() {
+                "ja" => vision::recognize_text_single_lang(&file_path, &words, "ja-JP"),
+                "en" => vision::recognize_text_single_lang(&file_path, &words, "en-US"),
+                _ => {
+                    if two_pass {
+                        vision::recognize_text_two_pass(&file_path, &words)
+                    } else {
+                        vision::recognize_text_with_words(&file_path, &words)
+                    }
+                }
             }
         })
         .await
@@ -241,7 +386,7 @@ async fn vision_recognize_text(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (file_path, custom_words, two_pass);
+        let _ = (file_path, custom_words, two_pass, lang);
         Err("vision OCR is only supported on macOS".into())
     }
 }
@@ -1006,6 +1151,8 @@ pub fn run() {
             db_repair_migration_checksum,
             navigate_target_get,
             navigate_target_clear,
+            wipe_app_data,
+            migrations_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

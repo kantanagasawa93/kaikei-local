@@ -439,21 +439,30 @@ export default function InboxPage() {
     }
   };
 
-  // ㉵ Round 14: 受信箱の 1 件を Vision で再 OCR (両言語独立 two-pass)。
-  // 英字メニューがひらがな化された等の OCR 失敗を救済する用途。
-  const reocrOne = async (inboxId: string, twoPass: boolean) => {
+  // ㉵ Round 14 + ㉺ Round 15: 受信箱の 1 件を Vision で再 OCR
+  // モード選択: 既定 (ja+en 同時) / ja-only / en-only / two-pass (独立結合)
+  const [reocrModalFor, setReocrModalFor] = useState<string | null>(null);
+
+  const reocrOne = async (
+    inboxId: string,
+    mode: "default" | "ja" | "en" | "two-pass",
+  ) => {
     if (reocrInProgress) return;
     setReocrInProgress(inboxId);
     try {
-      const res = await reocrInboxRow(inboxId, { twoPass });
+      const res = await reocrInboxRow(inboxId, {
+        twoPass: mode === "two-pass",
+        lang: mode === "ja" ? "ja" : mode === "en" ? "en" : undefined,
+      });
       toast.success(
-        `再 OCR 完了 — score ${res.score?.toFixed(2) ?? "-"} / state ${res.state}`,
+        `再 OCR 完了 (${mode}) — score ${res.score?.toFixed(2) ?? "-"} / state ${res.state}`,
       );
       await refresh();
     } catch (e) {
       toast.error(`再 OCR 失敗: ${(e as Error).message}`);
     } finally {
       setReocrInProgress(null);
+      setReocrModalFor(null);
     }
   };
 
@@ -486,6 +495,77 @@ export default function InboxPage() {
 
   return (
     <div className="space-y-6">
+      {/* ㉺ Round 15: 再 OCR モード選択モーダル */}
+      {reocrModalFor && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setReocrModalFor(null)}
+        >
+          <div
+            className="bg-card border rounded-lg shadow-2xl max-w-sm w-full p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold mb-2">再 OCR モードを選択</h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              Vision で再認識します。日英混在の領収書なら two-pass、純粋な
+              英字メニューなら en-only が精度高めです。
+            </p>
+            <div className="space-y-2">
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => reocrOne(reocrModalFor, "default")}
+                disabled={!!reocrInProgress}
+                className="w-full justify-start"
+              >
+                <ScanText className="h-4 w-4 mr-2" />
+                ja + en (既定) — 速い、混在テキストで標準
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => reocrOne(reocrModalFor, "ja")}
+                disabled={!!reocrInProgress}
+                className="w-full justify-start"
+              >
+                <ScanText className="h-4 w-4 mr-2" />
+                ja-only — 純日本語の領収書
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => reocrOne(reocrModalFor, "en")}
+                disabled={!!reocrInProgress}
+                className="w-full justify-start"
+              >
+                <ScanText className="h-4 w-4 mr-2" />
+                en-only — 英字メニュー / 海外領収書
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => reocrOne(reocrModalFor, "two-pass")}
+                disabled={!!reocrInProgress}
+                className="w-full justify-start"
+              >
+                <ScanText className="h-4 w-4 mr-2" />
+                two-pass — 両言語独立 OCR を結合 (約 2 倍遅い)
+              </Button>
+            </div>
+            <div className="mt-4 text-right">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setReocrModalFor(null)}
+                disabled={!!reocrInProgress}
+              >
+                キャンセル
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ㉧ Round 11: ?ヘルプモーダル */}
       {helpOpen && (
         <div
@@ -799,7 +879,14 @@ export default function InboxPage() {
               onRestore={() => restoreToCandidate(it.id)}
               onRetryFailed={() => retryFailed(it.id)}
               onQuickConfirm={() => quickConfirm(it.id)}
-              onReocr={(twoPass) => reocrOne(it.id, twoPass)}
+              onReocr={(twoPass) => {
+                if (twoPass) {
+                  // ショートカット: Shift+クリックで two-pass 即発火
+                  void reocrOne(it.id, "two-pass");
+                } else {
+                  setReocrModalFor(it.id);
+                }
+              }}
               onOpenForReceipt={() => {
                 router.push(`/receipts/new?inbox=${it.id}`);
               }}
