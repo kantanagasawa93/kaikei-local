@@ -113,8 +113,10 @@ pub fn recognize_text_two_pass<P: AsRef<Path>>(
     })
 }
 
-/// 単一言語で OCR する内部ヘルパ (recognize_text_with_words の派生)。
-fn recognize_text_single_lang<P: AsRef<Path>>(
+/// 単一言語で OCR するヘルパ (recognize_text_with_words の派生)。
+/// Round 15 ㉺ で pub に格上げ — lib.rs の Tauri command から ja-only / en-only
+/// モードを直接呼べるようにする。
+pub fn recognize_text_single_lang<P: AsRef<Path>>(
     path: P,
     custom_words: &[String],
     lang: &str,

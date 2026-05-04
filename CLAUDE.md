@@ -75,38 +75,40 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 15) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 16) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉹ → ㉺ → ㉻ → ㉼ → ㉽。
+推し優先順は ㉾ → ㉿ → ㊀ → ㊁ → ㊂。
 
-### ㉹ v0.3.0 リリース ★★★★★
-- Round 14 までで release-rollback の CI 対応 + DRY_RUN まで完備。
+### ㉾ v0.3.0 リリース ★★★★★
+- Round 15 までで release-status / setup-credentials / DRY_RUN / rollback /
+  verify-release / push-check / env-auto-source まで揃って完璧。
 - 手元: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㉺ 受信箱「再 OCR」モーダルでオプション選択 ★★★
-- 目的: Round 14 ㉵ は Shift+クリックで two-pass を発火するが分かりにくい。
-  ボタン押下で {ja-only / en-only / two-pass} 選択モーダル
-- 対象: inbox/page.tsx の InboxCard
-- commit サイズ: 中 (~100 行)
-
-### ㉻ アンインストール GUI 「データ全消去」 ★★★
-- 目的: Round 14 ㉷ の `--wipe-data` を設定画面から発火できる UI ボタンに。
-  二重確認 (text input で "DELETE" 入力) → Tauri command 経由で削除
-- 対象: src/app/(app)/settings/page.tsx + lib.rs に Tauri command 露出
+### ㉿ 受信箱の AI OCR 結果を inbox 上で直接編集可能に ★★★★
+- 目的: claude_result_json があれば、受信箱カードで vendor / amount / date を
+  inline 編集できるようにし、再仕訳化前に修正
+- 対象: inbox/page.tsx
 - commit サイズ: 中 (~150 行)
 
-### ㉼ verify-app.sh の自己診断 doctor サブコマンド ★★★
-- 目的: 「verify-app.sh 自体が動かない」時の最初の確認 (KAIKEI_BIN /
-  fswatch / ffmpeg / Python3 / app data dir / app_settings の存在等)
-- 対象: scripts/verify-app.sh に cmd_doctor を追加
-- commit サイズ: 小〜中 (~120 行)
+### ㊀ scanner 進捗を Tauri command で stream ★★★
+- 目的: scanner.rs の photo 1 枚ずつの処理を frontend にイベント通知
+  (現状は scan 完了後に一括 result を返す)
+- 対象: lib.rs / scanner.rs / photo-scanner.ts
+- commit サイズ: 中〜大 (~200 行)
 
-### ㉽ migration history を Tauri command で公開 ★★
-- 目的: 「DB migration が v6 まで適用されてるか」を UI / verify-app.sh から
-  確認できるよう、_sqlx_migrations を JSON で返す Tauri command
-- 対象: lib.rs に migrations_status command + verify-app.sh 経由でも引ける
-- commit サイズ: 小 (~80 行)
+### ㊁ verify-app.sh の autorun を CI 統合 ★★
+- 目的: Round 14 ㉸ は smoke-report のみ artifact 出力。autorun を回して
+  「smoke-report が成功したら直前の commit を release ブランチに push」
+  ような flow を GH Actions で実現
+- 対象: .github/workflows/verify-round.yml
+- commit サイズ: 小〜中 (~80 行)
+
+### ㊂ doctor サブコマンドの自動修復 (一部) ★★
+- 目的: doctor で fail した項目のうち、自動で直せるもの (kaikei.db 不在 →
+  アプリ起動を促す等) を `doctor --fix` で対応
+- 対象: scripts/verify-app.sh
+- commit サイズ: 小 (~60 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

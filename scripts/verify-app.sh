@@ -29,6 +29,8 @@
 #                            (既定: /tmp/kaikei-demo-<UTC>.mp4) ffmpeg 必要
 #   autorun [<msg>]          AUTOPUSH=1 必須。ビルド → smoke-report → commit
 #                            + push まで自動。main ブランチでは不可
+#   doctor                   verify-app.sh が動かない時の自己診断
+#                            (KAIKEI_BIN / 必須コマンド / DB / ログ / 起動状態)
 #   help                     ヘルプ
 #
 # 環境変数:
@@ -385,6 +387,117 @@ cmd_autorun() {
   echo "  ✓ pushed to origin/$current_branch"
 }
 
+# Round 15 ㉼ — 自己診断: verify-app.sh が動かないと言われた時に最初に叩く。
+# 期待: 全部 ✓ ならスクリプト各サブコマンドが動く前提が揃っている。
+cmd_doctor() {
+  local pass=0 fail=0 warn=0
+  local PC="\033[32m" FC="\033[31m" WC="\033[33m" RC="\033[0m"
+  ok()   { printf "  ${PC}✓${RC} %s\n" "$1"; pass=$((pass+1)); }
+  bad()  { printf "  ${FC}✗${RC} %s\n" "$1"; fail=$((fail+1)); }
+  yel()  { printf "  ${WC}!${RC} %s\n" "$1"; warn=$((warn+1)); }
+
+  echo ""
+  echo "==> 1. KAIKEI_BIN"
+  if [ -x "$KAIKEI_BIN" ]; then
+    ok "KAIKEI_BIN: $KAIKEI_BIN"
+    local ver
+    ver=$("$KAIKEI_BIN" --verify-help 2>/dev/null | head -1 || echo "?")
+    ok "  → $ver"
+  else
+    bad "KAIKEI_BIN 不在: $KAIKEI_BIN"
+    bad "  → CLAUDE.md のデプロイコマンドで /Applications に差し替えてください"
+  fi
+
+  echo ""
+  echo "==> 2. 必須コマンド"
+  for c in osascript screencapture python3 sqlite3 curl; do
+    if command -v "$c" >/dev/null 2>&1; then
+      ok "$c"
+    else
+      bad "$c が PATH にありません"
+    fi
+  done
+
+  echo ""
+  echo "==> 3. オプションコマンド"
+  for c in fswatch ffmpeg; do
+    if command -v "$c" >/dev/null 2>&1; then
+      ok "$c (PATH: $(command -v "$c"))"
+    else
+      yel "$c なし (\`brew install $c\` で導入推奨)"
+    fi
+  done
+
+  echo ""
+  echo "==> 4. app data dir"
+  local app_data="$HOME/Library/Application Support/dev.kaikei.app"
+  if [ -d "$app_data" ]; then
+    ok "$app_data"
+    if [ -f "$app_data/kaikei.db" ]; then
+      local size
+      size=$(du -h "$app_data/kaikei.db" | awk '{print $1}')
+      ok "  kaikei.db ($size)"
+      # _sqlx_migrations の件数
+      local n
+      n=$(sqlite3 "$app_data/kaikei.db" "SELECT COUNT(*) FROM _sqlx_migrations" 2>/dev/null || echo "?")
+      ok "  _sqlx_migrations: $n 件"
+    else
+      yel "kaikei.db なし — まずアプリを 1 度起動してください"
+    fi
+    if [ -d "$app_data/inbox" ]; then
+      local n
+      n=$(find "$app_data/inbox" -maxdepth 1 -type f \( -name "*.jpg" -o -name "*.png" \) 2>/dev/null | wc -l | tr -d ' ')
+      ok "  inbox/ ($n 枚)"
+    else
+      yel "inbox/ なし"
+    fi
+  else
+    bad "$app_data が存在しません — アプリを起動してください"
+  fi
+
+  echo ""
+  echo "==> 5. ログディレクトリ"
+  local logs="$HOME/Library/Logs/dev.kaikei.app"
+  local scan_log_dir="$HOME/Library/Logs/KAIKEI LOCAL"
+  if [ -d "$logs" ]; then
+    ok "$logs"
+  else
+    yel "$logs なし"
+  fi
+  if [ -d "$scan_log_dir" ]; then
+    ok "$scan_log_dir"
+  else
+    yel "$scan_log_dir なし (まだ scanner が動いてない)"
+  fi
+
+  echo ""
+  echo "==> 6. アプリ起動状態 (process check)"
+  if pgrep -f "KAIKEI LOCAL" >/dev/null; then
+    ok "KAIKEI LOCAL.app が実行中 (navigate / ui-screenshot が使える)"
+  else
+    yel "KAIKEI LOCAL.app は起動していない (まず open で起動してください)"
+  fi
+
+  echo ""
+  echo "==> 7. screencapture 権限 (osascript の Accessibility)"
+  # System Events 経由で簡易にプロセス一覧を取り、TCC 拒否を検知
+  if osascript -e 'tell application "System Events" to count of processes' >/dev/null 2>&1; then
+    ok "osascript / System Events: OK"
+  else
+    yel "System Events 拒否の可能性 — 設定 > プライバシー > オートメーション で許可"
+  fi
+
+  echo ""
+  echo "============================================================"
+  if [ "$fail" -eq 0 ]; then
+    printf "${PC}OK${RC}: 致命エラー 0 件 / 警告 ${warn} 件\n"
+    return 0
+  else
+    printf "${FC}NG${RC}: 致命エラー ${fail} 件 / 警告 ${warn} 件 — 上の ✗ を直してください\n"
+    return 1
+  fi
+}
+
 cmd_smoke() {
   echo "==> simulate-scan"
   cmd_simulate_scan
@@ -659,6 +772,7 @@ main() {
     watch)                     cmd_watch ;;
     demo|video)                cmd_demo "$@" ;;
     autorun)                   cmd_autorun "$@" ;;
+    doctor)                    cmd_doctor ;;
     help|-h|--help)            usage ;;
     *) echo "unknown subcommand: $sub" >&2; usage; exit 2 ;;
   esac

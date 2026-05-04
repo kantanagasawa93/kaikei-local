@@ -362,7 +362,7 @@ export async function setInboxState(
  */
 export async function reocrInboxRow(
   inboxId: string,
-  options: { twoPass?: boolean } = {},
+  options: { twoPass?: boolean; lang?: "ja" | "en" } = {},
 ): Promise<{ score: number | null; state: InboxRow["state"] }> {
   const { data } = await db
     .from("photo_inbox")
@@ -399,6 +399,7 @@ export async function reocrInboxRow(
     filePath: row.file_path,
     customWords,
     twoPass: options.twoPass === true,
+    lang: options.lang,
   });
 
   const cls = classifyReceipt(visionRes.joined);
