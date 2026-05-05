@@ -470,6 +470,68 @@ cmd_doctor_fix() {
     printf "  ${WC}!${RC} BREW_INSTALL=1 を付けると fswatch / ffmpeg を自動 brew install します\n"
   fi
 
+  # ㊌ Round 18: データ整合性 (photo_inbox / receipts の orphan) を削除確認付きで除去
+  echo ""
+  echo "==> 3. データ整合性の orphan 削除"
+  local app_data="$HOME/Library/Application Support/dev.kaikei.app"
+  if [ -f "$app_data/kaikei.db" ]; then
+    local orphans
+    orphans=$(sqlite3 "$app_data/kaikei.db" \
+      "SELECT id || '|' || COALESCE(file_path,'') FROM photo_inbox WHERE file_path IS NOT NULL" 2>/dev/null \
+      | while IFS='|' read -r id path; do
+          if [ -n "$path" ] && [ ! -f "$path" ]; then
+            echo "$id"
+          fi
+        done)
+    local orphan_count
+    orphan_count=$(echo -n "$orphans" | grep -c '^.' || true)
+
+    local receipt_orphans
+    receipt_orphans=$(sqlite3 "$app_data/kaikei.db" \
+      "SELECT id || '|' || COALESCE(image_url,'') FROM receipts WHERE image_url LIKE 'file://%'" 2>/dev/null \
+      | while IFS='|' read -r id url; do
+          local rpath="${url#file://}"
+          if [ -n "$rpath" ] && [ ! -f "$rpath" ]; then
+            echo "$id"
+          fi
+        done)
+    local receipt_orphan_count
+    receipt_orphan_count=$(echo -n "$receipt_orphans" | grep -c '^.' || true)
+
+    if [ "$orphan_count" -eq 0 ] && [ "$receipt_orphan_count" -eq 0 ]; then
+      printf "  ${PC}✓${RC} orphan なし\n"
+    else
+      [ "$orphan_count" -gt 0 ] && printf "  ${WC}!${RC} photo_inbox orphan: $orphan_count 件\n"
+      [ "$receipt_orphan_count" -gt 0 ] && printf "  ${WC}!${RC} receipts orphan: $receipt_orphan_count 件\n"
+      if [ -t 0 ]; then
+        read -r -p "  これらを削除しますか? [y/N] " ans
+        case "$ans" in
+          [yY]|[yY][eE][sS])
+            if [ "$orphan_count" -gt 0 ]; then
+              echo "$orphans" | while read -r id; do
+                [ -n "$id" ] && sqlite3 "$app_data/kaikei.db" \
+                  "DELETE FROM photo_inbox WHERE id='$id'" 2>/dev/null || true
+              done
+              printf "  ${PC}✓${RC} photo_inbox $orphan_count 件削除\n"
+            fi
+            if [ "$receipt_orphan_count" -gt 0 ]; then
+              echo "$receipt_orphans" | while read -r id; do
+                [ -n "$id" ] && sqlite3 "$app_data/kaikei.db" \
+                  "DELETE FROM receipts WHERE id='$id'" 2>/dev/null || true
+              done
+              printf "  ${PC}✓${RC} receipts $receipt_orphan_count 件削除\n"
+            fi
+            ;;
+          *) printf "  ${WC}!${RC} 削除を中止\n" ;;
+        esac
+      else
+        printf "  ${WC}!${RC} 非対話シェル: 自動削除しません\n"
+      fi
+    fi
+  else
+    printf "  ${WC}!${RC} kaikei.db なし — skip\n"
+  fi
+
   echo ""
   echo "==> 自動修復後の再検査:"
   cmd_doctor
@@ -573,6 +635,46 @@ cmd_doctor() {
     ok "osascript / System Events: OK"
   else
     yel "System Events 拒否の可能性 — 設定 > プライバシー > オートメーション で許可"
+  fi
+
+  echo ""
+  echo "==> 8. データ整合性チェック (㊌ Round 18)"
+  local app_data="$HOME/Library/Application Support/dev.kaikei.app"
+  if [ -f "$app_data/kaikei.db" ]; then
+    # photo_inbox.file_path が指す JPG が消えてる行を探す
+    local orphans
+    orphans=$(sqlite3 "$app_data/kaikei.db" \
+      "SELECT id || '|' || COALESCE(file_path,'') FROM photo_inbox WHERE file_path IS NOT NULL" 2>/dev/null \
+      | while IFS='|' read -r id path; do
+          if [ -n "$path" ] && [ ! -f "$path" ]; then
+            echo "$id"
+          fi
+        done)
+    local orphan_count
+    orphan_count=$(echo -n "$orphans" | grep -c '^.' || true)
+
+    # receipts.image_url が file:// で消えてるものを検出
+    local receipt_orphans
+    receipt_orphans=$(sqlite3 "$app_data/kaikei.db" \
+      "SELECT id || '|' || COALESCE(image_url,'') FROM receipts WHERE image_url LIKE 'file://%'" 2>/dev/null \
+      | while IFS='|' read -r id url; do
+          local rpath="${url#file://}"
+          if [ -n "$rpath" ] && [ ! -f "$rpath" ]; then
+            echo "$id"
+          fi
+        done)
+    local receipt_orphan_count
+    receipt_orphan_count=$(echo -n "$receipt_orphans" | grep -c '^.' || true)
+
+    if [ "$orphan_count" -eq 0 ] && [ "$receipt_orphan_count" -eq 0 ]; then
+      ok "整合性: photo_inbox / receipts に orphan なし"
+    else
+      [ "$orphan_count" -gt 0 ] && yel "photo_inbox に orphan $orphan_count 件 (file_path が消えてる)"
+      [ "$receipt_orphan_count" -gt 0 ] && yel "receipts に orphan $receipt_orphan_count 件 (image_url が消えてる)"
+      yel "  → \`scripts/verify-app.sh doctor --fix\` で確認後に削除可能"
+    fi
+  else
+    yel "kaikei.db なし — 整合性チェック skip"
   fi
 
   echo ""
