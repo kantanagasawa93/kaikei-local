@@ -101,6 +101,18 @@ export interface ScanResult {
 }
 
 /**
+ * Round 16 ㊀: scanNow の per-item progress イベント。
+ * 1 枚ごとの OCR 完了時に scanNow が呼び出す。
+ */
+export interface ScanItemProgress {
+  assetId: string;
+  state: "candidate" | "receipt" | "not_receipt" | "dismissed";
+  score: number | null;
+  /** ocr_text の最初の有意 1 行 (= 店名候補)。空の時は null */
+  vendorHint: string | null;
+}
+
+/**
  * 「今すぐスキャン」のメインエントリ。
  *
  * @param trigger 'manual' (UI ボタン) | 'launchagent' (定期実行)
@@ -108,7 +120,9 @@ export interface ScanResult {
  */
 export async function scanNow(
   trigger: "manual" | "schedule" | "launchagent" = "manual",
-  fallbackSince?: number
+  fallbackSince?: number,
+  /** Round 16 ㊀ per-photo 進捗コールバック (省略可) */
+  onProgress?: (done: number, total: number, lastItem?: ScanItemProgress) => void,
 ): Promise<ScanResult> {
   const auth = await getAuthStatus();
   if (auth !== "authorized" && auth !== "limited") {
@@ -181,7 +195,9 @@ export async function scanNow(
   let newPhotos = 0;
   let receiptCount = 0;
   let autoDismissed = 0;
+  let processed = 0;
   for (const photo of scanned) {
+    processed++;
     try {
       // 既存の asset_id があるかチェック
       const { data: existing } = await db
@@ -265,8 +281,43 @@ export async function scanNow(
       });
       newPhotos++;
       if (initialState === "receipt") receiptCount++;
+
+      // ㊀ Round 16: per-photo 進捗 callback
+      if (onProgress) {
+        // OCR テキストの最初の非空行を vendor 候補として渡す (~30 文字 trim)
+        const vendorHint = (() => {
+          if (!ocrText) return null;
+          for (const ln of ocrText.split(/\r?\n/)) {
+            const t = ln.trim();
+            if (t.length >= 2) return t.slice(0, 30);
+          }
+          return null;
+        })();
+        try {
+          onProgress(processed, scanned.length, {
+            assetId: photo.asset_id,
+            state: initialState,
+            score,
+            vendorHint,
+          });
+        } catch {
+          /* UI コールバック失敗は scan 全体を止めない */
+        }
+      }
     } catch (e) {
       errors.push(`${photo.asset_id}: ${(e as Error).message}`);
+      if (onProgress) {
+        try {
+          onProgress(processed, scanned.length, {
+            assetId: photo.asset_id,
+            state: "candidate",
+            score: null,
+            vendorHint: null,
+          });
+        } catch {
+          /* silent */
+        }
+      }
     }
   }
 
@@ -349,6 +400,43 @@ export async function setInboxState(
   state: InboxRow["state"]
 ): Promise<void> {
   await db.from("photo_inbox").update({ state }).eq("id", id);
+}
+
+/**
+ * Round 16 ㉿: 受信箱カードで AI OCR の vendor / amount / date を編集する。
+ * claude_result_json をパース → 部分上書き → 保存。次の再仕訳化や
+ * receipts/new の prefill (Round 5 ㊇) で更新後の値が使われる。
+ */
+export async function updateInboxClaudeResult(
+  inboxId: string,
+  patch: {
+    vendor_name?: string | null;
+    amount?: number | null;
+    date?: string | null;
+  },
+): Promise<void> {
+  const { data } = await db
+    .from("photo_inbox")
+    .select("claude_result_json")
+    .eq("id", inboxId)
+    .single();
+  let parsed: Record<string, unknown> = {};
+  const raw = (data as { claude_result_json: string | null } | null)?.claude_result_json;
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      /* 破損 JSON は丸ごと上書き */
+    }
+  }
+  // null は明示的に値を消す意味、undefined は触らない
+  if (patch.vendor_name !== undefined) parsed.vendor_name = patch.vendor_name;
+  if (patch.amount !== undefined) parsed.amount = patch.amount;
+  if (patch.date !== undefined) parsed.date = patch.date;
+  await db
+    .from("photo_inbox")
+    .update({ claude_result_json: JSON.stringify(parsed) })
+    .eq("id", inboxId);
 }
 
 /**
