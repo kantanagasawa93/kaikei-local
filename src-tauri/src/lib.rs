@@ -314,6 +314,32 @@ async fn navigate_target_clear(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Round 17 ㊇: demo action target getter / clear.
+/// `--simulate-action=<name>` が書く `.demo-action-target` を読み出す。
+#[tauri::command]
+async fn demo_action_get(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {}", e))?;
+    let target = app_data.join(".demo-action-target");
+    if !target.exists() {
+        return Ok(String::new());
+    }
+    Ok(std::fs::read_to_string(&target).unwrap_or_default().trim().to_string())
+}
+
+#[tauri::command]
+async fn demo_action_clear(app: tauri::AppHandle) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {}", e))?;
+    let target = app_data.join(".demo-action-target");
+    let _ = std::fs::remove_file(&target);
+    Ok(())
+}
+
 /// 画像ファイルを生バイトで読み出す。tauri-plugin-fs のスコープ/権限に依存せず、
 /// Rust 側 (フルディスクアクセス) で std::fs::read する。
 ///
@@ -757,6 +783,31 @@ pub fn run() {
             }
         }
 
+        // Round 17 ㊇ --simulate-action=<name> — exit して、起動中アプリに
+        // 名前付きアクションを実行させる (例: "scan-now")。
+        // 内部実装は navigate と同じく control file 経由 (.demo-action-target)。
+        // セキュリティ: Frontend は allowlist された action 名 のみ実行する。
+        if let Some(arg) = args.iter().find(|a| a.starts_with("--simulate-action=")) {
+            let name = arg.strip_prefix("--simulate-action=").unwrap_or("");
+            if name.is_empty() {
+                eprintln!("--simulate-action: 空の name");
+                std::process::exit(2);
+            }
+            let app_data = verify_app_data_dir();
+            let _ = std::fs::create_dir_all(&app_data);
+            let target = app_data.join(".demo-action-target");
+            match std::fs::write(&target, name) {
+                Ok(_) => {
+                    println!("demo action target = {} (written to {})", name, target.display());
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("simulate-action: failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
         // Round 12 ㉬ --start-route=/route — exit せず、起動完了後に
         // NavigateBridge が control file を pickup する形で初回ナビゲート。
         // 用途: dev 中に `kaikei --start-route=/inbox` で起動直後に受信箱を開く。
@@ -862,6 +913,8 @@ pub fn run() {
                     "                           (例: --navigate=/inbox)\n",
                     "  --start-route=<route>    GUI 起動時に直接そのルートに飛ぶ\n",
                     "                           (例: --start-route=/inbox)\n",
+                    "  --simulate-action=<name> 起動中アプリで allowlist された action を発火\n",
+                    "                           (scan-now / journalize-all-receipts / open-help)\n",
                     "  --test-ocr=<path>        画像を Vision OCR にかけて結果を表示\n",
                     "  --test-doc=<path>        画像に文書矩形が検出されるか表示\n",
                     "  --launchd-status         LaunchAgent の状態を JSON 表示\n",
@@ -1151,6 +1204,8 @@ pub fn run() {
             db_repair_migration_checksum,
             navigate_target_get,
             navigate_target_clear,
+            demo_action_get,
+            demo_action_clear,
             wipe_app_data,
             migrations_status,
         ])
