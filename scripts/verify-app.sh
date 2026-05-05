@@ -29,8 +29,10 @@
 #                            (既定: /tmp/kaikei-demo-<UTC>.mp4) ffmpeg 必要
 #   autorun [<msg>]          AUTOPUSH=1 必須。ビルド → smoke-report → commit
 #                            + push まで自動。main ブランチでは不可
-#   doctor                   verify-app.sh が動かない時の自己診断
+#   doctor [--fix]           verify-app.sh が動かない時の自己診断
 #                            (KAIKEI_BIN / 必須コマンド / DB / ログ / 起動状態)
+#                            --fix で「アプリ起動」「brew install (要 BREW_INSTALL=1)」
+#                            等の自動修復を試行
 #   help                     ヘルプ
 #
 # 環境変数:
@@ -385,6 +387,51 @@ cmd_autorun() {
   git commit -m "$msg" || true
   git push origin "$current_branch"
   echo "  ✓ pushed to origin/$current_branch"
+}
+
+# Round 16 ㊂ — doctor --fix: 自動で直せる項目を試みる。
+# 現状サポート:
+#   - KAIKEI LOCAL.app が起動していなければ open
+#   - kaikei.db 不在 → アプリ起動を待つ (open + sleep 6 + 再検査)
+#   - fswatch / ffmpeg 未インストール → brew install (BREW_INSTALL=1 が必要)
+cmd_doctor_fix() {
+  local PC="\033[32m" FC="\033[31m" WC="\033[33m" RC="\033[0m"
+  echo ""
+  echo "==> doctor --fix (自動修復試行)"
+
+  # 1. アプリが起動していなければ open
+  if ! pgrep -f "KAIKEI LOCAL" >/dev/null; then
+    if [ -d "/Applications/KAIKEI LOCAL.app" ]; then
+      printf "  ${WC}!${RC} アプリ未起動 → open します\n"
+      open "/Applications/KAIKEI LOCAL.app"
+      sleep 5
+      if pgrep -f "KAIKEI LOCAL" >/dev/null; then
+        printf "  ${PC}✓${RC} 起動成功\n"
+      else
+        printf "  ${FC}✗${RC} 起動できませんでした\n"
+      fi
+    else
+      printf "  ${FC}✗${RC} /Applications/KAIKEI LOCAL.app がありません — まずビルドして配置してください\n"
+    fi
+  fi
+
+  # 2. オプションコマンドの brew install (明示 opt-in 必須)
+  if [ -n "${BREW_INSTALL:-}" ] && command -v brew >/dev/null 2>&1; then
+    for c in fswatch ffmpeg; do
+      if ! command -v "$c" >/dev/null 2>&1; then
+        printf "  ${WC}!${RC} brew install %s ...\n" "$c"
+        brew install "$c" >/dev/null 2>&1 \
+          && printf "  ${PC}✓${RC} %s OK\n" "$c" \
+          || printf "  ${FC}✗${RC} %s 失敗\n" "$c"
+      fi
+    done
+  elif [ -z "${BREW_INSTALL:-}" ]; then
+    printf "  ${WC}!${RC} BREW_INSTALL=1 を付けると fswatch / ffmpeg を自動 brew install します\n"
+  fi
+
+  echo ""
+  echo "==> 自動修復後の再検査:"
+  cmd_doctor
 }
 
 # Round 15 ㉼ — 自己診断: verify-app.sh が動かないと言われた時に最初に叩く。
@@ -772,7 +819,9 @@ main() {
     watch)                     cmd_watch ;;
     demo|video)                cmd_demo "$@" ;;
     autorun)                   cmd_autorun "$@" ;;
-    doctor)                    cmd_doctor ;;
+    doctor)
+      if [ "${1:-}" = "--fix" ]; then cmd_doctor_fix; else cmd_doctor; fi
+      ;;
     help|-h|--help)            usage ;;
     *) echo "unknown subcommand: $sub" >&2; usage; exit 2 ;;
   esac

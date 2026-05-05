@@ -29,6 +29,8 @@ import {
   Square,
   Search,
   ScanText,
+  Pencil,
+  Save as SaveIcon,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { db } from "@/lib/localDb";
@@ -40,6 +42,7 @@ import {
   listInbox,
   setInboxState,
   reocrInboxRow,
+  updateInboxClaudeResult,
   getAuthStatus,
   type AuthStatus,
   type InboxRow,
@@ -351,8 +354,23 @@ export default function InboxPage() {
   const handleScan = async () => {
     if (scanning) return;
     setScanning(true);
+    // ㊀ Round 16: スキャン中も per-photo の進捗を progress ライブバナーで表示
+    setProgress({ done: 0, total: 0 });
     try {
-      const result = await scanNow("manual");
+      const result = await scanNow("manual", undefined, (done, total, item) => {
+        let lastLabel: string | undefined;
+        let lastOk: boolean | undefined;
+        if (item) {
+          lastOk = item.state === "receipt";
+          const v = item.vendorHint || "(候補テキストなし)";
+          const s =
+            item.score !== null && item.score !== undefined
+              ? ` score ${item.score.toFixed(2)}`
+              : "";
+          lastLabel = `${item.state === "receipt" ? "✓" : "·"} ${v}${s}`;
+        }
+        setProgress({ done, total, lastLabel, lastOk });
+      });
       if (result.newPhotos > 0) {
         const receiptMsg = result.receiptCount > 0
           ? ` (うち領収書 ${result.receiptCount} 枚)`
@@ -372,6 +390,7 @@ export default function InboxPage() {
       toast.error(`スキャン失敗: ${(e as Error).message}`);
     } finally {
       setScanning(false);
+      setProgress(null);
     }
   };
 
@@ -707,9 +726,9 @@ export default function InboxPage() {
         </div>
       </div>
 
-      {/* ㉱ Round 13: 仕訳化進行中の最新 1 件をライブ表示。直前 1 件の店名/金額で
-          「ちゃんと進んでいる」がひと目で分かる + 失敗時の理由も即時に見える */}
-      {journalizing && progress && progress.lastLabel && (
+      {/* ㉱ Round 13 + ㊀ Round 16: 仕訳化中 / スキャン中の最新 1 件をライブ表示。
+          直前 1 件の店名/金額/score で「ちゃんと進んでいる」がひと目で分かる */}
+      {(journalizing || scanning) && progress && progress.lastLabel && (
         <div
           className={`flex items-center gap-2 text-xs px-3 py-2 rounded border ${
             progress.lastOk === false
@@ -898,6 +917,24 @@ export default function InboxPage() {
   );
 }
 
+function parseClaudeResult(json: string | null): {
+  vendor_name: string;
+  amount: string;
+  date: string;
+} {
+  if (!json) return { vendor_name: "", amount: "", date: "" };
+  try {
+    const p = JSON.parse(json) as { vendor_name?: string; amount?: number; date?: string };
+    return {
+      vendor_name: p.vendor_name ?? "",
+      amount: p.amount != null ? String(p.amount) : "",
+      date: p.date ?? "",
+    };
+  } catch {
+    return { vendor_name: "", amount: "", date: "" };
+  }
+}
+
 function InboxCard({
   row,
   quickConfirming,
@@ -937,6 +974,31 @@ function InboxCard({
   // asset:// 経由だとパスのスペース展開や HEIC の MIME 判定で
   // 詰まるケースが多いので、file 直読み + MIME 検出で確実にする。
   const [src, setSrc] = useState<string | null>(null);
+  // ㉿ Round 16: claude_result_json の inline 編集モード
+  const initialClaude = parseClaudeResult(row.claude_result_json);
+  const [editing, setEditing] = useState(false);
+  const [editVendor, setEditVendor] = useState(initialClaude.vendor_name);
+  const [editAmount, setEditAmount] = useState(initialClaude.amount);
+  const [editDate, setEditDate] = useState(initialClaude.date);
+  const [saving, setSaving] = useState(false);
+  const hasClaudeJson = !!row.claude_result_json;
+  const handleSaveEdit = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await updateInboxClaudeResult(row.id, {
+        vendor_name: editVendor || null,
+        amount: editAmount ? parseInt(editAmount, 10) : null,
+        date: editDate || null,
+      });
+      toast.success("AI OCR 結果を更新しました");
+      setEditing(false);
+    } catch (e) {
+      toast.error(`更新失敗: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
   useEffect(() => {
     if (!row.file_path) return;
     let cancelled = false;
@@ -1012,9 +1074,82 @@ function InboxCard({
         </Badge>
       </div>
       <CardContent className="p-3 space-y-2 flex-1 flex flex-col">
-        <div className="text-xs text-muted-foreground">
-          {row.taken_at ? new Date(row.taken_at).toLocaleString("ja-JP") : "-"}
+        <div className="text-xs text-muted-foreground flex items-center gap-1">
+          <span className="flex-1">
+            {row.taken_at ? new Date(row.taken_at).toLocaleString("ja-JP") : "-"}
+          </span>
+          {hasClaudeJson && !editing && (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="text-[10px] text-muted-foreground hover:text-foreground inline-flex items-center gap-0.5"
+              title="AI OCR の vendor / amount / date を編集"
+            >
+              <Pencil className="h-3 w-3" /> 編集
+            </button>
+          )}
         </div>
+        {/* ㉿ Round 16: claude_result_json があれば、inline 編集モード対応 */}
+        {hasClaudeJson && editing ? (
+          <div className="space-y-1.5 text-[11px]">
+            <input
+              type="text"
+              value={editVendor}
+              onChange={(e) => setEditVendor(e.target.value)}
+              placeholder="店名"
+              className="w-full border rounded px-1.5 py-1 text-xs"
+            />
+            <input
+              type="number"
+              value={editAmount}
+              onChange={(e) => setEditAmount(e.target.value)}
+              placeholder="金額"
+              className="w-full border rounded px-1.5 py-1 text-xs tabular-nums"
+            />
+            <input
+              type="date"
+              value={editDate}
+              onChange={(e) => setEditDate(e.target.value)}
+              className="w-full border rounded px-1.5 py-1 text-xs"
+            />
+            <div className="flex gap-1">
+              <Button
+                size="sm"
+                variant="default"
+                disabled={saving}
+                onClick={handleSaveEdit}
+                className="h-6 text-[10px] px-2"
+              >
+                <SaveIcon className="h-3 w-3 mr-0.5" />
+                {saving ? "保存中..." : "保存"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(false);
+                  setEditVendor(initialClaude.vendor_name);
+                  setEditAmount(initialClaude.amount);
+                  setEditDate(initialClaude.date);
+                }}
+                className="h-6 text-[10px] px-2"
+              >
+                キャンセル
+              </Button>
+            </div>
+          </div>
+        ) : hasClaudeJson ? (
+          <div className="text-[11px] bg-emerald-50 border border-emerald-200 rounded p-1.5 leading-tight">
+            <div className="font-medium text-emerald-900">
+              {initialClaude.vendor_name || "(店名なし)"}
+            </div>
+            <div className="text-emerald-700 tabular-nums flex gap-2">
+              <span>{initialClaude.amount ? `¥${Number(initialClaude.amount).toLocaleString()}` : "-"}</span>
+              <span>{initialClaude.date || "-"}</span>
+            </div>
+          </div>
+        ) : null}
         {row.ocr_text ? (
           <details className="text-[11px] text-muted-foreground leading-tight">
             <summary className="line-clamp-2 cursor-pointer hover:text-foreground">

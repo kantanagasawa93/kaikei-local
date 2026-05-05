@@ -75,40 +75,39 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 16) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 17) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㉾ → ㉿ → ㊀ → ㊁ → ㊂。
+推し優先順は ㊃ → ㊄ → ㊅ → ㊆ → ㊇。
 
-### ㉾ v0.3.0 リリース ★★★★★
-- Round 15 までで release-status / setup-credentials / DRY_RUN / rollback /
-  verify-release / push-check / env-auto-source まで揃って完璧。
-- 手元: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+### ㊃ v0.3.0 リリース実発火 ★★★★★
+- Round 16 までで release.sh は status auto-display / precheck /
+  push-check / setup-credentials / DRY_RUN / rollback / health-check の 7 重
+  防御。`scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㉿ 受信箱の AI OCR 結果を inbox 上で直接編集可能に ★★★★
-- 目的: claude_result_json があれば、受信箱カードで vendor / amount / date を
-  inline 編集できるようにし、再仕訳化前に修正
-- 対象: inbox/page.tsx
-- commit サイズ: 中 (~150 行)
+### ㊄ 受信箱の inline 編集後に自動再仕訳化 ★★★★
+- 目的: Round 16 ㉿ で claude_result_json を編集できるが、編集 → 再仕訳化を
+  別操作に分けると面倒。「保存して再仕訳化」ボタンを追加
+- 対象: src/app/(app)/inbox/page.tsx
+- commit サイズ: 小 (~80 行)
 
-### ㊀ scanner 進捗を Tauri command で stream ★★★
-- 目的: scanner.rs の photo 1 枚ずつの処理を frontend にイベント通知
-  (現状は scan 完了後に一括 result を返す)
-- 対象: lib.rs / scanner.rs / photo-scanner.ts
-- commit サイズ: 中〜大 (~200 行)
+### ㊅ scanner streaming のキャンセル対応 ★★★
+- 目的: Round 16 ㊀ で進捗 streaming が出るが、途中で止められない。
+  「キャンセル」ボタンで現在処理中の photo の OCR が終わり次第ループを抜ける
+- 対象: photo-scanner.ts (AbortSignal) + inbox/page.tsx
+- commit サイズ: 中 (~120 行)
 
-### ㊁ verify-app.sh の autorun を CI 統合 ★★
-- 目的: Round 14 ㉸ は smoke-report のみ artifact 出力。autorun を回して
-  「smoke-report が成功したら直前の commit を release ブランチに push」
-  ような flow を GH Actions で実現
-- 対象: .github/workflows/verify-round.yml
-- commit サイズ: 小〜中 (~80 行)
+### ㊆ smoke-report の HTML 出力にバージョン情報 + git 情報 ★★
+- 目的: HTML レポートを共有する時に「いつ / どのコミットか」が分からない。
+  app version / git short SHA / branch / `git log -1 --format=%s` を埋込み
+- 対象: scripts/verify-app.sh の cmd_smoke_report_html
+- commit サイズ: 小 (~50 行)
 
-### ㊂ doctor サブコマンドの自動修復 (一部) ★★
-- 目的: doctor で fail した項目のうち、自動で直せるもの (kaikei.db 不在 →
-  アプリ起動を促す等) を `doctor --fix` で対応
-- 対象: scripts/verify-app.sh
-- commit サイズ: 小 (~60 行)
+### ㊇ verify-app.sh demo 動画にデモシナリオを実行 ★★
+- 目的: Round 10 ㊃ の demo 動画は単に navigate するだけ。受信箱で「いますぐ
+  仕訳化」を押すなどのデモシナリオを再現する `simulate-click` を追加
+- 対象: scripts/verify-app.sh + lib.rs に Tauri command (DOM クリック)
+- commit サイズ: 中〜大 (~180 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

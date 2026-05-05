@@ -38,6 +38,15 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
+# Round 16 ㉾: release-status を release.sh 冒頭で自動表示。
+# version 不一致 / behind / Apple 認証 未設定などを最速で見せる。
+# SKIP_STATUS=1 で省略可能だが、通常は出した方が安心。
+if [ -z "${SKIP_STATUS:-}" ]; then
+  echo ""
+  echo "==> -1. release-status (Round 15 ㉹ で導入したダッシュボード)"
+  "$(dirname "$0")/release-status.sh" || true
+fi
+
 # 0. Round 4 ㊀ で導入: フル precheck を回して失敗してたら止める。
 # SKIP_PRECHECK=1 で無効化可能だが、通常は必ず通すこと。
 if [ -z "${SKIP_PRECHECK:-}" ]; then

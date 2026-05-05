@@ -23,6 +23,10 @@ on:
         description: ".app バンドルまで作る (約 10 分)"
         type: boolean
         default: false
+      promote_to_release_ready:
+        description: "smoke-report が通った commit を release-ready branch に push (㊁)"
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -156,3 +160,16 @@ jobs:
           name: smoke-report-md
           path: artifacts/
           retention-days: 14
+
+      # Round 16 ㊁: smoke-report が成功したコミットを `release-ready` ブランチに
+      # 反映する。明示的に inputs.promote_to_release_ready で opt-in。
+      # release branch を main に直接 push する代わりに、人間が一旦 PR で
+      # マージできるようにする中継ブランチ。
+      - name: Promote to release-ready branch
+        if: ${{ inputs.promote_to_release_ready }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          # release-ready ブランチに force push (履歴は main を辿る)
+          git push origin "HEAD:refs/heads/release-ready" --force
+          echo "Pushed $(git rev-parse --short HEAD) to release-ready"
