@@ -25,8 +25,41 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TAG="${1:-}"
+
+# Round 18 ㊈: --help / -h で使い方一覧を表示
+if [ "$TAG" = "--help" ] || [ "$TAG" = "-h" ]; then
+  cat <<'HELP'
+scripts/release.sh — KAIKEI LOCAL リリース発火
+
+使い方:
+  scripts/release.sh <tag>             公証付き正式リリース (推奨)
+  UNSIGNED=1 scripts/release.sh <tag>  完全未署名 (arm64 のみ、Gatekeeper 警告あり)
+  NOTARIZE_SKIP=1 scripts/release.sh   署名のみ / 公証 skip
+  DRY_RUN=1 scripts/release.sh <tag>   ビルド以降を stub にして予告のみ
+
+スキップ可能なステップ:
+  SKIP_STATUS=1     冒頭の release-status 表示を省略
+  SKIP_PRECHECK=1   release-precheck.sh を省略
+  SKIP_PUSH_CHECK=1 git fetch + ahead/behind 判定を省略
+  SKIP_PUSH=1       ahead でも push しない (gh release create が古い HEAD を指す可能性)
+  SKIP_VERIFY=1     末尾の verify-release.sh を省略
+
+事前準備 (1 回だけ):
+  scripts/release-setup-credentials.sh   APPLE_ID + app-specific password を keychain に保存
+
+関連スクリプト:
+  scripts/release-status.sh             リリース動線の状況ダッシュボード
+  scripts/release-precheck.sh <tag>     全項目の事前チェック (release.sh 冒頭で呼ばれる)
+  scripts/verify-release.sh <tag>       公開後の URL probe + 公証チェック
+  scripts/release-rollback.sh <tag>     ミスった時の取消し (--dry-run / FORCE=1)
+  scripts/release-followup.sh [<tag>]   リリース後 DL 数 + やることチェックリスト
+HELP
+  exit 0
+fi
+
 if [ -z "$TAG" ]; then
   echo "ERROR: タグを指定してください (例: scripts/release.sh v0.1.0)"
+  echo "       使い方は scripts/release.sh --help"
   exit 1
 fi
 

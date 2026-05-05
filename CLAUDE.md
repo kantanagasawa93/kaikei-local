@@ -75,38 +75,36 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 18) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 19) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊈ → ㊉ → ㊊ → ㊋ → ㊌。
+推し優先順は ㊍ → ㊎ → ㊏ → ㊐ → ㊑。
 
-### ㊈ v0.3.0 リリース実発火 ★★★★★
-- Round 17 までで release-followup も含め完全装備。
-  `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+### ㊍ v0.3.0 リリース実発火 ★★★★★
+- Round 18 で demo 動画 (3.6 MB) を docs/assets/ に commit 済み。
+  あとは `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㊉ demo 動画を docs/assets/ に commit + LP に埋込み ★★★★ (混合案・LP 部分)
-- 目的: ユーザが LP からダウンロード前に「実際の動作」を 16 秒で見せる
-- やること:
-  - cmd_demo で生成した MP4 を `docs/assets/demo-v0.3.0.mp4` にコピー
-  - docs/index.html / docs/en/index.html の Hero 直下に `<video controls poster>`
-  - 動画サイズが大きい場合は GitHub Releases asset 経由 (Round 19+ 検討)
-- commit サイズ: 中 (~100 行)
+### ㊎ demo 動画を Git LFS or GitHub Releases asset に外出し ★★★
+- 目的: 3.6 MB の MP4 が main にあると repo clone が重い。LFS or
+  GitHub Releases asset (download URL を LP / onboarding が参照) に分離
+- 対象: .gitattributes (LFS) or release asset uploader
+- commit サイズ: 中 (~80 行)
 
-### ㊊ オンボーディングに demo 動画を埋込み ★★★ (混合案・アプリ内部分)
-- 目的: 初回起動時の onboarding に「主要 4 画面の流れ」を 16 秒動画で
-- 対象: src/components/onboarding.tsx + public/demo.mp4 (バンドル同梱)
-- commit サイズ: 中 (~100 行)
-
-### ㊋ Tauri 起動時の auto-update check ★★★
-- 目的: GitHub Releases API を週 1 で叩いて新バージョン通知
-- 対象: src/lib/update-check.ts (既存) を有効化、layout.tsx で発火
+### ㊏ アップデート通知の UI を toast から専用バナーに ★★★
+- 目的: Round 18 ㊋ で update-check は toast。新バージョンを見逃しやすい。
+  画面上部に「v0.4.0 が公開されました — 詳細」みたいな永続バナー
+- 対象: src/components/update-banner.tsx (新規) + layout.tsx
 - commit サイズ: 中 (~120 行)
 
-### ㊌ doctor --fix でデータ整合性自動チェック ★★
-- 目的: photo_inbox の orphan (file_path 不在) や receipts の image_url 不在を
-  検出して reportEntry にする (要 confirm で削除)
-- 対象: scripts/verify-app.sh
-- commit サイズ: 中 (~100 行)
+### ㊐ doctor --fix で「アプリ data 重複バックアップ」も整理 ★★
+- 目的: kaikei.db.bak-* が大量に貯まる。古いバックアップを削除候補に
+- 対象: scripts/verify-app.sh の cmd_doctor_fix
+- commit サイズ: 小 (~60 行)
+
+### ㊑ onboarding の「次へ」をキーボードショートカット化 ★★
+- 目的: Enter / 矢印キーで進める
+- 対象: src/components/onboarding.tsx
+- commit サイズ: 小 (~50 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

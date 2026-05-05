@@ -33,6 +33,22 @@ export function NavigateBridge() {
   const initialNavDone = useRef(false);
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ㊋ Round 18: 起動 10 秒後に GitHub Releases から最新バージョン確認。
+  // 1 日 1 回までに抑制 (update-check.ts 内の localStorage)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void (async () => {
+        try {
+          const { checkForUpdate } = await import("@/lib/update-check");
+          await checkForUpdate(false);
+        } catch {
+          /* silent: ネット圏外でも普通に動く */
+        }
+      })();
+    }, 10_000);
+    return () => clearTimeout(t);
+  }, []);
+
   // ㉩ 起動時に app_settings.last_route を読み、ルートが "/" or "/dashboard"
   //    で last_route が別の場所なら復元 (Tauri 起動時 pathname は /dashboard
   //    のことが多いので、その場合も last_route が違うなら戻す)

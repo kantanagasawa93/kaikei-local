@@ -32,6 +32,16 @@ const STEPS = [
     color: "text-blue-600",
   },
   {
+    // ㊊ Round 18: アプリ同梱の demo 動画 (主要 4 画面ツアー)
+    // public/demo.mp4 を Tauri が静的配信する形で参照する
+    icon: Shield,
+    title: "実際の使い方を 16 秒で",
+    description:
+      "ダッシュボード → 写真受信箱 → 仕訳帳 → AI OCR ログ までの主要画面を見られます。",
+    color: "text-blue-600",
+    isVideo: true,
+  },
+  {
     icon: Receipt,
     title: "領収書をためる",
     description:
@@ -283,11 +293,27 @@ export function Onboarding() {
             ))}
           </div>
 
-          <div
-            className={`mx-auto w-16 h-16 rounded-2xl bg-muted flex items-center justify-center ${current.color}`}
-          >
-            <Icon className="w-8 h-8" />
-          </div>
+          {/* ㊊ Round 18: video ステップは動画再生、それ以外はアイコン表示 */}
+          {"isVideo" in current && current.isVideo ? (
+            <video
+              controls
+              autoPlay
+              muted
+              loop
+              preload="metadata"
+              poster="/demo-poster.jpg"
+              className="mx-auto w-full rounded-lg border bg-black"
+              style={{ maxHeight: "320px" }}
+            >
+              <source src="/demo.mp4" type="video/mp4" />
+            </video>
+          ) : (
+            <div
+              className={`mx-auto w-16 h-16 rounded-2xl bg-muted flex items-center justify-center ${current.color}`}
+            >
+              <Icon className="w-8 h-8" />
+            </div>
+          )}
 
           <div className="space-y-2">
             <h2 className="text-xl font-bold">{current.title}</h2>
