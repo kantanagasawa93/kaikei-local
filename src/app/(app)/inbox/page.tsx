@@ -81,6 +81,8 @@ export default function InboxPage() {
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
   // ㉵ Round 14: 再 OCR 実行中の inbox.id (カード単位のスピナー)
   const [reocrInProgress, setReocrInProgress] = useState<string | null>(null);
+  // ㊅ Round 17: scanNow をキャンセルするための AbortController
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   // ㉢ Round 10: フォーカス対象カードの index (キーボード操作の基点)
   const [focusIdx, setFocusIdx] = useState<number>(-1);
@@ -102,6 +104,30 @@ export default function InboxPage() {
     return () => {
       if (hoverTimer.current) clearTimeout(hoverTimer.current);
     };
+  }, []);
+
+  // ㊇ Round 17: kaikei:demo-action イベントを listen して、所定の関数を呼ぶ
+  // verify-app.sh demo-scenario から control file 経由で発火される
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const action = (e as CustomEvent<string>).detail;
+      switch (action) {
+        case "scan-now":
+          void handleScan();
+          break;
+        case "journalize-all-receipts":
+          void handleJournalizeAll();
+          break;
+        case "open-help":
+          setHelpOpen(true);
+          break;
+        default:
+          console.warn("[demo-action] 未知のアクション:", action);
+      }
+    };
+    window.addEventListener("kaikei:demo-action", handler);
+    return () => window.removeEventListener("kaikei:demo-action", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ㉢ Round 10: グローバルキーボードショートカット
@@ -356,21 +382,32 @@ export default function InboxPage() {
     setScanning(true);
     // ㊀ Round 16: スキャン中も per-photo の進捗を progress ライブバナーで表示
     setProgress({ done: 0, total: 0 });
+    // ㊅ Round 17: AbortController を準備、キャンセルボタンに紐付け
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
     try {
-      const result = await scanNow("manual", undefined, (done, total, item) => {
-        let lastLabel: string | undefined;
-        let lastOk: boolean | undefined;
-        if (item) {
-          lastOk = item.state === "receipt";
-          const v = item.vendorHint || "(候補テキストなし)";
-          const s =
-            item.score !== null && item.score !== undefined
-              ? ` score ${item.score.toFixed(2)}`
-              : "";
-          lastLabel = `${item.state === "receipt" ? "✓" : "·"} ${v}${s}`;
-        }
-        setProgress({ done, total, lastLabel, lastOk });
-      });
+      const result = await scanNow(
+        "manual",
+        undefined,
+        (done, total, item) => {
+          let lastLabel: string | undefined;
+          let lastOk: boolean | undefined;
+          if (item) {
+            lastOk = item.state === "receipt";
+            const v = item.vendorHint || "(候補テキストなし)";
+            const s =
+              item.score !== null && item.score !== undefined
+                ? ` score ${item.score.toFixed(2)}`
+                : "";
+            lastLabel = `${item.state === "receipt" ? "✓" : "·"} ${v}${s}`;
+          }
+          setProgress({ done, total, lastLabel, lastOk });
+        },
+        controller.signal,
+      );
+      if (result.errors[0] === "user_cancelled") {
+        toast.info(`キャンセルされました (新規 ${result.newPhotos} 枚は保存済み)`);
+      }
       if (result.newPhotos > 0) {
         const receiptMsg = result.receiptCount > 0
           ? ` (うち領収書 ${result.receiptCount} 枚)`
@@ -391,6 +428,15 @@ export default function InboxPage() {
     } finally {
       setScanning(false);
       setProgress(null);
+      scanAbortRef.current = null;
+    }
+  };
+
+  // ㊅ Round 17: スキャンを中断 (現在処理中の photo は完走、その後ループ抜け)
+  const handleCancelScan = () => {
+    if (scanAbortRef.current) {
+      scanAbortRef.current.abort();
+      toast.info("キャンセル中... (現在処理中の写真は完走させます)");
     }
   };
 
@@ -740,6 +786,16 @@ export default function InboxPage() {
             [{progress.done}/{progress.total}]
           </span>
           <span className="flex-1 truncate">{progress.lastLabel}</span>
+          {/* ㊅ Round 17: scan 実行中のみキャンセルボタン (journalize には未対応) */}
+          {scanning && scanAbortRef.current && (
+            <button
+              type="button"
+              onClick={handleCancelScan}
+              className="text-xs px-2 py-0.5 rounded border border-current hover:bg-white/50"
+            >
+              キャンセル
+            </button>
+          )}
         </div>
       )}
 
@@ -975,6 +1031,7 @@ function InboxCard({
   // 詰まるケースが多いので、file 直読み + MIME 検出で確実にする。
   const [src, setSrc] = useState<string | null>(null);
   // ㉿ Round 16: claude_result_json の inline 編集モード
+  // ㊄ Round 17: 「保存して再仕訳化」も同時に
   const initialClaude = parseClaudeResult(row.claude_result_json);
   const [editing, setEditing] = useState(false);
   const [editVendor, setEditVendor] = useState(initialClaude.vendor_name);
@@ -982,7 +1039,7 @@ function InboxCard({
   const [editDate, setEditDate] = useState(initialClaude.date);
   const [saving, setSaving] = useState(false);
   const hasClaudeJson = !!row.claude_result_json;
-  const handleSaveEdit = async () => {
+  const handleSaveEdit = async (alsoRejournalize: boolean) => {
     if (saving) return;
     setSaving(true);
     try {
@@ -991,7 +1048,37 @@ function InboxCard({
         amount: editAmount ? parseInt(editAmount, 10) : null,
         date: editDate || null,
       });
-      toast.success("AI OCR 結果を更新しました");
+      if (alsoRejournalize) {
+        // photo_inbox.state が imported なら、receipts/journals を消して
+        // 再仕訳化する。`rejournalize` は journal_id を引数に取るので、
+        // imported_receipt_id から逆引き → journal_id を探す
+        const { db } = await import("@/lib/localDb");
+        const { rejournalize } = await import("@/lib/auto-journal");
+        const { data: rec } = await db
+          .from("receipts")
+          .select("id")
+          .eq("id", row.imported_receipt_id ?? "")
+          .single();
+        if (rec) {
+          // receipt_id から journals を引く
+          const { data: jr } = await db
+            .from("journals")
+            .select("id")
+            .eq("receipt_id", (rec as { id: string }).id)
+            .single();
+          const journalId = (jr as { id: string } | null)?.id;
+          if (journalId) {
+            await rejournalize(journalId);
+            toast.success("編集内容を保存して再仕訳化しました");
+          } else {
+            toast.success("編集を保存しました (再仕訳化対象の journal なし)");
+          }
+        } else {
+          toast.success("編集を保存しました (まだ仕訳化されていないので保存のみ)");
+        }
+      } else {
+        toast.success("AI OCR 結果を更新しました");
+      }
       setEditing(false);
     } catch (e) {
       toast.error(`更新失敗: ${(e as Error).message}`);
@@ -1112,17 +1199,32 @@ function InboxCard({
               onChange={(e) => setEditDate(e.target.value)}
               className="w-full border rounded px-1.5 py-1 text-xs"
             />
-            <div className="flex gap-1">
+            <div className="flex gap-1 flex-wrap">
               <Button
                 size="sm"
                 variant="default"
                 disabled={saving}
-                onClick={handleSaveEdit}
+                onClick={() => handleSaveEdit(false)}
                 className="h-6 text-[10px] px-2"
               >
                 <SaveIcon className="h-3 w-3 mr-0.5" />
                 {saving ? "保存中..." : "保存"}
               </Button>
+              {/* ㊄ Round 17: imported な行のみ「保存して再仕訳化」を出す.
+                  rejournalize は journal_id 経由なので receipt_id 紐付き必須 */}
+              {row.state === "imported" && row.imported_receipt_id && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={saving}
+                  onClick={() => handleSaveEdit(true)}
+                  className="h-6 text-[10px] px-2"
+                  title="編集内容を保存し、現在の仕訳を破棄して AI OCR で再生成"
+                >
+                  <Sparkles className="h-3 w-3 mr-0.5" />
+                  {saving ? "実行中..." : "保存して再仕訳化"}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="ghost"

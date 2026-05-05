@@ -123,6 +123,8 @@ export async function scanNow(
   fallbackSince?: number,
   /** Round 16 ㊀ per-photo 進捗コールバック (省略可) */
   onProgress?: (done: number, total: number, lastItem?: ScanItemProgress) => void,
+  /** Round 17 ㊅ AbortSignal — UI から「キャンセル」ボタンで中断 */
+  signal?: AbortSignal,
 ): Promise<ScanResult> {
   const auth = await getAuthStatus();
   if (auth !== "authorized" && auth !== "limited") {
@@ -196,7 +198,14 @@ export async function scanNow(
   let receiptCount = 0;
   let autoDismissed = 0;
   let processed = 0;
+  let cancelled = false;
   for (const photo of scanned) {
+    // ㊅ Round 17: 各 photo 開始時に AbortSignal をチェック。
+    // 既に処理中の photo は最後まで完走させ、その後ループを抜ける。
+    if (signal?.aborted) {
+      cancelled = true;
+      break;
+    }
     processed++;
     try {
       // 既存の asset_id があるかチェック
@@ -337,10 +346,19 @@ export async function scanNow(
       scanned_count: scanned.length,
       receipt_count: receiptCount,
       imported_count: 0, // Phase 4 で更新
-      error: errors.length > 0 ? errors.join("; ").slice(0, 500) : null,
+      error:
+        errors.length > 0
+          ? errors.join("; ").slice(0, 500)
+          : cancelled
+            ? "user_cancelled"
+            : null,
     })
     .eq("id", logId);
 
+  if (cancelled) {
+    // 「user_cancelled」を errors の先頭に積んで呼出側で判別可能に
+    errors.unshift("user_cancelled");
+  }
   return { scanned: scanned.length, newPhotos, receiptCount, errors, autoDismissed };
 }
 

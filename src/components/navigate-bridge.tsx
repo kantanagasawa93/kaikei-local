@@ -97,9 +97,17 @@ export function NavigateBridge() {
   }, [pathname]);
 
   // ㊎ Round 6: CLI からの navigate target を polling
+  // ㊇ Round 17: 同じタイマーで demo action target も polling
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+
+    // 許容する demo action 名 (allowlist)
+    const ALLOWED_ACTIONS = new Set([
+      "scan-now",
+      "journalize-all-receipts",
+      "open-help",
+    ]);
 
     const poll = async () => {
       if (cancelled) return;
@@ -113,6 +121,17 @@ export function NavigateBridge() {
           }
         } else if (target) {
           await invoke("navigate_target_clear");
+        }
+
+        // ㊇ demo action: allowlist にあればグローバル CustomEvent で配信
+        const action = ((await invoke("demo_action_get")) as string) || "";
+        if (action) {
+          await invoke("demo_action_clear");
+          if (ALLOWED_ACTIONS.has(action) && !cancelled) {
+            window.dispatchEvent(
+              new CustomEvent("kaikei:demo-action", { detail: action }),
+            );
+          }
         }
       } catch {
         /* Tauri 外で動いている時 (ブラウザ実行) は何もしない */

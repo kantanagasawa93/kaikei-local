@@ -75,39 +75,38 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 17) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 18) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊃ → ㊄ → ㊅ → ㊆ → ㊇。
+推し優先順は ㊈ → ㊉ → ㊊ → ㊋ → ㊌。
 
-### ㊃ v0.3.0 リリース実発火 ★★★★★
-- Round 16 までで release.sh は status auto-display / precheck /
-  push-check / setup-credentials / DRY_RUN / rollback / health-check の 7 重
-  防御。`scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+### ㊈ v0.3.0 リリース実発火 ★★★★★
+- Round 17 までで release-followup も含め完全装備。
+  `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㊄ 受信箱の inline 編集後に自動再仕訳化 ★★★★
-- 目的: Round 16 ㉿ で claude_result_json を編集できるが、編集 → 再仕訳化を
-  別操作に分けると面倒。「保存して再仕訳化」ボタンを追加
-- 対象: src/app/(app)/inbox/page.tsx
-- commit サイズ: 小 (~80 行)
+### ㊉ demo 動画を docs/assets/ に commit + LP に埋込み ★★★★ (混合案・LP 部分)
+- 目的: ユーザが LP からダウンロード前に「実際の動作」を 16 秒で見せる
+- やること:
+  - cmd_demo で生成した MP4 を `docs/assets/demo-v0.3.0.mp4` にコピー
+  - docs/index.html / docs/en/index.html の Hero 直下に `<video controls poster>`
+  - 動画サイズが大きい場合は GitHub Releases asset 経由 (Round 19+ 検討)
+- commit サイズ: 中 (~100 行)
 
-### ㊅ scanner streaming のキャンセル対応 ★★★
-- 目的: Round 16 ㊀ で進捗 streaming が出るが、途中で止められない。
-  「キャンセル」ボタンで現在処理中の photo の OCR が終わり次第ループを抜ける
-- 対象: photo-scanner.ts (AbortSignal) + inbox/page.tsx
+### ㊊ オンボーディングに demo 動画を埋込み ★★★ (混合案・アプリ内部分)
+- 目的: 初回起動時の onboarding に「主要 4 画面の流れ」を 16 秒動画で
+- 対象: src/components/onboarding.tsx + public/demo.mp4 (バンドル同梱)
+- commit サイズ: 中 (~100 行)
+
+### ㊋ Tauri 起動時の auto-update check ★★★
+- 目的: GitHub Releases API を週 1 で叩いて新バージョン通知
+- 対象: src/lib/update-check.ts (既存) を有効化、layout.tsx で発火
 - commit サイズ: 中 (~120 行)
 
-### ㊆ smoke-report の HTML 出力にバージョン情報 + git 情報 ★★
-- 目的: HTML レポートを共有する時に「いつ / どのコミットか」が分からない。
-  app version / git short SHA / branch / `git log -1 --format=%s` を埋込み
-- 対象: scripts/verify-app.sh の cmd_smoke_report_html
-- commit サイズ: 小 (~50 行)
-
-### ㊇ verify-app.sh demo 動画にデモシナリオを実行 ★★
-- 目的: Round 10 ㊃ の demo 動画は単に navigate するだけ。受信箱で「いますぐ
-  仕訳化」を押すなどのデモシナリオを再現する `simulate-click` を追加
-- 対象: scripts/verify-app.sh + lib.rs に Tauri command (DOM クリック)
-- commit サイズ: 中〜大 (~180 行)
+### ㊌ doctor --fix でデータ整合性自動チェック ★★
+- 目的: photo_inbox の orphan (file_path 不在) や receipts の image_url 不在を
+  検出して reportEntry にする (要 confirm で削除)
+- 対象: scripts/verify-app.sh
+- commit サイズ: 中 (~100 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 

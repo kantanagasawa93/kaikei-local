@@ -16,6 +16,9 @@
 #   activate                 KAIKEI LOCAL を最前面に持ってくる
 #   navigate <route>         起動中アプリを <route> に遷移させる (例: /inbox)
 #                            (CLI から control file を書く → Frontend が poll)
+#   simulate-action <name>   起動中アプリで allowlist された action を発火
+#                            (scan-now / journalize-all-receipts / open-help)
+#   demo-scenario            /inbox → scan-now → スクショの典型シナリオを実行
 #   smoke                    スキャン → DB ダンプ → スクショまでを順に実行
 #   smoke-report [<file>]    smoke を Markdown レポートに書き出す
 #                            (既定: /tmp/kaikei-verify-<UTC>.md)
@@ -122,6 +125,28 @@ cmd_navigate() {
   sleep 1.5
 }
 
+# ㊇ Round 17: 起動中アプリの allowlist された action を発火する
+# (例: simulate-action scan-now)
+cmd_simulate_action() {
+  require_bin
+  local action="${1:?action 名を指定}"
+  "$KAIKEI_BIN" --simulate-action="$action"
+  cmd_activate
+  sleep 1.5
+}
+
+# ㊇ Round 17: navigate + action + sleep を組合せた典型シナリオ。
+# /inbox に飛んで「今すぐスキャン」を発火し、4 秒後にスクショを撮る。
+# demo 動画の素材生成に使う。
+cmd_demo_scenario() {
+  cmd_navigate "/inbox"
+  cmd_simulate_action "scan-now"
+  sleep 4
+  local out
+  out=$(cmd_ui_screenshot "/tmp/kaikei-demo-scenario-$(date -u +%Y%m%dT%H%M%SZ).png")
+  echo "$out"
+}
+
 # Round 9 ㉟ — ソース変更を検知して自動で再ビルド + smoke-report
 #
 # 監視対象:
@@ -210,6 +235,16 @@ cmd_smoke_report_html() {
   local out="${1:-/tmp/kaikei-verify-${ts}.html}"
   local app_ver
   app_ver=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$SCRIPT_DIR/../src-tauri/tauri.conf.json" 2>/dev/null || echo "?")
+  # ㊆ Round 17: git のメタも HTML レポートに埋込み (どの commit のレポートか追跡可能)
+  local git_sha git_branch git_subject git_dirty
+  git_sha=$(cd "$SCRIPT_DIR/.." && git rev-parse --short HEAD 2>/dev/null || echo "?")
+  git_branch=$(cd "$SCRIPT_DIR/.." && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+  git_subject=$(cd "$SCRIPT_DIR/.." && git log -1 --format=%s 2>/dev/null || echo "?")
+  if cd "$SCRIPT_DIR/.." && ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    git_dirty="(dirty: 未 commit の変更あり)"
+  else
+    git_dirty=""
+  fi
 
   # 4 画面のスクショを撮る (smoke-report と同じ流れ)
   local shot_dashboard shot_inbox shot_journals shot_logs
@@ -275,7 +310,13 @@ for k in sorted(buckets):
 </style>
 </head><body>
 <h1>KAIKEI LOCAL — 検証レポート</h1>
-<p class="meta">生成日時 (UTC): $ts &middot; アプリバージョン: v$app_ver &middot; ホスト: $(uname -srm)</p>
+<p class="meta">
+  生成日時 (UTC): $ts &middot; アプリバージョン: v$app_ver &middot; ホスト: $(uname -srm)
+</p>
+<p class="meta">
+  git: <code>$git_sha</code> on <code>$git_branch</code> $git_dirty<br>
+  最新 commit: <em>$(printf '%s' "$git_subject" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</em>
+</p>
 
 <h2>simulate-scan</h2>
 <pre>$(printf '%s' "$scan_json" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</pre>
@@ -643,8 +684,17 @@ cmd_smoke_report() {
   local ts
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   local out="${1:-/tmp/kaikei-verify-${ts}.md}"
-  local app_ver
+  local app_ver git_sha git_branch git_subject git_dirty
   app_ver=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$SCRIPT_DIR/../src-tauri/tauri.conf.json" 2>/dev/null || echo "?")
+  # ㊆ Round 17: git メタも Markdown 版に
+  git_sha=$(cd "$SCRIPT_DIR/.." && git rev-parse --short HEAD 2>/dev/null || echo "?")
+  git_branch=$(cd "$SCRIPT_DIR/.." && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "?")
+  git_subject=$(cd "$SCRIPT_DIR/.." && git log -1 --format=%s 2>/dev/null || echo "?")
+  if cd "$SCRIPT_DIR/.." && ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    git_dirty=" (dirty)"
+  else
+    git_dirty=""
+  fi
 
   # ㊓ Round 7: 複数ページのスクショを取って Markdown に並べる。
   # navigate を使ってアプリ内 SPA ナビゲーション → 1.5 秒待ってスクショ。
@@ -726,6 +776,7 @@ for k in sorted(buckets):
     echo "- 生成日時 (UTC): $ts"
     echo "- アプリバージョン: v$app_ver"
     echo "- ホスト: $(uname -srm)"
+    echo "- git: \`$git_sha\` on \`$git_branch\`$git_dirty — _${git_subject}_"
     echo ""
     echo "## simulate-scan"
     echo ""
@@ -813,6 +864,8 @@ main() {
     app-log|errors)            cmd_app_log "$@" ;;
     activate)                  cmd_activate ;;
     navigate|nav)              cmd_navigate "$@" ;;
+    simulate-action|action)    cmd_simulate_action "$@" ;;
+    demo-scenario|scenario)    cmd_demo_scenario ;;
     smoke)                     cmd_smoke ;;
     smoke-report|report)       cmd_smoke_report "$@" ;;
     smoke-report-html|html)    cmd_smoke_report_html "$@" ;;
