@@ -284,28 +284,24 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
 
             // ── Stage 1.2: アスペクト比 + 最小画素数フィルタ ──
             // 領収書の現実的な範囲:
-            //   - 縦横比は概ね 1:1 〜 1:4 (短い側 vs 長い側)
+            //   - 縦横比は概ね 1:1 〜 1:5 (短辺 vs 長辺、レシートが長くてもこの程度)
             //   - 短辺は 600px 以上 (これ未満だとアイコン・サムネ)
-            //   - 「お気に入り」(is_favorite=true) はユーザが意図的に保存した可能性が
-            //     高いので、画素数 / アスペクト比による事前 skip を免除する
             //
-            // これで family snap の風景写真 (16:9 の 4032x3024 等) は Stage 1.5 まで
-            // 行ってサムネ DL → 文書検出するが、「自撮り写真」「背景画像」などの
-            // 縦横比が極端なものはここで弾ける。
-            if !is_favorite {
-                if width < 600 || height < 600 {
-                    continue;
-                }
-                let (long_side, short_side) = if width >= height {
-                    (width as f64, height as f64)
-                } else {
-                    (height as f64, width as f64)
-                };
-                let ratio = long_side / short_side;
-                // 領収書はせいぜい 1:5 (細長いレシート) まで。それ以上は写真パノラマ等
-                if ratio > 5.0 {
-                    continue;
-                }
+            // is_favorite による免除はしない: ♥は「家族の思い出」「友人のスナップ」を
+            // 付けるユーザが多く、領収書として取り込むべき強シグナルにはならない。
+            // (classifier の +0.10 スコアブーストは別途残るが、文字 0 件なら無効化される)
+            if width < 600 || height < 600 {
+                continue;
+            }
+            let (long_side, short_side) = if width >= height {
+                (width as f64, height as f64)
+            } else {
+                (height as f64, width as f64)
+            };
+            let ratio = long_side / short_side;
+            // 領収書はせいぜい 1:5 (細長いレシート) まで。それ以上は写真パノラマ等
+            if ratio > 5.0 {
+                continue;
             }
 
             // 衝突する asset_id は LocalIdentifier に "/" を含むので置換

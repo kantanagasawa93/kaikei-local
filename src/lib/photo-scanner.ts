@@ -336,12 +336,12 @@ export async function scanNow(
 
       // Round 23: 厳格フィルタ — OCR 空 + classifier.score == 0 のものは
       // 「明らかに領収書ではない」として photo_inbox に INSERT すらしない。
-      // is_favorite=true は救済 (ユーザが意図的に保存)。
       // 受信箱の「未判定」を雪崩のように並べないための事前フィルタ。
       // OFF にしたいユーザは設定 → 写真スキャン → 厳格フィルタを切る。
+      // is_favorite による免除はしない (♥を家族写真/思い出に付けてるユーザが多く、
+      //  領収書として取り込む強シグナルにはならないため)。
       if (
         strictFilter &&
-        !photo.is_favorite &&
         initialState !== "receipt" &&
         initialState !== "dismissed"
       ) {

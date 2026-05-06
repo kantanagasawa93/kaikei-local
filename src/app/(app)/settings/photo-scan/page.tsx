@@ -317,9 +317,10 @@ export default function PhotoScanSettingsPage() {
             <li>領収書キーワードが 1 つもヒットしない (家族写真・自撮り等)</li>
           </ul>
           <p className="text-xs text-muted-foreground">
-            <b>例外:</b> Apple Photos で「お気に入り
-            <span aria-label="ハート">♥</span>」を付けた写真は、上記に該当しても
-            必ず取り込みます (ユーザーが意図的に保存した可能性が高いため)。
+            お気に入り
+            <span aria-label="ハート">♥</span> による特別扱いはしません
+            (♥は家族写真・思い出にも付くため、領収書取り込みの強シグナルとして
+            は扱いません)。
           </p>
           <div className="flex items-center gap-3 pt-2">
             <input
