@@ -279,19 +279,30 @@ EOF
   echo "==> CHANGELOG.md から v$VERSION のリリースノートを抽出しました ($(wc -l < "$NOTES_FILE") 行)"
 fi
 
+# Round 19 ㊍: タグが *-rc[0-9]* / *-beta[0-9]* / *-alpha[0-9]* なら自動的に
+# pre-release フラグを付ける。/releases/latest からは除外され、ユーザーは
+# 「正式版」とは認識しないので safety net として有用。
+PRERELEASE_FLAG=""
+if [[ "$TAG" =~ -(rc|beta|alpha)[0-9]*$ ]]; then
+  PRERELEASE_FLAG="--prerelease"
+  echo "==> $TAG は pre-release タグ (rc/beta/alpha) なので --prerelease を付けます"
+fi
+
 # 2. GitHub Release 作成 (既にあれば再利用)
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo ""
   echo "==> Release $TAG は既存。アセットを差し替えます"
   gh release upload "$TAG" "${ASSETS[@]}" --clobber
   # notes も更新
-  gh release edit "$TAG" --notes-file "$NOTES_FILE" >/dev/null
+  gh release edit "$TAG" --notes-file "$NOTES_FILE" $PRERELEASE_FLAG >/dev/null
 else
   echo ""
   echo "==> Release $TAG を新規作成"
+  # shellcheck disable=SC2086
   gh release create "$TAG" \
     --title "KAIKEI LOCAL $VERSION" \
     --notes-file "$NOTES_FILE" \
+    $PRERELEASE_FLAG \
     "${ASSETS[@]}"
 fi
 

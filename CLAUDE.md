@@ -75,36 +75,38 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 19) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 20) 候補 — ユーザは「全部やって」希望
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊍ → ㊎ → ㊏ → ㊐ → ㊑。
+推し優先順は ㊒ → ㊓ → ㊔ → ㊕ → ㊖。
 
-### ㊍ v0.3.0 リリース実発火 ★★★★★
-- Round 18 で demo 動画 (3.6 MB) を docs/assets/ に commit 済み。
-  あとは `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+### ㊒ v0.3.0 リリース実発火 ★★★★★
+- Round 19 までで release.sh は --help / rc 自動 prerelease / 8 重防御まで完備。
+- 手元で 1 回: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
 
-### ㊎ demo 動画を Git LFS or GitHub Releases asset に外出し ★★★
-- 目的: 3.6 MB の MP4 が main にあると repo clone が重い。LFS or
-  GitHub Releases asset (download URL を LP / onboarding が参照) に分離
-- 対象: .gitattributes (LFS) or release asset uploader
-- commit サイズ: 中 (~80 行)
+### ㊓ アップデートバナーから「いま更新する」で auto-restart ★★★★
+- 目的: Round 19 ㊏ のバナーは「ダウンロード」リンクのみ。
+  Tauri の updater プラグインを使って「クリック → DL → 再起動」一気通貫
+- 対象: src-tauri に tauri-plugin-updater + components/update-banner.tsx
+- commit サイズ: 中〜大 (~200 行)
 
-### ㊏ アップデート通知の UI を toast から専用バナーに ★★★
-- 目的: Round 18 ㊋ で update-check は toast。新バージョンを見逃しやすい。
-  画面上部に「v0.4.0 が公開されました — 詳細」みたいな永続バナー
-- 対象: src/components/update-banner.tsx (新規) + layout.tsx
-- commit サイズ: 中 (~120 行)
+### ㊔ デモ動画の自動再生成 PDCA フック ★★★
+- 目的: UI が変わったらデモ動画も古くなる。Round の最後に
+  「demo 動画も再生成 → docs/assets + public/ にコピー」を自動化
+- 対象: scripts/verify-app.sh autorun の後段に build-demo step
+- commit サイズ: 中 (~100 行)
 
-### ㊐ doctor --fix で「アプリ data 重複バックアップ」も整理 ★★
-- 目的: kaikei.db.bak-* が大量に貯まる。古いバックアップを削除候補に
-- 対象: scripts/verify-app.sh の cmd_doctor_fix
+### ㊕ onboarding の動画ステップにフォールバック画像 ★★
+- 目的: 動画読み込み失敗時に静止画 (poster) で進行できるよう
+  onerror で img へ差し替え
+- 対象: src/components/onboarding.tsx
 - commit サイズ: 小 (~60 行)
 
-### ㊑ onboarding の「次へ」をキーボードショートカット化 ★★
-- 目的: Enter / 矢印キーで進める
-- 対象: src/components/onboarding.tsx
-- commit サイズ: 小 (~50 行)
+### ㊖ verify-release.sh で公開後の SNS 共有テキスト生成 ★★
+- 目的: リリース後にユーザが SNS でシェアする時のテンプレを自動生成
+  (Twitter/X / note 用に文字数別)
+- 対象: scripts/release-followup.sh
+- commit サイズ: 小 (~60 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
 
