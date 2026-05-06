@@ -439,9 +439,19 @@ export default function InboxPage() {
         const autoMsg = result.autoDismissed && result.autoDismissed > 0
           ? ` / 過去パターンと類似で ${result.autoDismissed} 枚を自動破棄`
           : "";
-        toast.success(`新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}${autoMsg}`);
+        // Round 23: 厳格フィルタで弾いた件数も併記 (透明性 — どれだけ弾いたか分かる)
+        const skipMsg = result.skipped && result.skipped > 0
+          ? ` / 明らかに対象外 ${result.skipped} 枚は除外`
+          : "";
+        toast.success(
+          `新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}${autoMsg}${skipMsg}`,
+        );
       } else if (result.scanned === 0) {
         toast.info("新規の写真はありませんでした");
+      } else if (result.skipped && result.skipped > 0) {
+        toast.info(
+          `${result.scanned} 枚スキャン: 明らかに対象外 ${result.skipped} 枚を除外、新規はありません`,
+        );
       } else {
         toast.info(`${result.scanned} 枚スキャン (新規はありません)`);
       }
