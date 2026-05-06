@@ -532,6 +532,54 @@ cmd_doctor_fix() {
     printf "  ${WC}!${RC} kaikei.db なし — skip\n"
   fi
 
+  # ㊐ Round 19: 古いバックアップ整理 (kaikei.db.bak-* / dev.kaikei.app.bak-*)
+  echo ""
+  echo "==> 4. 古いバックアップの整理"
+  local app_data_root="$HOME/Library/Application Support"
+  local app_data="$app_data_root/dev.kaikei.app"
+  local backups=()
+  # kaikei.db.bak-* (DB 単体のバックアップ)
+  if [ -d "$app_data" ]; then
+    while IFS= read -r -d '' f; do
+      backups+=("$f")
+    done < <(find "$app_data" -maxdepth 1 -type f -name "kaikei.db.bak-*" -print0 2>/dev/null)
+  fi
+  # dev.kaikei.app.bak-* (wipe-data が作る丸ごとバックアップ)
+  while IFS= read -r -d '' d; do
+    backups+=("$d")
+  done < <(find "$app_data_root" -maxdepth 1 -type d -name "dev.kaikei.app.bak-*" -print0 2>/dev/null)
+
+  if [ ${#backups[@]} -eq 0 ]; then
+    printf "  ${PC}✓${RC} 古いバックアップなし\n"
+  else
+    local total_bytes=0
+    for b in "${backups[@]}"; do
+      local sz
+      sz=$(du -sk "$b" 2>/dev/null | awk '{print $1}')
+      total_bytes=$((total_bytes + sz))
+    done
+    local total_mb
+    total_mb=$(awk "BEGIN { printf \"%.1f\", $total_bytes / 1024 }")
+    printf "  ${WC}!${RC} バックアップ ${#backups[@]} 件 / ${total_mb} MB\n"
+    for b in "${backups[@]}"; do
+      printf "    - %s\n" "$(basename "$b")"
+    done
+    if [ -t 0 ]; then
+      read -r -p "  これらを削除しますか? [y/N] " ans
+      case "$ans" in
+        [yY]|[yY][eE][sS])
+          for b in "${backups[@]}"; do
+            rm -rf "$b" 2>/dev/null || true
+          done
+          printf "  ${PC}✓${RC} ${#backups[@]} 件削除 (${total_mb} MB 解放)\n"
+          ;;
+        *) printf "  ${WC}!${RC} 削除を中止\n" ;;
+      esac
+    else
+      printf "  ${WC}!${RC} 非対話シェル: 自動削除しません\n"
+    fi
+  fi
+
   echo ""
   echo "==> 自動修復後の再検査:"
   cmd_doctor

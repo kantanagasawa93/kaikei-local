@@ -1,0 +1,12 @@
+# Round 19 ㊎: 大きなバイナリは Git LFS 管理対象。
+#
+# 適用: 新規 commit からは LFS にプッシュされる。
+# 既存 commit (Round 18 で main に入った MP4 等) は履歴書き換えが必要:
+#   git lfs install
+#   git lfs migrate import --include="*.mp4,docs/assets/demo-*"
+#   git push --force-with-lease origin main
+# ※ co-developer がいる場合は force push の影響を要相談。
+# ※ GitHub LFS は無料枠 1 GB / 月 1 GB 帯域。これを超えると課金。
+*.mp4    filter=lfs diff=lfs merge=lfs -text
+*.mov    filter=lfs diff=lfs merge=lfs -text
+docs/assets/demo-*.mp4    filter=lfs diff=lfs merge=lfs -text

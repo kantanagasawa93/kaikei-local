@@ -134,6 +134,41 @@ export function Onboarding() {
     setShow(false);
   };
 
+  // ㊑ Round 19: キーボードショートカット (Enter/→: 次へ / ←: 戻る / Esc: スキップ)
+  // input にフォーカスがある時 (基本情報入力ステップ) は Enter を奪わない
+  useEffect(() => {
+    if (!show) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const inForm =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      // Esc は常にスキップ確認
+      if (e.key === "Escape") {
+        e.preventDefault();
+        void handleSkipInfo();
+        return;
+      }
+      if (inForm) return;
+      // INFO_STEP では Enter は handleSaveInfo (フォームの submit 動作優先)
+      if (step === INFO_STEP) return;
+      if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        // 最終スライドなら基本情報入力へ
+        setStep((s) => (s < INFO_STEP ? s + 1 : s));
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setStep((s) => Math.max(0, s - 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show, step]);
+
   const handleSaveInfo = async () => {
     setSaving(true);
     try {
@@ -337,6 +372,10 @@ export function Onboarding() {
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>
           </div>
+
+          <p className="text-[10px] text-muted-foreground/70 font-mono">
+            ←→ で移動 / Enter or Space で次へ / Esc でスキップ
+          </p>
 
           <button
             onClick={handleSkipInfo}
