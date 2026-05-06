@@ -141,6 +141,164 @@ export async function exportTaxReturnPdf(
   return pdf.save();
 }
 
+/**
+ * Round 22 ⓔ: 会計年度サマリ PDF.
+ *
+ * 確定申告期に「年間まとめ」を 1 枚で見るためのレビュー用 PDF。
+ * - 売上 / 経費 / 仕訳件数 / 領収書件数 / 月次グラフ (ASCII bar)
+ * - account_code 別の支出 Top 10
+ *
+ * embedJapaneseFonts がプロジェクト共通の日本語フォントを埋め込むので
+ * 表示はそのまま日本語で描ける。pdf-lib は ASCII フォントしか扱えないので、
+ * embed 失敗時は ASCII (英) で fallback する。
+ */
+export interface FiscalYearSummary {
+  year: number;
+  receiptCount: number;
+  journalCount: number;
+  monthly: { month: string; income: number; expense: number }[]; // 12 行
+  topExpenses: { account_code: string; account_name: string; amount: number }[];
+}
+
+export async function exportFiscalYearSummaryPdf(
+  s: FiscalYearSummary,
+): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  let regular, bold;
+  try {
+    const fonts = await embedJapaneseFonts(pdf);
+    regular = fonts.regular;
+    bold = fonts.bold;
+  } catch {
+    // 日本語フォント埋め込み失敗 → 標準フォント (ASCII のみ) で fallback
+    const { StandardFonts } = await import("pdf-lib");
+    regular = await pdf.embedFont(StandardFonts.Helvetica);
+    bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  }
+
+  const page = pdf.addPage([595, 842]); // A4
+  const { width } = page.getSize();
+  let y = 800;
+
+  const fmtJpy = (n: number) =>
+    "¥ " + new Intl.NumberFormat("ja-JP").format(Math.round(n));
+
+  const draw = (text: string, x: number, opts: { size?: number; b?: boolean } = {}) => {
+    page.drawText(text, {
+      x,
+      y,
+      size: opts.size ?? 11,
+      font: opts.b ? bold : regular,
+      color: rgb(0, 0, 0),
+    });
+  };
+  const hr = () => {
+    page.drawLine({
+      start: { x: 40, y: y - 4 },
+      end: { x: width - 40, y: y - 4 },
+      thickness: 0.5,
+      color: rgb(0.6, 0.6, 0.6),
+    });
+  };
+
+  // ヘッダ
+  draw(`KAIKEI LOCAL — 年度サマリ FY${s.year}`, 40, { size: 18, b: true });
+  y -= 22;
+  draw(`生成日時: ${new Date().toLocaleString("ja-JP")}`, 40, { size: 9 });
+  y -= 18;
+  hr();
+  y -= 20;
+
+  // 全体集計
+  const totalInc = s.monthly.reduce((a, b) => a + b.income, 0);
+  const totalExp = s.monthly.reduce((a, b) => a + b.expense, 0);
+  const diff = totalInc - totalExp;
+
+  draw("全体集計", 40, { size: 13, b: true });
+  y -= 18;
+  draw(`売上合計: ${fmtJpy(totalInc)}`, 50);
+  y -= 16;
+  draw(`経費合計: ${fmtJpy(totalExp)}`, 50);
+  y -= 16;
+  draw(`差引 (利益): ${fmtJpy(diff)}`, 50, { b: true });
+  y -= 16;
+  draw(`仕訳件数: ${s.journalCount} 件 / 領収書件数: ${s.receiptCount} 件`, 50);
+  y -= 24;
+  hr();
+  y -= 20;
+
+  // 月次グラフ (ASCII bar — pdf-lib に matplotlib は無いので簡易表示)
+  draw("月次推移", 40, { size: 13, b: true });
+  y -= 16;
+  const maxVal = Math.max(
+    1,
+    ...s.monthly.flatMap((m) => [Math.abs(m.income), Math.abs(m.expense)]),
+  );
+  const BAR_W = 40;
+  const BAR_X_START = 90;
+  for (const m of s.monthly) {
+    const incLen = Math.round((Math.abs(m.income) / maxVal) * 30);
+    const expLen = Math.round((Math.abs(m.expense) / maxVal) * 30);
+    draw(`${Number(m.month)}月`, 50, { size: 9 });
+    // 売上 bar (緑)
+    if (incLen > 0) {
+      page.drawRectangle({
+        x: BAR_X_START,
+        y: y - 2,
+        width: incLen * 4,
+        height: 5,
+        color: rgb(0.3, 0.7, 0.3),
+      });
+    }
+    draw(fmtJpy(m.income), BAR_X_START + BAR_W * 3.5, { size: 8 });
+    y -= 8;
+    // 経費 bar (赤)
+    if (expLen > 0) {
+      page.drawRectangle({
+        x: BAR_X_START,
+        y: y - 2,
+        width: expLen * 4,
+        height: 5,
+        color: rgb(0.8, 0.4, 0.4),
+      });
+    }
+    draw(fmtJpy(m.expense), BAR_X_START + BAR_W * 3.5, { size: 8 });
+    y -= 12;
+  }
+  y -= 8;
+  hr();
+  y -= 16;
+
+  // 支出 Top 10
+  draw("勘定科目別 支出 Top 10", 40, { size: 13, b: true });
+  y -= 18;
+  if (s.topExpenses.length === 0) {
+    draw("(該当なし)", 50, { size: 10 });
+    y -= 14;
+  } else {
+    for (const e of s.topExpenses.slice(0, 10)) {
+      draw(
+        `${e.account_code}  ${e.account_name}`,
+        50,
+        { size: 10 },
+      );
+      draw(fmtJpy(e.amount), 400, { size: 10 });
+      y -= 14;
+    }
+  }
+  y -= 8;
+  hr();
+  y -= 16;
+
+  draw(
+    "このサマリは確定申告の参考用です。e-Tax 提出前に税理士・税務署にご確認ください。",
+    40,
+    { size: 8 },
+  );
+
+  return pdf.save();
+}
+
 export function downloadBlob(data: Uint8Array, filename: string) {
   const blob = new Blob([data as BlobPart], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);

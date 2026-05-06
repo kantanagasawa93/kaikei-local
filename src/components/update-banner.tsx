@@ -159,7 +159,19 @@ export function UpdateBanner() {
       );
     }
     if (autoState.kind === "error") {
-      // updater 失敗時は GitHub Releases にフォールバック
+      // Round 22 ㊚: ネットワーク系の真エラーだけ表示する。
+      // latest.json 未公開 (= release 直前 / 鍵入れ替え期間) は auto-updater 側で
+      // up_to_date 化済みなので、ここに来る error はだいたい本物の通信問題。
+      // それでも UI は控えめ (amber) に出して、手動 DL で逃げ道を残す。
+      const errMsg = autoState.message ?? "";
+      // 念のため二重ガード: ここでも 404 系は無視
+      if (
+        /404|could not fetch a valid release json|releaseendpoint|update endpoint did not respond/i.test(
+          errMsg,
+        )
+      ) {
+        return null;
+      }
       return (
         <div
           role="status"
@@ -169,7 +181,7 @@ export function UpdateBanner() {
         >
           <Download className="h-4 w-4 flex-shrink-0" />
           <span className="flex-1">
-            自動更新に失敗 ({autoState.message.slice(0, 80)}) — 手動 DL ページから取得してください
+            自動更新に失敗 ({errMsg.slice(0, 80)}) — 手動 DL ページから取得してください
           </span>
           <a
             href={FALLBACK_URL}

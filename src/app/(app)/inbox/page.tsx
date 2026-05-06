@@ -44,6 +44,7 @@ import {
   reocrInboxRow,
   updateInboxClaudeResult,
   markInboxViewed,
+  markInboxAllViewed,
   getAuthStatus,
   type AuthStatus,
   type InboxRow,
@@ -283,6 +284,27 @@ export default function InboxPage() {
   useEffect(() => {
     void refresh();
   }, [filter, searchQ, searchFrom, searchTo]);
+
+  // Round 22 ⓒ: 表示中の candidate でかつ未確認 (last_viewed_at IS NULL) を一括既読化
+  const handleMarkAllViewed = async () => {
+    const targets = items.filter(
+      (it) => it.state === "candidate" && !it.last_viewed_at,
+    );
+    if (targets.length === 0) {
+      toast.info("未確認のカードはありません");
+      return;
+    }
+    const updated = await markInboxAllViewed(targets.map((t) => t.id));
+    // ローカル state 即時反映
+    const now = new Date().toISOString();
+    const updatedIds = new Set(targets.map((t) => t.id));
+    setItems((prev) =>
+      prev.map((p) =>
+        updatedIds.has(p.id) ? { ...p, last_viewed_at: now } : p,
+      ),
+    );
+    toast.success(`${updated} 件を既読化しました`);
+  };
 
   const handleDismissAllCandidates = async () => {
     const candidates = await listInbox("candidate");
@@ -749,6 +771,16 @@ export default function InboxPage() {
             <RefreshCw className={`h-4 w-4 mr-1 ${scanning ? "animate-spin" : ""}`} />
             {scanning ? "スキャン中..." : "今すぐスキャン"}
           </Button>
+          {/* Round 22 ⓒ: 全部既読化 (未確認バッジを一掃) */}
+          {items.some((it) => it.state === "candidate" && !it.last_viewed_at) && (
+            <Button
+              variant="outline"
+              onClick={handleMarkAllViewed}
+              title="未確認カードをすべて既読化 (state は変えず last_viewed_at を更新)"
+            >
+              全部既読
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={handleDismissAllCandidates}
@@ -1157,17 +1189,11 @@ function InboxCard({
         </button>
         {row.receipt_score !== null && (
           // ㉰ Round 13: score_signals_json があれば tooltip で内訳を見せる
-          <Badge
-            variant="secondary"
-            className="absolute top-2 right-2 text-[10px] font-mono cursor-help"
-            title={
-              row.score_signals_json
-                ? formatScoreSignalsForTooltip(row.score_signals_json)
-                : undefined
-            }
-          >
-            score {row.receipt_score.toFixed(2)}
-          </Badge>
+          // Round 22 ⓖ: tooltip → React popover に格上げ (改行 & 色付き)
+          <ScoreSignalsBadge
+            score={row.receipt_score}
+            signalsJson={row.score_signals_json}
+          />
         )}
         <Badge variant="outline" className="absolute top-2 left-2 text-[10px] bg-background/80 backdrop-blur-sm">
           {row.state}
@@ -1396,9 +1422,107 @@ function InboxCard({
 }
 
 /**
+ * Round 22 ⓖ: score badge + hover で内訳 popover を表示。
+ *
+ * 旧仕様 (㉰ Round 13) は title 属性 (browser tooltip) で改行・色付け不可だった。
+ * - hover/focus で popover が出る
+ * - signals[] を順に色付き行で表示 (positive=緑, negative=赤)
+ * - score_signals_json が無い時は単純な Badge
+ */
+function ScoreSignalsBadge({
+  score,
+  signalsJson,
+}: {
+  score: number;
+  signalsJson: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+
+  let parsed:
+    | {
+        score?: number;
+        signals?: { score?: number; reason?: string }[];
+      }
+    | null = null;
+  if (signalsJson) {
+    try {
+      parsed = JSON.parse(signalsJson);
+    } catch {
+      parsed = null;
+    }
+  }
+  const signals = parsed?.signals ?? [];
+
+  return (
+    <div
+      className="absolute top-2 right-2"
+      onMouseEnter={() => signalsJson && setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => signalsJson && setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <Badge
+        variant="secondary"
+        className={`text-[10px] font-mono ${signalsJson ? "cursor-help" : ""}`}
+        tabIndex={signalsJson ? 0 : -1}
+      >
+        score {score.toFixed(2)}
+      </Badge>
+      {open && signals.length > 0 && (
+        <div
+          className="absolute top-full right-0 mt-1 z-30 w-72 p-3
+                     bg-popover text-popover-foreground rounded-md shadow-xl
+                     border text-xs leading-snug"
+          // popover はホバー対象から少し離れているとマウス移動で消えがち。
+          // pointer-events: auto + 自分自身も hover 領域として扱う。
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+        >
+          <div className="font-bold pb-1 mb-2 border-b">
+            score {(parsed?.score ?? score).toFixed(2)} の内訳
+          </div>
+          <div className="max-h-56 overflow-y-auto space-y-1">
+            {signals.map((s, idx) => {
+              const v = s.score ?? 0;
+              const sign = v > 0 ? "+" : v < 0 ? "" : "±";
+              const cls =
+                v > 0
+                  ? "text-green-700"
+                  : v < 0
+                  ? "text-red-700"
+                  : "text-muted-foreground";
+              return (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="flex-1 truncate" title={s.reason ?? ""}>
+                    {s.reason}
+                  </span>
+                  <span className={`font-mono ${cls}`}>
+                    {sign}
+                    {v.toFixed(2)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="text-[10px] text-muted-foreground pt-2 mt-2 border-t">
+            合計が 0.40 以上なら自動で receipt 判定
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * ㉰ Round 13: score_signals_json を tooltip 用テキストに整形。
  * 例: 'score 0.85: + "領収書" (0.40), + "合計" (0.15), + 金額×2 (0.25), + 日付 (0.10)'
  * 改行できないので " / " 区切り、最大 6 件までに切る。
+ *
+ * Round 22 ⓖ: ScoreSignalsBadge に置き換えたので未使用化したが、
+ * 既存テスト等から呼ばれる可能性があるため残す (no-op fallback)。
  */
 function formatScoreSignalsForTooltip(json: string): string | undefined {
   try {

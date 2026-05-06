@@ -14,17 +14,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw, Download, Tag, X as XIcon } from "lucide-react";
+import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw, Download, Tag, X as XIcon, CheckSquare, Square } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   reverseJournalToInbox,
   undoLastReverse,
   getReverseUndoCount,
 } from "@/lib/auto-journal";
-import { buildJournalsCsv, downloadCsv } from "@/lib/journal-export";
+import { buildJournalsCsv, downloadCsv, buildFiscalYearSummary } from "@/lib/journal-export";
+import { exportFiscalYearSummaryPdf, downloadBlob } from "@/lib/pdf-export";
 import {
   parseTags,
   setJournalTags,
+  bulkUpdateJournalTags,
   SUGGESTED_TAGS,
 } from "@/lib/journal-tags";
 import { toast } from "@/lib/toast";
@@ -39,14 +41,81 @@ interface JournalWithLines extends Journal {
 const PAGE_SIZE = 50;
 
 export default function JournalsPage() {
+  // Round 22 ⓓ: ?month=YYYY-MM クエリで dashboard ドリルダウンから飛んで来た時の初期値.
+  // Next 16 static export では useSearchParams() に Suspense boundary が要るため
+  // window.location.search を直接読む (Tauri の static export ではこれで十分).
   const [journals, setJournals] = useState<JournalWithLines[]>([]);
   const [monthFilter, setMonthFilter] = useState("");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const m = params.get("month");
+    if (m && /^\d{4}-\d{2}$/.test(m)) {
+      setMonthFilter(m);
+    }
+  }, []);
   const [tagFilter, setTagFilter] = useState("");
   const [page, setPage] = useState(0);
   // ㊍ Round 6: 直近の差し戻しを取り消せる件数 (0 なら button 非表示)
   const [undoCount, setUndoCount] = useState(0);
   // Round 21 ⓒ: タグ編集モーダル対象の仕訳 ID
   const [tagEditFor, setTagEditFor] = useState<string | null>(null);
+  // Round 22 ㊛: 仕訳の bulk select 状態 (id Set) + bulk タグ追加モーダル
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkTagModalOpen, setBulkTagModalOpen] = useState(false);
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllVisible(ids: string[]) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function handleBulkAddTags(tagsToAdd: string[]) {
+    if (tagsToAdd.length === 0 || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    const updated = await bulkUpdateJournalTags(ids, tagsToAdd, "add");
+    // ローカル state も即時反映
+    setJournals((prev) =>
+      prev.map((j) => {
+        if (!selectedIds.has(j.id)) return j;
+        const cur = parseTags(j.tags ?? null);
+        const next = Array.from(new Set([...cur, ...tagsToAdd]));
+        return { ...j, tags: next.length === 0 ? null : JSON.stringify(next) };
+      }),
+    );
+    toast.success(`${updated} 件にタグを追加しました`);
+    setBulkTagModalOpen(false);
+    clearSelection();
+  }
+
+  async function handleBulkRemoveTag(tag: string) {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    const updated = await bulkUpdateJournalTags(ids, [tag], "remove");
+    setJournals((prev) =>
+      prev.map((j) => {
+        if (!selectedIds.has(j.id)) return j;
+        const cur = parseTags(j.tags ?? null).filter((t) => t !== tag);
+        return { ...j, tags: cur.length === 0 ? null : JSON.stringify(cur) };
+      }),
+    );
+    toast.success(`${updated} 件から「${tag}」を外しました`);
+  }
 
   useEffect(() => {
     loadJournals();
@@ -201,6 +270,13 @@ export default function JournalsPage() {
           onClose={() => setTagEditFor(null)}
         />
       )}
+      {bulkTagModalOpen && (
+        <BulkTagModal
+          count={selectedIds.size}
+          onAdd={(tags) => void handleBulkAddTags(tags)}
+          onClose={() => setBulkTagModalOpen(false)}
+        />
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">仕訳帳</h1>
         <div className="flex gap-2">
@@ -233,6 +309,42 @@ export default function JournalsPage() {
             >
               <option value="" disabled>
                 年度別 CSV
+              </option>
+              {availableYears.map((y) => (
+                <option key={y} value={y}>
+                  FY {y}
+                </option>
+              ))}
+            </select>
+          )}
+          {/* Round 22 ⓔ: 年度サマリ PDF (確定申告期のレビュー用) */}
+          {availableYears.length > 0 && (
+            <select
+              onChange={(e) => {
+                const y = parseInt(e.target.value, 10);
+                if (Number.isFinite(y)) {
+                  void (async () => {
+                    try {
+                      const summary = await buildFiscalYearSummary(y);
+                      const bytes = await exportFiscalYearSummaryPdf(summary);
+                      downloadBlob(
+                        bytes,
+                        `kaikei_summary_FY${y}_${new Date().toISOString().slice(0, 10)}.pdf`,
+                      );
+                      toast.success(`FY${y} のサマリ PDF を生成しました`);
+                    } catch (err) {
+                      toast.error(`PDF 生成に失敗: ${(err as Error).message}`);
+                    }
+                  })();
+                  e.target.value = "";
+                }
+              }}
+              defaultValue=""
+              className="border rounded px-2 py-1 text-sm h-9"
+              title="指定の会計年度 (1/1〜12/31) を 1 枚 PDF にまとめる"
+            >
+              <option value="" disabled>
+                年度サマリ PDF
               </option>
               {availableYears.map((y) => (
                 <option key={y} value={y}>
@@ -274,6 +386,52 @@ export default function JournalsPage() {
         )}
       </div>
 
+      {/* Round 22 ㊛: bulk action toolbar — selectedIds が 1 件以上ある時だけ表示 */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-md">
+          <span className="text-sm font-medium text-blue-700">
+            {selectedIds.size} 件選択中
+          </span>
+          <Button
+            size="sm"
+            variant="default"
+            onClick={() => setBulkTagModalOpen(true)}
+            title="選択した仕訳にまとめてタグを追加"
+          >
+            <Tag className="h-3 w-3 mr-1" />
+            タグを追加
+          </Button>
+          {/* よくある「経費精算済」をワンクリックで追加 */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleBulkAddTags(["経費精算済"])}
+            title="選択した仕訳に「経費精算済」をワンクリックで追加"
+          >
+            ＋ 経費精算済
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void handleBulkRemoveTag("経費精算済")}
+            title="選択した仕訳から「経費精算済」を外す"
+          >
+            ✕ 経費精算済
+          </Button>
+          <Button size="sm" variant="ghost" onClick={clearSelection}>
+            選択解除
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => selectAllVisible(pagedJournals.map((j) => j.id))}
+            className="ml-auto"
+          >
+            ページ内すべて選択
+          </Button>
+        </div>
+      )}
+
       {pagedJournals.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
@@ -298,6 +456,34 @@ export default function JournalsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {/* Round 22 ㊛: bulk select checkbox 列 */}
+                  <TableHead className="w-8">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const visibleIds = pagedJournals.map((j) => j.id);
+                        const allSelected = visibleIds.every((id) => selectedIds.has(id));
+                        if (allSelected) {
+                          // 全部解除
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            for (const id of visibleIds) next.delete(id);
+                            return next;
+                          });
+                        } else {
+                          selectAllVisible(visibleIds);
+                        }
+                      }}
+                      className="hover:opacity-70"
+                      title="ページ内すべて選択 / 解除"
+                    >
+                      {pagedJournals.every((j) => selectedIds.has(j.id)) && pagedJournals.length > 0 ? (
+                        <CheckSquare className="h-4 w-4" />
+                      ) : (
+                        <Square className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </button>
+                  </TableHead>
                   <TableHead className="w-28">日付</TableHead>
                   <TableHead>摘要</TableHead>
                   <TableHead>勘定科目</TableHead>
@@ -309,9 +495,30 @@ export default function JournalsPage() {
               <TableBody>
                 {pagedJournals.map((journal) =>
                   journal.journal_lines.map((line, lineIndex) => (
-                    <TableRow key={`${journal.id}-${line.id}`}>
+                    <TableRow
+                      key={`${journal.id}-${line.id}`}
+                      className={selectedIds.has(journal.id) ? "bg-blue-50/50" : undefined}
+                    >
                       {lineIndex === 0 ? (
                         <>
+                          {/* Round 22 ㊛: bulk select checkbox */}
+                          <TableCell
+                            rowSpan={journal.journal_lines.length}
+                            className="align-top"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => toggleSelected(journal.id)}
+                              className="hover:opacity-70 mt-1"
+                              aria-label={selectedIds.has(journal.id) ? "選択解除" : "選択"}
+                            >
+                              {selectedIds.has(journal.id) ? (
+                                <CheckSquare className="h-4 w-4 text-primary" />
+                              ) : (
+                                <Square className="h-4 w-4 text-muted-foreground" />
+                              )}
+                            </button>
+                          </TableCell>
                           <TableCell
                             rowSpan={journal.journal_lines.length}
                             className="align-top font-medium"
@@ -572,6 +779,129 @@ function TagEditModal({
             キャンセル
           </Button>
           <Button onClick={() => void onSave(tags)}>保存</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Round 22 ㊛: 複数選択 → タグ一括追加用モーダル.
+ * - SUGGESTED_TAGS のチップを並べてクリックでバスケットに入れる
+ * - フリー入力で追加もできる
+ * - 「追加」ボタンで bulkUpdateJournalTags("add") を発火
+ */
+function BulkTagModal({
+  count,
+  onAdd,
+  onClose,
+}: {
+  count: number;
+  onAdd: (tags: string[]) => void;
+  onClose: () => void;
+}) {
+  const [basket, setBasket] = useState<string[]>([]);
+  const [input, setInput] = useState("");
+
+  const addToBasket = (t: string) => {
+    const trimmed = t.trim();
+    if (!trimmed || trimmed.length > 30) return;
+    if (basket.includes(trimmed)) return;
+    setBasket([...basket, trimmed]);
+    setInput("");
+  };
+
+  const removeFromBasket = (t: string) => {
+    setBasket(basket.filter((x) => x !== t));
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] bg-black/40 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background rounded-lg shadow-xl max-w-md w-full p-6 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div>
+          <h2 className="text-lg font-bold">タグを一括追加</h2>
+          <p className="text-xs text-muted-foreground">
+            {count} 件の仕訳に下記のタグを追加します
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5 min-h-[40px] p-2 border rounded">
+          {basket.length === 0 ? (
+            <p className="text-xs text-muted-foreground self-center">
+              候補からチップを追加するか、下に直接入力
+            </p>
+          ) : (
+            basket.map((t) => (
+              <Badge
+                key={t}
+                variant="outline"
+                className="gap-1 bg-blue-50 border-blue-200 text-blue-700"
+              >
+                <Tag className="h-3 w-3" />
+                {t}
+                <button
+                  type="button"
+                  onClick={() => removeFromBasket(t)}
+                  className="ml-1 hover:text-red-600"
+                  aria-label={`${t} を削除`}
+                >
+                  <XIcon className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addToBasket(input);
+              }
+            }}
+            placeholder="新しいタグを入力 (Enter で追加)"
+            className="flex-1 text-sm"
+          />
+          <Button size="sm" variant="outline" onClick={() => addToBasket(input)}>
+            候補に追加
+          </Button>
+        </div>
+
+        <div>
+          <p className="text-xs text-muted-foreground mb-1.5">候補:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {SUGGESTED_TAGS.filter((s) => !basket.includes(s)).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => addToBasket(s)}
+                className="text-[11px] px-2 py-0.5 border rounded hover:bg-muted"
+              >
+                + {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose}>
+            キャンセル
+          </Button>
+          <Button
+            onClick={() => onAdd(basket)}
+            disabled={basket.length === 0}
+          >
+            {count} 件に追加
+          </Button>
         </div>
       </div>
     </div>
