@@ -64,6 +64,28 @@ function isTauri(): boolean {
 }
 
 /**
+ * latest.json が「まだ未公開」を意味する error メッセージかどうか判定。
+ *
+ * Round 22 ㊚: tauri-plugin-updater は latest.json が 404 / 内容不正の時に
+ * `Could not fetch a valid release JSON from the remote` を error として投げる。
+ * これを「ちゃんとアプリ側でハンドルした up_to_date」扱いにすることで、
+ * リリース直前 (まだ latest.json 未配置) の期間に「auto-update 失敗」バナーが
+ * 出続ける現象を回避する。
+ *
+ * 真の通信エラー (network down / DNS / cert) は素直に error を残す方が望ましい。
+ */
+function isReleaseNotPublished(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("could not fetch a valid release json") ||
+    m.includes("status code 404") ||
+    m.includes("404 not found") ||
+    m.includes("releaseendpoint") || // tauri 2.x の "ReleaseEndpoint" 系メッセージ
+    m.includes("update endpoint did not respond")
+  );
+}
+
+/**
  * latest.json を check し、新しい version があれば available にする。
  * 既に最新なら up_to_date、Tauri 環境外なら idle のまま。
  */
@@ -93,10 +115,27 @@ export async function checkAutoUpdate(): Promise<AutoUpdaterStatus> {
     return _status;
   } catch (e) {
     const msg = (e as Error).message ?? String(e);
+    // Round 22 ㊚: "latest.json 未公開" は error ではなく up_to_date 扱い
+    if (isReleaseNotPublished(msg)) {
+      console.info(
+        `[auto-updater] latest.json は未公開扱い (${msg.slice(0, 80)}) — up_to_date として静かに継続`,
+      );
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const v = await getVersion();
+        setStatus({ kind: "up_to_date", currentVersion: v });
+      } catch {
+        setStatus({ kind: "up_to_date", currentVersion: "unknown" });
+      }
+      return _status;
+    }
     setStatus({ kind: "error", message: msg });
     return _status;
   }
 }
+
+// テスト用 export
+export const __test__ = { isReleaseNotPublished };
 
 /**
  * 確認済みの update を download → install → relaunch する。

@@ -115,6 +115,24 @@ cmd_app_log() {
   fi
 }
 
+# Round 22 ⓕ — 直近 N 行のアプリログから [ERROR]/[WARN] のみ抜粋して標準出力に。
+# 戻り値: ヒットした行数 (= grep の件数)。0 件なら 0 を返す.
+# autorun / watch 中に「ビルド OK だけど起動後に webview console.error が出た」
+# ケースを Markdown に転記するためのヘルパ。
+cmd_extract_log_errors() {
+  local n="${1:-200}"
+  if [ ! -x "$KAIKEI_BIN" ]; then
+    echo "(KAIKEI_BIN 未配置)"
+    return 0
+  fi
+  local out
+  out=$("$KAIKEI_BIN" --tail-app-log="$n" --errors-only 2>/dev/null || true)
+  if [ -z "$out" ]; then
+    return 0
+  fi
+  echo "$out"
+}
+
 # Round 21 ⓖ — ログをリアルタイムに tail -f. Ctrl+C で抜ける.
 # 引数1 = "scan" (default) | "app" | パス直接 (フルパスを渡してもいい)
 # 引数2 = ERRORS_ONLY=1 で grep [ERROR]/[WARN]/[ERR] をかける
@@ -229,6 +247,27 @@ cmd_watch() {
     local report
     report=$(cmd_smoke_report 2>/dev/null) || report=""
     echo "  ✓ ビルド成功 / smoke-report: $report"
+
+    # Round 22 ⓕ: 起動直後に webview console.error が出てないか念のため確認
+    local err_lines
+    err_lines=$(cmd_extract_log_errors 200 || true)
+    if [ -n "$err_lines" ]; then
+      local err_count
+      err_count=$(echo "$err_lines" | wc -l | awk '{print $1}')
+      echo "  ⚠️  起動後ログに $err_count 件のエラー/警告 — 末尾 5 行を抜粋:"
+      echo "$err_lines" | tail -5 | sed 's/^/      /'
+      # smoke-report に追記 (末尾に「## エラーログ」セクション)
+      if [ -f "$report" ]; then
+        {
+          echo ""
+          echo "## エラーログ ($err_count 件)"
+          echo ""
+          echo '```'
+          echo "$err_lines" | tail -20
+          echo '```'
+        } >> "$report"
+      fi
+    fi
   }
 
   # 初回 1 回ビルド
@@ -458,6 +497,28 @@ cmd_autorun() {
     echo "  ✗ smoke-report 失敗"; return 1
   fi
   echo "  ✓ $report"
+
+  # Round 22 ⓕ: 起動後の webview console.error / log ERR を smoke-report に転記
+  local err_lines
+  err_lines=$(cmd_extract_log_errors 200 || true)
+  if [ -n "$err_lines" ]; then
+    local err_count
+    err_count=$(echo "$err_lines" | wc -l | awk '{print $1}')
+    echo "  ⚠️  $err_count 件の ERROR/WARN — smoke-report に転記"
+    {
+      echo ""
+      echo "## エラーログ ($err_count 件)"
+      echo ""
+      echo '```'
+      echo "$err_lines" | tail -30
+      echo '```'
+    } >> "$report"
+    # FAIL_ON_LOG_ERROR=1 が指定されたら commit + push を中止
+    if [ "${FAIL_ON_LOG_ERROR:-}" = "1" ]; then
+      echo "  ✗ FAIL_ON_LOG_ERROR=1 — エラー検出のため commit を中止 ($report で詳細確認)"
+      return 1
+    fi
+  fi
 
   echo "==> 3. git commit + push"
   git add -A

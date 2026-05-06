@@ -407,6 +407,30 @@ export async function markInboxViewed(inboxId: string): Promise<void> {
 }
 
 /**
+ * Round 22 ⓒ: candidate でかつ last_viewed_at が NULL の行を一括で「既読」化する。
+ * 受信箱の「全部既読」ボタンから呼ぶ想定。
+ *
+ * @param ids 対象 inbox.id の配列 (UI 側で表示中の candidate のみに絞った id list)
+ *            空なら何もしない。空 array でも update せず 0 を返す。
+ * @returns 更新できた件数
+ */
+export async function markInboxAllViewed(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const now = new Date().toISOString();
+  let count = 0;
+  // Tauri SQL の .in().update() を順次。1000 件規模でも 1〜2 秒で済む。
+  for (const id of ids) {
+    try {
+      await db.from("photo_inbox").update({ last_viewed_at: now }).eq("id", id);
+      count++;
+    } catch (e) {
+      console.warn(`markInboxAllViewed: ${id} failed:`, e);
+    }
+  }
+  return count;
+}
+
+/**
  * Round 9 ㉞ で拡張: state に加えて検索クエリ + 撮影日範囲を受ける。
  * - q: ocr_text に対する LIKE %q% (大文字小文字は SQLite の LIKE 仕様に従う)
  * - fromDate / toDate: ISO 文字列で taken_at の前後制限

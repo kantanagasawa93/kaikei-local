@@ -164,6 +164,186 @@ export async function buildJournalsCsv(opts: {
   return "﻿" + rows.join("\r\n") + "\r\n";
 }
 
+/**
+ * Round 22 ⓐ: 月次集計 (1月〜12月) を CSV 文字列に。
+ *
+ * @param year 集計対象の会計年度 (1/1〜12/31)
+ * @returns CSV (UTF-8 BOM + CRLF, ヘッダ: 月,売上,経費,差引)
+ */
+export interface MonthlySummaryRow {
+  month: string; // "01"〜"12"
+  income: number;
+  expense: number;
+  diff: number;
+}
+
+export async function summarizeByMonth(year: number): Promise<MonthlySummaryRow[]> {
+  const start = `${year}-01-01`;
+  const end = `${year}-12-31`;
+  const { data: journalRows } = await db
+    .from("journals")
+    .select("id, date")
+    .gte("date", start)
+    .lte("date", end);
+
+  const dateMap = new Map<string, string>(); // journal_id -> "MM"
+  for (const j of (journalRows as { id: string; date: string }[] | null) ?? []) {
+    const m = j.date.slice(5, 7);
+    if (m) dateMap.set(j.id, m);
+  }
+
+  const buckets: Record<string, MonthlySummaryRow> = {};
+  for (let i = 1; i <= 12; i++) {
+    const m = String(i).padStart(2, "0");
+    buckets[m] = { month: m, income: 0, expense: 0, diff: 0 };
+  }
+
+  if (dateMap.size === 0) return Object.values(buckets);
+
+  const ids = Array.from(dateMap.keys());
+  const { data: lines } = await db
+    .from("journal_lines")
+    .select("journal_id, account_code, debit_amount, credit_amount")
+    .in("journal_id", ids);
+
+  for (const ln of (lines as Array<{
+    journal_id: string;
+    account_code: string;
+    debit_amount: number;
+    credit_amount: number;
+  }> | null) ?? []) {
+    const m = dateMap.get(ln.journal_id);
+    if (!m) continue;
+    if (ln.account_code.startsWith("4")) {
+      buckets[m].income += ln.credit_amount - ln.debit_amount;
+    } else if (ln.account_code.startsWith("5") || ln.account_code.startsWith("6")) {
+      buckets[m].expense += ln.debit_amount - ln.credit_amount;
+    }
+  }
+
+  for (const m of Object.keys(buckets)) {
+    buckets[m].diff = buckets[m].income - buckets[m].expense;
+  }
+
+  return Object.values(buckets);
+}
+
+export function buildMonthlySummaryCsv(year: number, rows: MonthlySummaryRow[]): string {
+  const header = ["月", "売上", "経費", "差引"];
+  const lines: string[] = [header.map(csvEscape).join(",")];
+  let totalInc = 0;
+  let totalExp = 0;
+  for (const r of rows) {
+    lines.push(
+      [
+        `${year}-${r.month}`,
+        String(r.income),
+        String(r.expense),
+        String(r.diff),
+      ]
+        .map(csvEscape)
+        .join(","),
+    );
+    totalInc += r.income;
+    totalExp += r.expense;
+  }
+  // 合計行
+  lines.push(
+    ["合計", String(totalInc), String(totalExp), String(totalInc - totalExp)]
+      .map(csvEscape)
+      .join(","),
+  );
+  return "﻿" + lines.join("\r\n") + "\r\n";
+}
+
+/**
+ * Round 22 ⓔ: 年度サマリ (PDF 生成用) を 1 リクエストで組み立てる.
+ *
+ * @returns FiscalYearSummary 互換の plain object
+ */
+export async function buildFiscalYearSummary(year: number): Promise<{
+  year: number;
+  receiptCount: number;
+  journalCount: number;
+  monthly: { month: string; income: number; expense: number }[];
+  topExpenses: { account_code: string; account_name: string; amount: number }[];
+}> {
+  const monthly = (await summarizeByMonth(year)).map((b) => ({
+    month: b.month,
+    income: b.income,
+    expense: b.expense,
+  }));
+
+  const start = `${year}-01-01`;
+  const end = `${year}-12-31`;
+
+  // 仕訳件数 (= 該当年度の journals 行数)
+  const { data: journalRows } = await db
+    .from("journals")
+    .select("id")
+    .gte("date", start)
+    .lte("date", end);
+  const journalCount = ((journalRows as { id: string }[] | null) ?? []).length;
+
+  // 領収書件数 (年度内 = receipts.date)
+  const { data: receiptRows } = await db
+    .from("receipts")
+    .select("id")
+    .gte("date", start)
+    .lte("date", end);
+  const receiptCount = ((receiptRows as { id: string }[] | null) ?? []).length;
+
+  // 勘定科目別支出 Top — 各 account_code 単位で borrow - credit を積算
+  const journalIds = ((journalRows as { id: string }[] | null) ?? []).map(
+    (j) => j.id,
+  );
+  let topExpenses: {
+    account_code: string;
+    account_name: string;
+    amount: number;
+  }[] = [];
+  if (journalIds.length > 0) {
+    const { data: lines } = await db
+      .from("journal_lines")
+      .select("account_code, account_name, debit_amount, credit_amount")
+      .in("journal_id", journalIds);
+    const tally = new Map<
+      string,
+      { account_code: string; account_name: string; amount: number }
+    >();
+    for (const ln of (lines as Array<{
+      account_code: string;
+      account_name: string;
+      debit_amount: number;
+      credit_amount: number;
+    }> | null) ?? []) {
+      // 経費 (5xx, 6xx) のみ集計
+      if (
+        !ln.account_code.startsWith("5") &&
+        !ln.account_code.startsWith("6")
+      ) {
+        continue;
+      }
+      const amount = ln.debit_amount - ln.credit_amount;
+      if (amount <= 0) continue;
+      const key = ln.account_code;
+      const cur = tally.get(key);
+      if (cur) {
+        cur.amount += amount;
+      } else {
+        tally.set(key, {
+          account_code: ln.account_code,
+          account_name: ln.account_name,
+          amount,
+        });
+      }
+    }
+    topExpenses = Array.from(tally.values()).sort((a, b) => b.amount - a.amount);
+  }
+
+  return { year, receiptCount, journalCount, monthly, topExpenses };
+}
+
 /** ブラウザ側でダウンロードトリガー (Tauri の dialog plugin は使わず簡素に) */
 export function downloadCsv(csv: string, filename: string): void {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });

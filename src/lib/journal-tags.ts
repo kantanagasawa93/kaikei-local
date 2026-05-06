@@ -64,3 +64,49 @@ export async function loadAllJournalTags(): Promise<Record<string, string[]>> {
   }
   return map;
 }
+
+/**
+ * Round 22 ㊛: 仕訳タグの一括操作.
+ *
+ * - mode='add': 既存タグに追加 (重複は自動排除)
+ * - mode='remove': 該当タグだけ取り除く (他のタグは保持)
+ * - mode='replace': タグを完全置換
+ *
+ * 100 件規模を想定して 1 件ずつ UPDATE する (Tauri SQL は IN UPDATE が遅い)。
+ * @returns 実際に更新できた件数
+ */
+export async function bulkUpdateJournalTags(
+  journalIds: string[],
+  tags: string[],
+  mode: "add" | "remove" | "replace" = "add",
+): Promise<number> {
+  if (journalIds.length === 0) return 0;
+  let count = 0;
+  for (const id of journalIds) {
+    try {
+      let next: string[];
+      if (mode === "replace") {
+        next = tags;
+      } else {
+        const { data } = await db
+          .from("journals")
+          .select("tags")
+          .eq("id", id)
+          .single();
+        const current = parseTags((data as { tags: string | null } | null)?.tags ?? null);
+        if (mode === "add") {
+          next = Array.from(new Set([...current, ...tags]));
+        } else {
+          // remove
+          next = current.filter((t) => !tags.includes(t));
+        }
+      }
+      const tagsStr = next.length === 0 ? null : stringifyTags(next);
+      await db.from("journals").update({ tags: tagsStr }).eq("id", id);
+      count++;
+    } catch (e) {
+      console.warn(`bulkUpdateJournalTags: ${id} failed:`, e);
+    }
+  }
+  return count;
+}

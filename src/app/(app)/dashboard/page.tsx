@@ -1,14 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
-import { Receipt, BookOpen, TrendingUp, TrendingDown } from "lucide-react";
+import { Receipt, BookOpen, TrendingUp, TrendingDown, Download } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { Journal, JournalLine } from "@/types";
 import { ReceiptDropZone } from "@/components/receipt-drop-zone";
 import { FadeIn, StaggerContainer, StaggerItem, CountUp } from "@/components/motion";
+import {
+  buildMonthlySummaryCsv,
+  downloadCsv,
+} from "@/lib/journal-export";
+import { toast } from "@/lib/toast";
 
 interface Stats {
   receiptCount: number;
@@ -25,6 +31,7 @@ interface MonthlyBucket {
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [stats, setStats] = useState<Stats>({
     receiptCount: 0,
     journalCount: 0,
@@ -255,15 +262,50 @@ export default function DashboardPage() {
         </StaggerItem>
       </StaggerContainer>
 
-      {/* Round 21 ⓓ: 月次グラフ (今年度の売上 / 経費) */}
+      {/* Round 21 ⓓ: 月次グラフ (今年度の売上 / 経費)
+          Round 22 ⓐ: CSV エクスポートボタン + ⓓ 棒クリックで該当月の仕訳一覧へ */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-lg">
             月次集計 ({new Date().getFullYear()} 年度)
           </CardTitle>
+          {monthly.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const year = new Date().getFullYear();
+                const csv = buildMonthlySummaryCsv(
+                  year,
+                  monthly.map((b) => ({
+                    month: b.month,
+                    income: b.income,
+                    expense: b.expense,
+                    diff: b.income - b.expense,
+                  })),
+                );
+                downloadCsv(
+                  csv,
+                  `kaikei_monthly_summary_FY${year}_${new Date().toISOString().slice(0, 10)}.csv`,
+                );
+                toast.success("月次集計を CSV でダウンロードしました");
+              }}
+              title="月次集計を CSV でダウンロード"
+            >
+              <Download className="h-4 w-4 mr-1" />
+              CSV
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
-          <MonthlyBarChart data={monthly} />
+          <MonthlyBarChart
+            data={monthly}
+            onMonthClick={(month) => {
+              // ⓓ ドリルダウン: /journals?month=YYYY-MM
+              const year = new Date().getFullYear();
+              router.push(`/journals?month=${year}-${month}`);
+            }}
+          />
         </CardContent>
       </Card>
 
@@ -306,8 +348,17 @@ export default function DashboardPage() {
  * - 各月: 売上 (緑) と 経費 (赤) を 2 本並べる
  * - 値は max を 100% にして相対表示
  * - hover で正確な金額をツールチップ表示
+ *
+ * Round 22 ⓓ: onMonthClick が渡されると、棒クリック時にその月の仕訳一覧へ遷移できる。
+ *             各月の柱を <button> 化し、Tab + Enter でも navigate 可能。
  */
-function MonthlyBarChart({ data }: { data: MonthlyBucket[] }) {
+function MonthlyBarChart({
+  data,
+  onMonthClick,
+}: {
+  data: MonthlyBucket[];
+  onMonthClick?: (month: string) => void;
+}) {
   if (data.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-8 text-center">
@@ -327,22 +378,45 @@ function MonthlyBarChart({ data }: { data: MonthlyBucket[] }) {
         {data.map((b) => {
           const incPct = (Math.abs(b.income) / maxVal) * 100;
           const expPct = (Math.abs(b.expense) / maxVal) * 100;
+          const tooltip = `${b.month}月: 売上 ¥${fmt(b.income)} / 経費 ¥${fmt(b.expense)}${
+            onMonthClick ? "\n(クリックで仕訳一覧へ)" : ""
+          }`;
+          const inner = (
+            <div className="flex flex-col-reverse h-full">
+              <div
+                className="bg-green-500 rounded-t-sm"
+                style={{ height: `${incPct}%`, minHeight: incPct > 0 ? "2px" : 0 }}
+              />
+              <div
+                className="bg-red-400 rounded-t-sm mt-0.5"
+                style={{ height: `${expPct}%`, minHeight: expPct > 0 ? "2px" : 0 }}
+              />
+            </div>
+          );
+          if (onMonthClick) {
+            return (
+              <button
+                key={b.month}
+                type="button"
+                onClick={() => onMonthClick(b.month)}
+                className="flex flex-col items-stretch h-full justify-end gap-0.5
+                           rounded-sm hover:bg-muted/40 focus-visible:outline-none
+                           focus-visible:ring-2 focus-visible:ring-primary
+                           transition-colors"
+                title={tooltip}
+                aria-label={`${b.month}月の仕訳一覧を開く`}
+              >
+                {inner}
+              </button>
+            );
+          }
           return (
             <div
               key={b.month}
               className="flex flex-col items-stretch h-full justify-end gap-0.5"
-              title={`${b.month}月: 売上 ¥${fmt(b.income)} / 経費 ¥${fmt(b.expense)}`}
+              title={tooltip}
             >
-              <div className="flex flex-col-reverse h-full">
-                <div
-                  className="bg-green-500 rounded-t-sm"
-                  style={{ height: `${incPct}%`, minHeight: incPct > 0 ? "2px" : 0 }}
-                />
-                <div
-                  className="bg-red-400 rounded-t-sm mt-0.5"
-                  style={{ height: `${expPct}%`, minHeight: expPct > 0 ? "2px" : 0 }}
-                />
-              </div>
+              {inner}
             </div>
           );
         })}
