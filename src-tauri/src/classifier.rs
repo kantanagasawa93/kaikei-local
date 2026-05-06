@@ -112,6 +112,35 @@ const FORCE_RECEIPT_KEYWORDS: &[&str] = &[
     "receipt",
 ];
 
+/// Round 21 ⓐ: 写真ライブラリ由来のメタシグナル (isFavorite 等) を反映する
+/// 拡張版 classify。`is_favorite=true` なら +0.10 のブースト (= 弱い候補が
+/// receipt 確定に滑り込む程度)。base_text が空でもブースト単独では receipt 化しない
+/// (人間の操作は分類根拠としては弱いので、必ず OCR 結果を主軸に保つ)。
+pub fn classify_with_signals(text: &str, is_favorite: bool) -> ClassifyResult {
+    let base = classify(text);
+    if !is_favorite {
+        return base;
+    }
+    // text 空 → そのまま (受信箱には残るが score は 0)
+    if text.trim().is_empty() {
+        return base;
+    }
+    let boost = 0.10_f32;
+    let new_score = (base.score + boost).clamp(0.0, 1.0);
+    // 元 candidate でも、合計が >= 0.4 なら receipt 確定
+    let new_state = if matches!(base.state, ClassifyState::Receipt) {
+        ClassifyState::Receipt
+    } else if new_score >= 0.4 {
+        ClassifyState::Receipt
+    } else {
+        base.state
+    };
+    ClassifyResult {
+        score: new_score,
+        state: new_state,
+    }
+}
+
 pub fn classify(text: &str) -> ClassifyResult {
     if text.trim().is_empty() {
         // 自動破棄せず candidate に残す

@@ -102,6 +102,37 @@ const FORCE_RECEIPT_KEYWORDS = [
   "receipt",
 ];
 
+/**
+ * Round 21 ⓐ: photos library 由来のメタシグナルを反映した分類器。
+ * `is_favorite=true` のときは +0.10 のブーストを足す (= 弱い候補が
+ * receipt 確定に滑り込む程度)。テキストが空ならブーストもしない (人間操作だけで
+ * receipt 化はしない方針)。signals[] にも理由を残す。
+ */
+export function classifyReceiptWithSignals(
+  text: string,
+  meta: { is_favorite?: boolean } = {},
+): ClassifyResult {
+  const base = classifyReceipt(text);
+  if (!meta.is_favorite || !text || text.trim().length === 0) {
+    return base;
+  }
+  const boost = 0.1;
+  const newScore = Math.min(1, Math.max(0, base.score + boost));
+  const newSignals = [
+    ...base.signals,
+    { score: boost, reason: "+ Photos お気に入り (isFavorite)" },
+  ];
+  let newState: ClassifyResult["state"];
+  if (base.state === "receipt") {
+    newState = "receipt";
+  } else if (newScore >= 0.4) {
+    newState = "receipt";
+  } else {
+    newState = base.state;
+  }
+  return { score: newScore, state: newState, signals: newSignals };
+}
+
 export function classifyReceipt(text: string): ClassifyResult {
   if (!text || text.trim().length === 0) {
     // 空テキスト → 自動破棄せず candidate に残す (人間判断)

@@ -166,7 +166,7 @@ if [ -n "${DRY_RUN:-}" ]; then
 
 以下のステップが実行される予定です:
   1. tauri build --bundles app (--target x86_64-apple-darwin も)
-  2. .app 署名 (codesign with $APPLE_SIGNING_IDENTITY)
+  2. .app 署名 (codesign with ${APPLE_SIGNING_IDENTITY:-(未設定)})
   3. DMG 自前作成 (scripts/make-dmg.sh)
   4. notarytool submit + stapler staple
      ($([ -n "${NOTARIZE_SKIP:-}" ] && echo "(NOTARIZE_SKIP=1 — 公証 skip)" || echo "(公証あり)"))
@@ -224,6 +224,128 @@ else
   if [ ${#ASSETS[@]} -eq 0 ]; then
     echo "ERROR: 1 つも DMG が見つかりません"
     exit 1
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────
+# Round 21 ㊙: tauri-plugin-updater 用 latest.json + .app.tar.gz + .sig 生成
+#
+# Tauri 2 updater は GitHub Release の latest.json を fetch し、
+# platforms.<platform>.url + signature を読んで .app.tar.gz をダウンロード→
+# minisign で検証→自己交換→再起動する。
+#
+# やること:
+#   1. tauri build 後の .app を tar.gz 化
+#   2. tauri signer sign で .sig を作成 (TAURI_SIGNING_PRIVATE_KEY が必要)
+#   3. 各アーキの .sig 内容を読んで latest.json に埋め込み
+#   4. gh release upload に同梱
+#
+# UPDATER_SKIP=1 で全部 skip (鍵未設定 / 旧運用維持の時)
+# ─────────────────────────────────────────────────────────────
+if [ -z "${UNSIGNED:-}" ] && [ -z "${UPDATER_SKIP:-}" ]; then
+  if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+    if [ -f "$HOME/.kaikei-updater.env" ]; then
+      echo "==> ~/.kaikei-updater.env を自動 source (Round 21 ㊙)"
+      # shellcheck disable=SC1090
+      source "$HOME/.kaikei-updater.env"
+    fi
+  fi
+
+  if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+    echo "⚠️  TAURI_SIGNING_PRIVATE_KEY 未設定 — updater bundle 生成を skip"
+    echo "   有効化するには: scripts/setup-updater-keys.sh を 1 度実行"
+  else
+    echo ""
+    echo "==> 1.6 updater bundle (.app.tar.gz + .sig) 生成"
+    REPO_OWNER_FOR_URL=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+    UPDATER_DIR=$(mktemp -d)
+    UPDATER_ASSETS=()
+
+    # 各アーキの .app からタールボール作成 → 署名
+    for ARCH in aarch64 x64; do
+      if [ "$ARCH" = "aarch64" ]; then
+        APP_DIR="src-tauri/target/release/bundle/macos"
+        TARGET_TRIPLE="darwin-aarch64"
+      else
+        APP_DIR="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
+        TARGET_TRIPLE="darwin-x86_64"
+      fi
+      APP_PATH="$APP_DIR/KAIKEI LOCAL.app"
+      if [ ! -d "$APP_PATH" ]; then
+        echo "  - skip $ARCH (.app が見つからない: $APP_PATH)"
+        continue
+      fi
+      TAR_NAME="KAIKEI_LOCAL_${ARCH}.app.tar.gz"
+      TAR_PATH="$UPDATER_DIR/$TAR_NAME"
+      echo "  - $ARCH: tar.gz 化 → $TAR_PATH"
+      tar -czf "$TAR_PATH" -C "$APP_DIR" "KAIKEI LOCAL.app"
+
+      # tauri signer sign で .sig を生成 (空 password 前提)
+      echo "  - $ARCH: 署名 (.sig)"
+      npx -p @tauri-apps/cli tauri signer sign \
+        --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+        --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
+        "$TAR_PATH"
+
+      if [ ! -f "$TAR_PATH.sig" ]; then
+        echo "    ⚠️  .sig 生成失敗 — $ARCH の updater bundle は除外"
+        rm -f "$TAR_PATH"
+        continue
+      fi
+
+      SIG_CONTENT=$(cat "$TAR_PATH.sig" | tr -d '\n' | tr -d '\r')
+      DOWNLOAD_URL="https://github.com/$REPO_OWNER_FOR_URL/releases/download/$TAG/$TAR_NAME"
+
+      # latest.json platforms[$TARGET_TRIPLE] = { signature, url }
+      eval "PLATFORM_${ARCH}_SIG=\"$SIG_CONTENT\""
+      eval "PLATFORM_${ARCH}_URL=\"$DOWNLOAD_URL\""
+      eval "PLATFORM_${ARCH}_TRIPLE=\"$TARGET_TRIPLE\""
+
+      UPDATER_ASSETS+=("$TAR_PATH" "$TAR_PATH.sig")
+    done
+
+    if [ ${#UPDATER_ASSETS[@]} -gt 0 ]; then
+      # latest.json 生成
+      LATEST_JSON="$UPDATER_DIR/latest.json"
+      PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      RELEASE_NOTES_ESCAPED=$(awk 'BEGIN{ORS="\\n"} {gsub(/"/, "\\\""); print}' "$NOTES_FILE" | sed 's/\\n$//')
+
+      {
+        echo "{"
+        echo "  \"version\": \"$VERSION\","
+        echo "  \"notes\": \"$RELEASE_NOTES_ESCAPED\","
+        echo "  \"pub_date\": \"$PUB_DATE\","
+        echo "  \"platforms\": {"
+        FIRST=1
+        for ARCH in aarch64 x64; do
+          eval "TRIPLE=\${PLATFORM_${ARCH}_TRIPLE:-}"
+          eval "URL=\${PLATFORM_${ARCH}_URL:-}"
+          eval "SIG=\${PLATFORM_${ARCH}_SIG:-}"
+          if [ -n "$TRIPLE" ] && [ -n "$URL" ] && [ -n "$SIG" ]; then
+            if [ $FIRST -eq 0 ]; then echo "    ,"; fi
+            FIRST=0
+            echo "    \"$TRIPLE\": {"
+            echo "      \"signature\": \"$SIG\","
+            echo "      \"url\": \"$URL\""
+            echo -n "    }"
+          fi
+        done
+        echo ""
+        echo "  }"
+        echo "}"
+      } > "$LATEST_JSON"
+
+      echo ""
+      echo "==> latest.json 内容:"
+      cat "$LATEST_JSON"
+      echo ""
+
+      ASSETS+=("$LATEST_JSON")
+      ASSETS+=("${UPDATER_ASSETS[@]}")
+      echo "==> updater 用 ${#UPDATER_ASSETS[@]} ファイル + latest.json をリリースに同梱"
+    else
+      echo "  ⚠️  updater bundle が 1 つも生成されず — latest.json も生成しない"
+    fi
   fi
 fi
 

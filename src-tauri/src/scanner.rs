@@ -156,9 +156,10 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
         }
 
         // Vision OCR
+        // Round 21 ⓐ: classify_with_signals に is_favorite を渡してスコアブースト
         let (ocr_text, score, state) = match vision::recognize_text(&photo.file_path) {
             Ok(v) => {
-                let cls = classifier::classify(&v.joined);
+                let cls = classifier::classify_with_signals(&v.joined, photo.is_favorite);
                 (Some(v.joined), Some(cls.score), cls.state.as_str().to_string())
             }
             Err(e) => {

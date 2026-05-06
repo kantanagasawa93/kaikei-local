@@ -1037,12 +1037,29 @@ pub fn run() {
             sql: migrations::SCHEMA_V7_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "photo_inbox_last_viewed_at",
+            sql: migrations::SCHEMA_V8_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "journals_tags",
+            sql: migrations::SCHEMA_V9_SQL,
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        // Round 21 ㊘: tauri-plugin-updater (latest.json + 署名検証 + 自己交換)
+        // Frontend は @tauri-apps/plugin-updater から check() / downloadAndInstall()
+        // を呼ぶ。pubkey は tauri.conf.json の plugins.updater.pubkey を参照。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)

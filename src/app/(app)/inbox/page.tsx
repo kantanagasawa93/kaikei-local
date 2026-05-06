@@ -43,6 +43,7 @@ import {
   setInboxState,
   reocrInboxRow,
   updateInboxClaudeResult,
+  markInboxViewed,
   getAuthStatus,
   type AuthStatus,
   type InboxRow,
@@ -946,7 +947,19 @@ export default function InboxPage() {
               isSelected={selected.has(it.id)}
               isFocused={focusIdx === idx}
               onToggleSelected={() => toggleSelected(it.id)}
-              onHoverEnter={() => handleHoverEnter(it)}
+              onHoverEnter={() => {
+                handleHoverEnter(it);
+                // Round 21 ⓑ: hover で last_viewed_at を更新 (未確認バッジを消す)
+                if (!it.last_viewed_at) {
+                  void markInboxViewed(it.id);
+                  // ローカル状態にも即反映 (UI のバッジが即消える)
+                  setItems((prev) =>
+                    prev.map((p) =>
+                      p.id === it.id ? { ...p, last_viewed_at: new Date().toISOString() } : p,
+                    ),
+                  );
+                }
+              }}
               onHoverLeave={handleHoverLeave}
               onMarkReceipt={() => markReceipt(it.id)}
               onMarkNotReceipt={() => markNotReceipt(it.id)}
@@ -1159,6 +1172,16 @@ function InboxCard({
         <Badge variant="outline" className="absolute top-2 left-2 text-[10px] bg-background/80 backdrop-blur-sm">
           {row.state}
         </Badge>
+        {/* Round 21 ⓑ: 未確認バッジ (まだ hover/open していない candidate のみ) */}
+        {row.state === "candidate" && !row.last_viewed_at && (
+          <Badge
+            variant="default"
+            className="absolute bottom-2 right-2 text-[10px] bg-amber-500 text-white"
+            title="まだ確認していない candidate"
+          >
+            未確認
+          </Badge>
+        )}
       </div>
       <CardContent className="p-3 space-y-2 flex-1 flex flex-col">
         <div className="text-xs text-muted-foreground flex items-center gap-1">

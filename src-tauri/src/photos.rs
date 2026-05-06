@@ -96,6 +96,9 @@ pub struct ScannedPhoto {
     pub width: i64,
     pub height: i64,
     pub file_path: String,
+    /// Round 21 ⓐ: PHAsset.isFavorite — お気に入り写真は領収書の可能性が高い
+    /// (ユーザが意図的に保存した) ので classifier のスコアブースト用シグナルに使う。
+    pub is_favorite: bool,
 }
 
 /// 現在の写真ライブラリへのアクセス権限を返す。
@@ -268,6 +271,8 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
             };
             let width: u64 = msg_send![asset, pixelWidth];
             let height: u64 = msg_send![asset, pixelHeight];
+            // Round 21 ⓐ: isFavorite は BOOL (cocoa 0.26 では Rust の bool 型エイリアス)
+            let is_favorite: BOOL = msg_send![asset, isFavorite];
 
             // 衝突する asset_id は LocalIdentifier に "/" を含むので置換
             let safe_name = asset_id.replace('/', "_");
@@ -280,6 +285,7 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                     width: width as i64,
                     height: height as i64,
                     file_path: file_path.to_string_lossy().to_string(),
+                    is_favorite,
                 });
                 continue;
             }
@@ -363,6 +369,7 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
                 width: width as i64,
                 height: height as i64,
                 file_path: file_path.to_string_lossy().to_string(),
+                is_favorite,
             });
         }
 

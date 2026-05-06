@@ -507,6 +507,27 @@ pub const SCHEMA_V6_SQL: &str = r#"
 ALTER TABLE photo_inbox ADD COLUMN auto_dismissed_reason TEXT;
 "#;
 
+/// v8: photo_inbox に last_viewed_at カラムを追加 (Round 21 ⓑ).
+///
+/// 受信箱で「ユーザがまだ open していない candidate」を粒立てして表示するため。
+/// open するたびに NOW() に更新し、UI 側で last_viewed_at IS NULL or < created_at
+/// の行に「未確認」バッジを出す。
+///
+/// SQLite ALTER TABLE ADD COLUMN は idempotent (NULL デフォルト)。テーブル
+/// 再作成不要。
+pub const SCHEMA_V8_SQL: &str = r#"
+ALTER TABLE photo_inbox ADD COLUMN last_viewed_at TEXT;
+"#;
+
+/// v9: journals に tags JSON カラムを追加 (Round 21 ⓒ).
+///
+/// 仕訳に "経費精算済み"・"会議費"・"レビュー対象" などタグを付けて検索や
+/// 集計のキーにする。tag_list は JSON 配列文字列で持つ (例: '["経費精算済"]')。
+/// 検索は SQLite の LIKE %"タグ名"% で十分速い (n=数千程度想定)。
+pub const SCHEMA_V9_SQL: &str = r#"
+ALTER TABLE journals ADD COLUMN tags TEXT;
+"#;
+
 /// v5: v4 二重実行で残るゴミテーブルの掃除。
 ///
 /// 経緯:
