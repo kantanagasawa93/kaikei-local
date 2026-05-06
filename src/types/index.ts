@@ -20,6 +20,8 @@ export interface Journal {
   receipt_id: string | null;
   created_at: string;
   lines?: JournalLine[];
+  /** Round 21 ⓒ: 仕訳に付けるタグ。JSON 配列文字列として永続化 (例: '["経費精算済"]')。 */
+  tags?: string | null;
 }
 
 export interface JournalLine {

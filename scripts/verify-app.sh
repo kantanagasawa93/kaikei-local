@@ -13,6 +13,8 @@
 #   tail-log [<n>]           scan.log の末尾 n 行 (既定 50)
 #   app-log [<n>] [--errors-only]
 #                            アプリ本体ログ (webview console 含む) の末尾
+#   tail-stream [scan|app] [--errors-only]
+#                            ログを tail -F で real-time 監視 (Ctrl+C で停止)
 #   activate                 KAIKEI LOCAL を最前面に持ってくる
 #   navigate <route>         起動中アプリを <route> に遷移させる (例: /inbox)
 #                            (CLI から control file を書く → Frontend が poll)
@@ -49,7 +51,7 @@ KAIKEI_BIN="${KAIKEI_BIN:-/Applications/KAIKEI LOCAL.app/Contents/MacOS/kaikei}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '3,25p' "$0" | sed 's/^# \?//'
+  sed -n '3,42p' "$0" | sed 's/^# \?//'
 }
 
 require_bin() {
@@ -110,6 +112,40 @@ cmd_app_log() {
     "$KAIKEI_BIN" --tail-app-log="$n" --errors-only
   else
     "$KAIKEI_BIN" --tail-app-log="$n"
+  fi
+}
+
+# Round 21 ⓖ — ログをリアルタイムに tail -f. Ctrl+C で抜ける.
+# 引数1 = "scan" (default) | "app" | パス直接 (フルパスを渡してもいい)
+# 引数2 = ERRORS_ONLY=1 で grep [ERROR]/[WARN]/[ERR] をかける
+cmd_tail_stream() {
+  local kind="${1:-scan}"
+  local path
+  case "$kind" in
+    scan|scanner)
+      path="$HOME/Library/Logs/KAIKEI LOCAL/scan.log"
+      ;;
+    app|webview|kaikei)
+      path="$HOME/Library/Logs/dev.kaikei.app/kaikei.log"
+      ;;
+    /*)
+      path="$kind"
+      ;;
+    *)
+      echo "ERROR: tail-stream の対象は scan / app / フルパス" >&2
+      return 2
+      ;;
+  esac
+  if [ ! -e "$path" ]; then
+    echo "==> $path がまだ存在しません — 作成を待ちます (Ctrl+C で中止)"
+    while [ ! -e "$path" ]; do sleep 1; done
+  fi
+  echo "==> tail -F $path (Ctrl+C で停止)"
+  if [ "${ERRORS_ONLY:-}" = "1" ] || [ "${2:-}" = "--errors-only" ]; then
+    # GNU/BSD どちらでも動く grep --line-buffered + tail -F
+    tail -F "$path" 2>/dev/null | grep --line-buffered -E "\[ERROR\]|\[WARN\]|\[ERR\]"
+  else
+    tail -F "$path" 2>/dev/null
   fi
 }
 
@@ -1040,6 +1076,7 @@ main() {
     db-dump|db)                cmd_db_dump "$@" ;;
     tail-log|log)              cmd_tail_log "$@" ;;
     app-log|errors)            cmd_app_log "$@" ;;
+    tail-stream|stream|follow) cmd_tail_stream "$@" ;;
     activate)                  cmd_activate ;;
     navigate|nav)              cmd_navigate "$@" ;;
     simulate-action|action)    cmd_simulate_action "$@" ;;

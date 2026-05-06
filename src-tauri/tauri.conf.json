@@ -47,5 +47,13 @@
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist"
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/kantanagasawa93/kaikei-local/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFBODhCQzhGQjdEOEM4ODAKUldTQXlOaTNqN3lJcWk0ZDZZd2o4RFJXbEh3VkRVL1lQdC84eXZtdWlOcFhxUDM5eldPbFY5OWIK"
+    }
   }
 }

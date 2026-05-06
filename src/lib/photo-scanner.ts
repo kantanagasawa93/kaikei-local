@@ -16,7 +16,7 @@
  */
 
 import { db } from "@/lib/localDb";
-import { classifyReceipt, shouldAutoDismiss, explainAutoDismiss } from "@/lib/receipt-classifier";
+import { classifyReceipt, classifyReceiptWithSignals, shouldAutoDismiss, explainAutoDismiss } from "@/lib/receipt-classifier";
 
 export interface ScannedPhoto {
   asset_id: string;
@@ -24,6 +24,8 @@ export interface ScannedPhoto {
   width: number;
   height: number;
   file_path: string;
+  /** Round 21 ⓐ: PHAsset.isFavorite. Frontend は signals[] にも入れてスコアブースト。 */
+  is_favorite?: boolean;
 }
 
 export type AuthStatus =
@@ -237,7 +239,10 @@ export async function scanNow(
             .join(", ");
           console.info(`[vision] customWords hits for ${photo.asset_id}: ${summary}`);
         }
-        const cls = classifyReceipt(ocrText);
+        // Round 21 ⓐ: PHAsset.isFavorite を classifier に渡してブースト
+        const cls = classifyReceiptWithSignals(ocrText, {
+          is_favorite: photo.is_favorite === true,
+        });
         score = cls.score;
         initialState = cls.state;
         // ㉰ signals[] を JSON 化 (UI tooltip で展開する)
@@ -386,6 +391,19 @@ export interface InboxRow {
   auto_dismissed_reason: string | null;
   // v7 追加カラム (Round 13 ㉰: score の内訳 signals[] — JSON 文字列)
   score_signals_json: string | null;
+  // v8 追加カラム (Round 21 ⓑ: ユーザが受信箱でカードを開いた最終時刻)
+  last_viewed_at?: string | null;
+}
+
+/**
+ * Round 21 ⓑ: 受信箱でカードを開いた時刻を記録する。
+ * UI が <ReceiptCard> の onClick (展開) で呼ぶと、次回以降「未確認」バッジが消える。
+ */
+export async function markInboxViewed(inboxId: string): Promise<void> {
+  await db
+    .from("photo_inbox")
+    .update({ last_viewed_at: new Date().toISOString() })
+    .eq("id", inboxId);
 }
 
 /**

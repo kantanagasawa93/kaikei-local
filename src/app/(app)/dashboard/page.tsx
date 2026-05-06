@@ -17,6 +17,13 @@ interface Stats {
   totalExpense: number;
 }
 
+/** Round 21 ⓓ: 月次集計 (1月〜12月) */
+interface MonthlyBucket {
+  month: string; // "01" 〜 "12"
+  income: number;
+  expense: number;
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats>({
     receiptCount: 0,
@@ -25,11 +32,59 @@ export default function DashboardPage() {
     totalExpense: 0,
   });
   const [recentJournals, setRecentJournals] = useState<Journal[]>([]);
+  // Round 21 ⓓ: 月次グラフ用バケット
+  const [monthly, setMonthly] = useState<MonthlyBucket[]>([]);
 
   useEffect(() => {
     loadStats();
     loadRecentJournals();
+    loadMonthly();
   }, []);
+
+  async function loadMonthly() {
+    const year = new Date().getFullYear();
+    const start = `${year}-01-01`;
+    const end = `${year}-12-31`;
+    const { data: journalRows } = await supabase
+      .from("journals")
+      .select("id, date")
+      .gte("date", start)
+      .lte("date", end);
+    const dateMap = new Map<string, string>(); // journal_id -> "MM"
+    for (const j of (journalRows as { id: string; date: string }[] | null) ?? []) {
+      const m = j.date.slice(5, 7); // "MM"
+      if (m) dateMap.set(j.id, m);
+    }
+    if (dateMap.size === 0) {
+      setMonthly([]);
+      return;
+    }
+    const ids = Array.from(dateMap.keys());
+    const { data: lines } = await supabase
+      .from("journal_lines")
+      .select("journal_id, account_code, debit_amount, credit_amount")
+      .in("journal_id", ids);
+    const buckets: Record<string, MonthlyBucket> = {};
+    for (let i = 1; i <= 12; i++) {
+      const m = String(i).padStart(2, "0");
+      buckets[m] = { month: m, income: 0, expense: 0 };
+    }
+    for (const ln of (lines as Array<{
+      journal_id: string;
+      account_code: string;
+      debit_amount: number;
+      credit_amount: number;
+    }> | null) ?? []) {
+      const m = dateMap.get(ln.journal_id);
+      if (!m) continue;
+      if (ln.account_code.startsWith("4")) {
+        buckets[m].income += ln.credit_amount - ln.debit_amount;
+      } else if (ln.account_code.startsWith("5") || ln.account_code.startsWith("6")) {
+        buckets[m].expense += ln.debit_amount - ln.credit_amount;
+      }
+    }
+    setMonthly(Object.values(buckets));
+  }
 
   async function loadStats() {
     const year = new Date().getFullYear();
@@ -200,6 +255,18 @@ export default function DashboardPage() {
         </StaggerItem>
       </StaggerContainer>
 
+      {/* Round 21 ⓓ: 月次グラフ (今年度の売上 / 経費) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">
+            月次集計 ({new Date().getFullYear()} 年度)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <MonthlyBarChart data={monthly} />
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">最近の仕訳</CardTitle>
@@ -229,6 +296,72 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * Round 21 ⓓ: 月次集計の簡易棒グラフ.
+ * Recharts 等の依存を増やしたくないので、純粋な div + Tailwind で描画する。
+ * - 各月: 売上 (緑) と 経費 (赤) を 2 本並べる
+ * - 値は max を 100% にして相対表示
+ * - hover で正確な金額をツールチップ表示
+ */
+function MonthlyBarChart({ data }: { data: MonthlyBucket[] }) {
+  if (data.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-8 text-center">
+        今年度の仕訳データがまだありません
+      </p>
+    );
+  }
+  const maxVal = Math.max(
+    1,
+    ...data.flatMap((b) => [Math.abs(b.income), Math.abs(b.expense)]),
+  );
+  const fmt = (n: number) => new Intl.NumberFormat("ja-JP").format(Math.round(n));
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-12 gap-1 items-end h-40">
+        {data.map((b) => {
+          const incPct = (Math.abs(b.income) / maxVal) * 100;
+          const expPct = (Math.abs(b.expense) / maxVal) * 100;
+          return (
+            <div
+              key={b.month}
+              className="flex flex-col items-stretch h-full justify-end gap-0.5"
+              title={`${b.month}月: 売上 ¥${fmt(b.income)} / 経費 ¥${fmt(b.expense)}`}
+            >
+              <div className="flex flex-col-reverse h-full">
+                <div
+                  className="bg-green-500 rounded-t-sm"
+                  style={{ height: `${incPct}%`, minHeight: incPct > 0 ? "2px" : 0 }}
+                />
+                <div
+                  className="bg-red-400 rounded-t-sm mt-0.5"
+                  style={{ height: `${expPct}%`, minHeight: expPct > 0 ? "2px" : 0 }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-12 gap-1 text-[10px] text-center text-muted-foreground">
+        {data.map((b) => (
+          <div key={b.month}>{Number(b.month)}月</div>
+        ))}
+      </div>
+      <div className="flex gap-4 text-xs text-muted-foreground pt-2">
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block w-3 h-3 bg-green-500 rounded-sm" />
+          売上
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block w-3 h-3 bg-red-400 rounded-sm" />
+          経費
+        </span>
+      </div>
     </div>
   );
 }

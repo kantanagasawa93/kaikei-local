@@ -34,6 +34,9 @@
     "dialog:allow-save",
     "shell:default",
     "shell:allow-open",
-    "log:default"
+    "log:default",
+    "updater:default",
+    "process:default",
+    "process:allow-restart"
   ]
 }

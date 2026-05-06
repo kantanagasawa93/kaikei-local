@@ -206,6 +206,71 @@ async function logAiOcr(opts: {
 }
 
 /**
+ * Round 21 ⓕ: vendor_name から取引先を自動学習する。
+ *
+ * 既に同名 (前後空白を除いた一致) の partner があればその ID を返す。
+ * 無ければ新規 INSERT して [auto-learned] notes を付ける。
+ * notes に印を残すことで、取引先一覧画面で「どれが OCR 学習で勝手に増えたか」
+ * をユーザが目視で識別 / 整理できる。
+ *
+ * 渡された vendor が空・短すぎ・無効文字列の時は null を返す (= partner_id 未設定)。
+ *
+ * @param defaultAccountCode receipts.account_code と同じ値を使うと、次回以降の
+ *   仕訳でこの partner を選んだ時にデフォルト科目を引きやすい。
+ */
+export async function learnVendorAsPartner(
+  vendorName: string | null,
+  defaultAccountCode: string | null,
+): Promise<string | null> {
+  if (!vendorName) return null;
+  const name = vendorName.trim();
+  if (name.length < 2 || name.length > 80) return null;
+  // 「不明」「nil」「null」「-」みたいなノイズを除外
+  if (/^(不明|nil|null|none|n\/a|-+|\?+)$/i.test(name)) return null;
+
+  // 既存検索 (完全一致)
+  try {
+    const { data } = await db
+      .from("partners")
+      .select("id")
+      .eq("name", name)
+      .single();
+    const row = data as { id: string } | null;
+    if (row?.id) return row.id;
+  } catch {
+    // single() は 0 件で error を投げ得る。下の insert に進む。
+  }
+
+  // 新規 INSERT
+  const id = crypto.randomUUID();
+  try {
+    await db.from("partners").insert({
+      id,
+      name,
+      is_customer: 0,
+      is_vendor: 1,
+      default_account_code: defaultAccountCode,
+      notes: "[auto-learned] OCR で初出 — レビューしてください",
+    });
+    return id;
+  } catch (e) {
+    // 競合 (UNIQUE 違反) で失敗した場合は再 SELECT で id を取り直す
+    console.warn("learnVendorAsPartner: insert failed:", e);
+    try {
+      const { data } = await db
+        .from("partners")
+        .select("id")
+        .eq("name", name)
+        .single();
+      const row = data as { id: string } | null;
+      return row?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
  * 1 件の photo_inbox 行を仕訳化する。
  * @returns 作成された receipt_id か null (失敗時)
  *
@@ -251,6 +316,15 @@ export async function autoJournalizeOne(
   const accountCode = ocr.suggested_account_code || suggested?.code || "699";
   const accountName = ocr.suggested_account_name || suggested?.name || "雑費";
 
+  // Round 21 ⓕ: vendor_name が partners に無ければ自動学習として新規登録。
+  // 「[auto-learned] ...」の notes を付けて、ユーザが取引先一覧で後から見直せる。
+  // partner_id を receipts/journal_lines に紐付けるので、次回以降は同じ vendor が
+  // 再度 OCR された時に履歴を辿れる。
+  const partnerId = await learnVendorAsPartner(
+    ocr.vendor_name ?? null,
+    accountCode,
+  );
+
   await db.from("receipts").insert({
     id: receiptId,
     image_url: `file://${inboxRow.file_path}`,
@@ -262,6 +336,7 @@ export async function autoJournalizeOne(
     account_name: accountName,
     status: "confirmed",
     doc_type: "receipt",
+    partner_id: partnerId,
   });
 
   // journals 行 + journal_lines (借方: 経費 / 貸方: 現金)
@@ -291,6 +366,7 @@ export async function autoJournalizeOne(
       credit_amount: 0,
       tax_code: "P10",
       tax_amount: taxAmount,
+      partner_id: partnerId,
       memo: g.memo ?? null,
     });
   }

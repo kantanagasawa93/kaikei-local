@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw, Download } from "lucide-react";
+import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw, Download, Tag, X as XIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   reverseJournalToInbox,
@@ -22,6 +22,11 @@ import {
   getReverseUndoCount,
 } from "@/lib/auto-journal";
 import { buildJournalsCsv, downloadCsv } from "@/lib/journal-export";
+import {
+  parseTags,
+  setJournalTags,
+  SUGGESTED_TAGS,
+} from "@/lib/journal-tags";
 import { toast } from "@/lib/toast";
 import type { Journal, JournalLine } from "@/types";
 
@@ -36,9 +41,12 @@ const PAGE_SIZE = 50;
 export default function JournalsPage() {
   const [journals, setJournals] = useState<JournalWithLines[]>([]);
   const [monthFilter, setMonthFilter] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
   const [page, setPage] = useState(0);
   // ㊍ Round 6: 直近の差し戻しを取り消せる件数 (0 なら button 非表示)
   const [undoCount, setUndoCount] = useState(0);
+  // Round 21 ⓒ: タグ編集モーダル対象の仕訳 ID
+  const [tagEditFor, setTagEditFor] = useState<string | null>(null);
 
   useEffect(() => {
     loadJournals();
@@ -54,26 +62,41 @@ export default function JournalsPage() {
   }
 
   // ㊒ Round 7: 仕訳 CSV エクスポート (画像 URL コラム + 受信箱由来フラグ込み)
-  async function handleExportCsv() {
+  // Round 21 ⓔ: yearOverride を受けると会計年度 (1/1〜12/31) で出力する
+  async function handleExportCsv(yearOverride?: number) {
     try {
-      // monthFilter ("YYYY-MM") があれば、その月の 1 日〜末日でフィルタ
       let from: string | null = null;
       let to: string | null = null;
-      if (monthFilter) {
+      let suffix = "";
+      if (yearOverride) {
+        from = `${yearOverride}-01-01`;
+        to = `${yearOverride}-12-31`;
+        suffix = `_FY${yearOverride}`;
+      } else if (monthFilter) {
         from = `${monthFilter}-01`;
-        // 月末は次月 1 日 - 1 日。シンプルに各月 31 日として lte で十分 (実 SQL は文字列比較)
         const [y, m] = monthFilter.split("-").map(Number);
-        const last = new Date(y, m, 0).getDate(); // m は 1-12 → 月末
+        const last = new Date(y, m, 0).getDate();
         to = `${monthFilter}-${String(last).padStart(2, "0")}`;
+        suffix = `_${monthFilter}`;
       }
       const csv = await buildJournalsCsv({ fromDate: from, toDate: to });
-      const fname = `kaikei_journals${monthFilter ? `_${monthFilter}` : ""}_${new Date().toISOString().slice(0, 10)}.csv`;
+      const fname = `kaikei_journals${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
       downloadCsv(csv, fname);
       toast.success(`CSV を書き出しました (${fname})`);
     } catch (e) {
       toast.error(`CSV 書き出しに失敗: ${(e as Error).message}`);
     }
   }
+
+  // Round 21 ⓔ: 利用可能な会計年度の集合 (journals.date の先頭 4 文字)
+  const availableYears = (() => {
+    const set = new Set<number>();
+    for (const j of journals) {
+      const y = parseInt(j.date.slice(0, 4), 10);
+      if (Number.isFinite(y)) set.add(y);
+    }
+    return Array.from(set).sort((a, b) => b - a);
+  })();
 
   // ㊍ undo: app_settings に積んでおいた直近の差し戻しスナップショットから
   // 仕訳・明細・領収書・受信箱状態をまとめて復元する。
@@ -125,9 +148,23 @@ export default function JournalsPage() {
     }
   }
 
-  const filteredJournals = journals.filter((j) =>
-    !monthFilter || j.date.startsWith(monthFilter)
-  );
+  const filteredJournals = journals.filter((j) => {
+    if (monthFilter && !j.date.startsWith(monthFilter)) return false;
+    if (tagFilter) {
+      const ts = parseTags(j.tags ?? null);
+      if (!ts.includes(tagFilter)) return false;
+    }
+    return true;
+  });
+
+  // 既存仕訳に出てきた全タグの集合 (フィルタの select 候補に使う)
+  const allTags = (() => {
+    const set = new Set<string>();
+    for (const j of journals) {
+      for (const t of parseTags(j.tags ?? null)) set.add(t);
+    }
+    return Array.from(set).sort();
+  })();
   const totalPages = Math.ceil(filteredJournals.length / PAGE_SIZE);
   const pagedJournals = filteredJournals.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
@@ -137,8 +174,33 @@ export default function JournalsPage() {
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat("ja-JP").format(amount);
 
+  // Round 21 ⓒ: タグ編集モーダル
+  const tagEditTarget = tagEditFor
+    ? journals.find((j) => j.id === tagEditFor)
+    : null;
+
   return (
     <div className="space-y-6">
+      {tagEditTarget && (
+        <TagEditModal
+          journalId={tagEditTarget.id}
+          initial={parseTags(tagEditTarget.tags ?? null)}
+          description={tagEditTarget.description}
+          onSave={async (newTags) => {
+            await setJournalTags(tagEditTarget.id, newTags);
+            setJournals((prev) =>
+              prev.map((j) =>
+                j.id === tagEditTarget.id
+                  ? { ...j, tags: newTags.length === 0 ? null : JSON.stringify(newTags) }
+                  : j,
+              ),
+            );
+            setTagEditFor(null);
+            toast.success("タグを保存しました");
+          }}
+          onClose={() => setTagEditFor(null)}
+        />
+      )}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">仕訳帳</h1>
         <div className="flex gap-2">
@@ -151,10 +213,34 @@ export default function JournalsPage() {
             </Button>
           )}
           {/* ㊒ CSV エクスポート — 月フィルタ適用、画像 URL + 受信箱フラグ込み */}
-          <Button variant="outline" onClick={handleExportCsv} title="仕訳帳を CSV でダウンロード (画像 URL + 受信箱由来フラグ込み)">
+          <Button variant="outline" onClick={() => handleExportCsv()} title="仕訳帳を CSV でダウンロード (画像 URL + 受信箱由来フラグ込み)">
             <Download className="h-4 w-4 mr-1" />
             CSV
           </Button>
+          {/* Round 21 ⓔ: 会計年度で CSV 出力 (e-Tax 前段で 1 年分まとめて) */}
+          {availableYears.length > 0 && (
+            <select
+              onChange={(e) => {
+                const y = parseInt(e.target.value, 10);
+                if (Number.isFinite(y)) {
+                  void handleExportCsv(y);
+                  e.target.value = "";
+                }
+              }}
+              defaultValue=""
+              className="border rounded px-2 py-1 text-sm h-9"
+              title="指定の会計年度 (1/1〜12/31) を CSV 出力"
+            >
+              <option value="" disabled>
+                年度別 CSV
+              </option>
+              {availableYears.map((y) => (
+                <option key={y} value={y}>
+                  FY {y}
+                </option>
+              ))}
+            </select>
+          )}
           <Link href="/journals/new">
             <Button>
               <Plus className="h-4 w-4 mr-1" />
@@ -164,13 +250,28 @@ export default function JournalsPage() {
         </div>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
         <Input
           type="month"
           value={monthFilter}
           onChange={(e) => setMonthFilter(e.target.value)}
           className="w-44"
         />
+        {/* Round 21 ⓒ: タグでの絞り込み */}
+        {allTags.length > 0 && (
+          <select
+            value={tagFilter}
+            onChange={(e) => setTagFilter(e.target.value)}
+            className="border rounded px-2 py-1 text-sm h-9"
+          >
+            <option value="">すべてのタグ</option>
+            {allTags.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {pagedJournals.length === 0 ? (
@@ -240,6 +341,26 @@ export default function JournalsPage() {
                                   </Badge>
                                 </Link>
                               )}
+                              {/* Round 21 ⓒ: 仕訳タグ chip 表示 + 編集ボタン */}
+                              {parseTags(journal.tags ?? null).map((t) => (
+                                <Badge
+                                  key={t}
+                                  variant="outline"
+                                  className="text-[10px] gap-1 bg-blue-50 border-blue-200 text-blue-700"
+                                >
+                                  <Tag className="h-3 w-3" />
+                                  {t}
+                                </Badge>
+                              ))}
+                              <button
+                                type="button"
+                                onClick={() => setTagEditFor(journal.id)}
+                                className="text-[10px] text-muted-foreground hover:text-foreground inline-flex items-center gap-0.5"
+                                title="タグを編集"
+                              >
+                                <Tag className="h-3 w-3" />
+                                {parseTags(journal.tags ?? null).length === 0 ? "+ タグ" : "編集"}
+                              </button>
                             </div>
                           </TableCell>
                         </>
@@ -335,6 +456,124 @@ export default function JournalsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Round 21 ⓒ: 仕訳タグ編集モーダル.
+ * - chip 形式で表示 / 個別 ✕ で削除
+ * - フリー入力で新規追加
+ * - SUGGESTED_TAGS から候補をクリック追加
+ */
+function TagEditModal({
+  journalId: _journalId,
+  initial,
+  description,
+  onSave,
+  onClose,
+}: {
+  journalId: string;
+  initial: string[];
+  description: string;
+  onSave: (tags: string[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [tags, setTags] = useState<string[]>(initial);
+  const [input, setInput] = useState("");
+
+  const addTag = (t: string) => {
+    const trimmed = t.trim();
+    if (!trimmed || trimmed.length > 30) return;
+    if (tags.includes(trimmed)) return;
+    setTags([...tags, trimmed]);
+    setInput("");
+  };
+
+  const removeTag = (t: string) => {
+    setTags(tags.filter((x) => x !== t));
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[90] bg-black/40 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background rounded-lg shadow-xl max-w-md w-full p-6 space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div>
+          <h2 className="text-lg font-bold">タグを編集</h2>
+          <p className="text-xs text-muted-foreground truncate">{description}</p>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {tags.length === 0 ? (
+            <p className="text-xs text-muted-foreground">タグはまだありません</p>
+          ) : (
+            tags.map((t) => (
+              <Badge
+                key={t}
+                variant="outline"
+                className="gap-1 bg-blue-50 border-blue-200 text-blue-700"
+              >
+                <Tag className="h-3 w-3" />
+                {t}
+                <button
+                  type="button"
+                  onClick={() => removeTag(t)}
+                  className="ml-1 hover:text-red-600"
+                  aria-label={`${t} を削除`}
+                >
+                  <XIcon className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addTag(input);
+              }
+            }}
+            placeholder="新しいタグを入力 (Enter で追加)"
+            className="flex-1 text-sm"
+          />
+          <Button size="sm" variant="outline" onClick={() => addTag(input)}>
+            追加
+          </Button>
+        </div>
+
+        <div>
+          <p className="text-xs text-muted-foreground mb-1.5">候補:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {SUGGESTED_TAGS.filter((s) => !tags.includes(s)).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => addTag(s)}
+                className="text-[11px] px-2 py-0.5 border rounded hover:bg-muted"
+              >
+                + {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" onClick={onClose}>
+            キャンセル
+          </Button>
+          <Button onClick={() => void onSave(tags)}>保存</Button>
+        </div>
+      </div>
     </div>
   );
 }
