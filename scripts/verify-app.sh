@@ -428,6 +428,34 @@ cmd_autorun() {
   git commit -m "$msg" || true
   git push origin "$current_branch"
   echo "  ✓ pushed to origin/$current_branch"
+
+  # ㊔ Round 20: REGEN_DEMO=1 なら autorun 後に demo 動画も再生成
+  # UI が変わったら demo 動画も古くなるので、ラウンド完了時に
+  # docs/assets/ + public/ の MP4 を最新版に差し替えるオプション。
+  # ffmpeg + KAIKEI LOCAL.app 起動が必要。
+  if [ -n "${REGEN_DEMO:-}" ] && command -v ffmpeg >/dev/null 2>&1; then
+    echo ""
+    echo "==> 4. demo 動画再生成 (REGEN_DEMO=1)"
+    local demo_out
+    demo_out=$(cmd_demo /tmp/kaikei-autorun-demo.mp4 2>&1 | tail -1)
+    if [ -f "/tmp/kaikei-autorun-demo.mp4" ]; then
+      cp /tmp/kaikei-autorun-demo.mp4 docs/assets/demo-v0.3.0.mp4
+      cp /tmp/kaikei-autorun-demo.mp4 public/demo.mp4
+      echo "  ✓ docs/assets/ + public/ を更新 ($(du -h /tmp/kaikei-autorun-demo.mp4 | awk '{print $1}'))"
+      git add docs/assets/demo-v0.3.0.mp4 public/demo.mp4
+      if git diff --cached --quiet; then
+        echo "  (動画に変更なし — 追加 commit 不要)"
+      else
+        git commit -m "chore: autorun で demo 動画再生成
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        git push origin "$current_branch"
+        echo "  ✓ demo 動画 commit + push"
+      fi
+    else
+      echo "  ✗ demo 生成失敗"
+    fi
+  fi
 }
 
 # Round 16 ㊂ — doctor --fix: 自動で直せる項目を試みる。

@@ -75,37 +75,64 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 20) 候補 — ユーザは「全部やって」希望
+## 次ラウンド (Round 21) 候補 — ユーザは「全部やって」希望 (10 個)
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊒ → ㊓ → ㊔ → ㊕ → ㊖。
+推し優先順は ㊗ → ㊘ → ㊙ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
+(ユーザ指示: Round 21 から候補数を 5 → 10 に増やす)
 
-### ㊒ v0.3.0 リリース実発火 ★★★★★
-- Round 19 までで release.sh は --help / rc 自動 prerelease / 8 重防御まで完備。
-- 手元で 1 回: `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★
+- 手元で `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
+- release.sh の 9 重防御 + verify-release/rollback で安全に発火
 
-### ㊓ アップデートバナーから「いま更新する」で auto-restart ★★★★
-- 目的: Round 19 ㊏ のバナーは「ダウンロード」リンクのみ。
-  Tauri の updater プラグインを使って「クリック → DL → 再起動」一気通貫
-- 対象: src-tauri に tauri-plugin-updater + components/update-banner.tsx
+### ㊘ tauri-plugin-updater を本格導入 ★★★★
+- Round 20 ㊓ で setup-updater-keys.sh は揃った。次は plugin を Cargo に追加し、
+  Frontend から `check()` → `downloadAndInstall()` で「ダウンロード→再起動」一気通貫
+- 対象: src-tauri/Cargo.toml + lib.rs + tauri.conf.json + update-banner.tsx
+- commit サイズ: 大 (~250 行)
+
+### ㊙ release.sh で latest.json + .sig を GitHub Release に同梱 ★★★★
+- ㊘ の updater plugin は latest.json を更新サーバから取りに行く。
+  release.sh が DMG と一緒に latest.json を生成して upload する
+- 対象: scripts/release.sh
+- commit サイズ: 中 (~150 行)
+
+### ⓐ Mac 写真ライブラリの「お気に入り (favorite)」を優先取り込み ★★★
+- 目的: PhotoKit の PHAsset.isFavorite が true の写真は、おそらくユーザが
+  意図的に保存したもの → 領収書スコアを上げる強いシグナル
+- 対象: src-tauri/src/photos.rs + classifier.rs
+- commit サイズ: 中 (~150 行)
+
+### ⓑ 受信箱に「未確認」ハイライト ★★★
+- 目的: 受信箱で「まだ open していない candidate」を粒立てして表示。
+  既読/未読の概念を入れる (last_viewed_at カラム追加)
+- 対象: photo_inbox に migration v8 で last_viewed_at + UI バッジ
+- commit サイズ: 中 (~150 行)
+
+### ⓒ 仕訳のタグ機能 ★★★
+- 目的: 「経費精算済み」「会議費」「レビュー対象」などのタグを仕訳に付ける
+- 対象: journals に tags JSON カラム + 仕訳一覧/編集 UI
 - commit サイズ: 中〜大 (~200 行)
 
-### ㊔ デモ動画の自動再生成 PDCA フック ★★★
-- 目的: UI が変わったらデモ動画も古くなる。Round の最後に
-  「demo 動画も再生成 → docs/assets + public/ にコピー」を自動化
-- 対象: scripts/verify-app.sh autorun の後段に build-demo step
-- commit サイズ: 中 (~100 行)
+### ⓓ ダッシュボードに月次グラフ追加 ★★★
+- 目的: 仕訳から月別の売上/経費を集計して表示
+- 対象: dashboard/page.tsx に簡易棒グラフ
+- commit サイズ: 中 (~150 行)
 
-### ㊕ onboarding の動画ステップにフォールバック画像 ★★
-- 目的: 動画読み込み失敗時に静止画 (poster) で進行できるよう
-  onerror で img へ差し替え
-- 対象: src/components/onboarding.tsx
-- commit サイズ: 小 (~60 行)
+### ⓔ 仕訳の年度別エクスポート ★★
+- 目的: e-Tax の前段で会計年度 (1/1〜12/31) ごとに分けた CSV 出力
+- 対象: journals/page.tsx の CSV ボタンに年度選択
+- commit サイズ: 小〜中 (~100 行)
 
-### ㊖ verify-release.sh で公開後の SNS 共有テキスト生成 ★★
-- 目的: リリース後にユーザが SNS でシェアする時のテンプレを自動生成
-  (Twitter/X / note 用に文字数別)
-- 対象: scripts/release-followup.sh
+### ⓕ 取引先 (partners) の OCR 自動学習 ★★★
+- 目的: AI OCR で抽出された vendor_name が partners テーブルに無ければ
+  「新規取引先として登録」を提案
+- 対象: src/lib/auto-journal.ts
+- commit サイズ: 中 (~120 行)
+
+### ⓖ verify-app.sh の log streaming サブコマンド ★★
+- 目的: アプリ実行中のログを `tail -f` 風にリアルタイム監視
+- 対象: scripts/verify-app.sh
 - commit サイズ: 小 (~60 行)
 
 ## 学習済みアンチパターン (再発防止メモ)
