@@ -189,8 +189,8 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
 
         // Round 23: 厳格フィルタ (OCR 空 or score=0) → photo_inbox に INSERT しない。
         // 既に inbox/ にコピーした jpg ファイルは削除して帯域・ストレージも回収。
-        // is_favorite=true は救済 (ユーザが意図的に保存した可能性)。
-        if strict_filter && !photo.is_favorite {
+        // is_favorite による免除はしない (♥は家族写真等にも付くため強シグナルにならない)。
+        if strict_filter {
             let ocr_empty = ocr_text
                 .as_ref()
                 .map(|s| s.trim().is_empty())
