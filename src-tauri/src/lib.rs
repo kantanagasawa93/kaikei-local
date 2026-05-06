@@ -523,15 +523,26 @@ fn run_auto_scan_and_exit() -> ! {
 
     match scanner::run_once(&app_data) {
         Ok(s) => {
-            let body = if s.new_photos == 0 {
+            // Round 23: skipped 件数も付記 (厳格フィルタの効果が見えるように)
+            let skip_suffix = if s.skipped > 0 {
+                format!(" / 対象外 {} 枚を除外", s.skipped)
+            } else {
+                String::new()
+            };
+            let body = if s.new_photos == 0 && s.skipped == 0 {
                 "新規の写真はありませんでした".to_string()
+            } else if s.new_photos == 0 {
+                format!("新規 0 枚{}", skip_suffix)
             } else if s.receipts > 0 {
                 format!(
-                    "新規 {} 枚 (うち領収書 {} 枚) を受信箱に追加しました",
-                    s.new_photos, s.receipts
+                    "新規 {} 枚 (うち領収書 {} 枚) を受信箱に追加しました{}",
+                    s.new_photos, s.receipts, skip_suffix
                 )
             } else {
-                format!("新規 {} 枚を受信箱に追加しました", s.new_photos)
+                format!(
+                    "新規 {} 枚を受信箱に追加しました{}",
+                    s.new_photos, skip_suffix
+                )
             };
             scanner::log_line(&format!("[auto-scan] {}", body));
             scanner::post_notification("KAIKEI LOCAL", &body);
@@ -570,6 +581,8 @@ fn run_simulate_scan_and_exit() -> ! {
             "scanned": s.scanned,
             "new_photos": s.new_photos,
             "receipts": s.receipts,
+            // Round 23: 厳格フィルタで弾いた件数 (= 取り込まなかった対象外画像)
+            "skipped": s.skipped,
             "errors": s.errors,
         }),
         Err(e) => serde_json::json!({

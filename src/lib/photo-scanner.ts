@@ -100,6 +100,57 @@ export interface ScanResult {
   errors: string[];
   /** Round 7 ㊑: 自動破棄ルールで初期 dismissed になった件数 */
   autoDismissed?: number;
+  /** Round 23: 「明らかに領収書ではない」と判定して photo_inbox に INSERT すら
+   *  しなかった件数。厳格フィルタ ON 時のみ。
+   *  - PhotoKit 側 (Rust) で isHidden / aspect / 600px 未満で弾いた数
+   *  - JS 側で OCR 空 + score=0 で弾いた数
+   *  の合算 (透明性のため scan 結果 toast に表示)。 */
+  skipped?: number;
+}
+
+const SETTING_STRICT_FILTER = "inbox_strict_filter";
+
+/**
+ * Round 23: 厳格フィルタの設定を読み出す。デフォルト true (= ON)。
+ * "false" 文字列が明示的に保存されている時だけ false。
+ */
+async function getStrictFilter(): Promise<boolean> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", SETTING_STRICT_FILTER)
+      .single();
+    const v = (data as { value?: string } | null)?.value;
+    if (v === undefined || v === null) return true;
+    return v !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export async function setStrictFilter(enabled: boolean): Promise<void> {
+  const value = enabled ? "true" : "false";
+  const updated_at = new Date().toISOString();
+  const { data } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", SETTING_STRICT_FILTER)
+    .single();
+  if (data) {
+    await db
+      .from("app_settings")
+      .update({ value, updated_at })
+      .eq("id", SETTING_STRICT_FILTER);
+  } else {
+    await db
+      .from("app_settings")
+      .insert({ id: SETTING_STRICT_FILTER, value, updated_at });
+  }
+}
+
+export async function isStrictFilterEnabled(): Promise<boolean> {
+  return getStrictFilter();
 }
 
 /**
@@ -196,9 +247,13 @@ export async function scanNow(
   }
   const customWords = Array.from(customWordsSet).slice(0, 200); // Vision 上限気にして 200 で打ち切り
 
+  // Round 23: 厳格フィルタ — OCR 空 + score=0 を photo_inbox に INSERT しない
+  const strictFilter = await getStrictFilter();
+
   let newPhotos = 0;
   let receiptCount = 0;
   let autoDismissed = 0;
+  let skipped = 0;
   let processed = 0;
   let cancelled = false;
   for (const photo of scanned) {
@@ -276,6 +331,44 @@ export async function scanNow(
             matched_past_snippet: reason.matchedPastSnippet,
             decided_at: new Date().toISOString(),
           });
+        }
+      }
+
+      // Round 23: 厳格フィルタ — OCR 空 + classifier.score == 0 のものは
+      // 「明らかに領収書ではない」として photo_inbox に INSERT すらしない。
+      // is_favorite=true は救済 (ユーザが意図的に保存)。
+      // 受信箱の「未判定」を雪崩のように並べないための事前フィルタ。
+      // OFF にしたいユーザは設定 → 写真スキャン → 厳格フィルタを切る。
+      if (
+        strictFilter &&
+        !photo.is_favorite &&
+        initialState !== "receipt" &&
+        initialState !== "dismissed"
+      ) {
+        const ocrEmpty = !ocrText || ocrText.trim().length === 0;
+        const zeroScore = score === null || score < 0.001;
+        if (ocrEmpty || zeroScore) {
+          // file_path に保存した jpg は inbox/ ディレクトリのストレージを食うので削除
+          try {
+            const { remove } = await import("@tauri-apps/plugin-fs");
+            await remove(photo.file_path);
+          } catch {
+            /* 残しても致命的ではない (次回 inbox cleanup で消える可能性) */
+          }
+          skipped++;
+          if (onProgress) {
+            try {
+              onProgress(processed, scanned.length, {
+                assetId: photo.asset_id,
+                state: "dismissed",
+                score,
+                vendorHint: null,
+              });
+            } catch {
+              /* silent */
+            }
+          }
+          continue;
         }
       }
 
@@ -364,7 +457,14 @@ export async function scanNow(
     // 「user_cancelled」を errors の先頭に積んで呼出側で判別可能に
     errors.unshift("user_cancelled");
   }
-  return { scanned: scanned.length, newPhotos, receiptCount, errors, autoDismissed };
+  return {
+    scanned: scanned.length,
+    newPhotos,
+    receiptCount,
+    errors,
+    autoDismissed,
+    skipped,
+  };
 }
 
 export interface InboxRow {

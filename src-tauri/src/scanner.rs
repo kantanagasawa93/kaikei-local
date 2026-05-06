@@ -54,6 +54,10 @@ pub struct ScanSummary {
     pub scanned: usize,
     pub new_photos: usize,
     pub receipts: usize,
+    /// Round 23: OCR が空 + classifier.score == 0 で「明らかに領収書ではない」と
+    /// 判定して photo_inbox に INSERT しなかった件数 (= 「未判定」を雪崩のように
+    /// 並べないための事前フィルタ)。strict mode 時のみカウントされる。
+    pub skipped: usize,
     pub errors: Vec<String>,
 }
 
@@ -136,8 +140,23 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
         scanned: scanned.len(),
         new_photos: 0,
         receipts: 0,
+        skipped: 0,
         errors: vec![],
     };
+
+    // Round 23: 厳格フィルタ ON/OFF。app_settings.inbox_strict_filter='false' で
+    // 明示的に OFF にしない限りデフォルト ON。OFF にすると「OCR 空 + score=0」も
+    // 全部 photo_inbox に並ぶ (旧挙動)。
+    let strict_filter: bool = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE id='inbox_strict_filter'",
+            [],
+            |row| {
+                let s: String = row.get(0)?;
+                Ok(s != "false")
+            },
+        )
+        .unwrap_or(true);
 
     let mut latest_taken: i64 = since;
 
@@ -167,6 +186,25 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
                 (None, None, "candidate".to_string())
             }
         };
+
+        // Round 23: 厳格フィルタ (OCR 空 or score=0) → photo_inbox に INSERT しない。
+        // 既に inbox/ にコピーした jpg ファイルは削除して帯域・ストレージも回収。
+        // is_favorite=true は救済 (ユーザが意図的に保存した可能性)。
+        if strict_filter && !photo.is_favorite {
+            let ocr_empty = ocr_text
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true);
+            let zero_score = match score {
+                Some(s) => s <= 0.001,
+                None => true,
+            };
+            if ocr_empty || zero_score {
+                let _ = std::fs::remove_file(&photo.file_path);
+                summary.skipped += 1;
+                continue;
+            }
+        }
 
         let id = uuid::Uuid::new_v4().to_string();
         let taken_at_iso =
