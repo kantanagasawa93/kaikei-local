@@ -87,7 +87,8 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "  $TAG 以降 origin/main に積まれた commit: $AHEAD"
   if [ "$AHEAD" != "?" ] && [ "$AHEAD" -gt 0 ]; then
     echo "  最新 5 件:"
-    git log --oneline "$TAG..origin/main" 2>/dev/null | head -5 | sed 's/^/    /'
+    # head の早期 EOF で git log が SIGPIPE → set -e が反応する事故を回避
+    { git log --oneline "$TAG..origin/main" 2>/dev/null || true; } | head -5 | sed 's/^/    /' || true
   fi
 else
   printf "  ${WARN_COLOR}!${RESET} ローカルに $TAG の tag がありません — git fetch --tags してください\n"
@@ -110,3 +111,67 @@ cat <<'EOF'
        scripts/verify-release.sh v0.3.0
        scripts/verify-app.sh smoke-report
 EOF
+
+# Round 20 ㊖: SNS シェアテキスト自動生成
+# CHANGELOG から最新セクションのハイライトを抜いて X / note 用に整形
+echo ""
+echo "==> 6. SNS シェアテキスト (㊖)"
+RELEASE_URL="https://github.com/${REPO}/releases/tag/${TAG}"
+LATEST_DOWNLOAD="https://github.com/${REPO}/releases/latest/download/KAIKEI_LOCAL.dmg"
+
+# CHANGELOG から ## v<TAG> のセクションを抽出 (release.sh と同じロジック)
+HIGHLIGHTS=""
+if [ -f CHANGELOG.md ]; then
+  VERSION="${TAG#v}"
+  HIGHLIGHTS=$(awk -v ver="$VERSION" '
+    BEGIN { capturing = 0 }
+    /^## v[0-9]/ {
+      if (capturing) { exit }
+      if (index($0, "v" ver " ") > 0 || index($0, "v" ver "$") > 0 || $2 == "v" ver) {
+        capturing = 1
+        next
+      }
+    }
+    capturing == 1 && /^- / { print }
+  ' CHANGELOG.md | head -3)
+fi
+
+echo "----- X / Twitter 用 (~280 字) -----"
+cat <<X_TEXT
+KAIKEI LOCAL ${TAG} を公開しました。
+個人事業主向けの完全オフライン会計アプリ (Mac)。
+
+新規:
+$(echo "$HIGHLIGHTS" | head -3 | sed 's/^- /・/')
+
+⬇️ ${LATEST_DOWNLOAD}
+詳細: ${RELEASE_URL}
+#KAIKEILOCAL #会計アプリ #確定申告
+X_TEXT
+
+echo ""
+echo "----- note / blog 用 (~600 字) -----"
+cat <<NOTE_TEXT
+# KAIKEI LOCAL ${TAG} を公開しました
+
+完全オフライン (クラウドへのデータ送信ゼロ) で動く、Mac 用の個人事業主向け
+会計アプリ KAIKEI LOCAL の最新版を公開しました。
+
+## このリリースのハイライト
+
+$(echo "$HIGHLIGHTS" | head -5)
+
+## ダウンロード
+
+- Apple Silicon: ${LATEST_DOWNLOAD}
+- Intel Mac: https://github.com/${REPO}/releases/latest/download/KAIKEI_LOCAL_x64.dmg
+
+詳細なリリースノート: ${RELEASE_URL}
+
+## このアプリは何?
+
+- データは全てローカル SQLite に保存。クラウド送信なし
+- iCloud 写真から領収書を自動抽出 (Vision OCR)
+- 仕訳帳・領収書管理・青色申告・e-Tax XTX 出力まで
+- 基本機能ずっと無料、AI OCR のみ任意の月額プラン
+NOTE_TEXT

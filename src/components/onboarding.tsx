@@ -76,6 +76,43 @@ const SLIDE_COUNT = STEPS.length;
 // 基本情報入力ステップのインデックス (スライドの後)
 const INFO_STEP = SLIDE_COUNT;
 
+/**
+ * ㊕ Round 20: video が読み込めない時 (asset 不在 / Tauri バンドル外で
+ * デモ環境で動かしている時) に poster 画像へ fallback する小コンポーネント。
+ * onError で失敗を検知して img へ差し替える。
+ */
+function VideoWithFallback() {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <img
+        src="/demo-poster.jpg"
+        alt="KAIKEI LOCAL のデモ"
+        className="mx-auto w-full rounded-lg border bg-black"
+        style={{ maxHeight: "320px", objectFit: "contain" }}
+        onError={() => {
+          /* poster も無ければそのまま (空表示) */
+        }}
+      />
+    );
+  }
+  return (
+    <video
+      controls
+      autoPlay
+      muted
+      loop
+      preload="metadata"
+      poster="/demo-poster.jpg"
+      className="mx-auto w-full rounded-lg border bg-black"
+      style={{ maxHeight: "320px" }}
+      onError={() => setFailed(true)}
+    >
+      <source src="/demo.mp4" type="video/mp4" />
+    </video>
+  );
+}
+
 export function Onboarding() {
   const [show, setShow] = useState(false);
   const [step, setStep] = useState(0);
@@ -328,20 +365,10 @@ export function Onboarding() {
             ))}
           </div>
 
-          {/* ㊊ Round 18: video ステップは動画再生、それ以外はアイコン表示 */}
+          {/* ㊊ Round 18: video ステップは動画再生、それ以外はアイコン表示
+              ㊕ Round 20: 動画ロード失敗時に poster 画像へ fallback */}
           {"isVideo" in current && current.isVideo ? (
-            <video
-              controls
-              autoPlay
-              muted
-              loop
-              preload="metadata"
-              poster="/demo-poster.jpg"
-              className="mx-auto w-full rounded-lg border bg-black"
-              style={{ maxHeight: "320px" }}
-            >
-              <source src="/demo.mp4" type="video/mp4" />
-            </video>
+            <VideoWithFallback />
           ) : (
             <div
               className={`mx-auto w-16 h-16 rounded-2xl bg-muted flex items-center justify-center ${current.color}`}
