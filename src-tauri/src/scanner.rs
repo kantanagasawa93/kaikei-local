@@ -144,19 +144,6 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
         errors: vec![],
     };
 
-    // Round 23: 厳格フィルタ ON/OFF。app_settings.inbox_strict_filter='false' で
-    // 明示的に OFF にしない限りデフォルト ON。OFF にすると「OCR 空 + score=0」も
-    // 全部 photo_inbox に並ぶ (旧挙動)。
-    let strict_filter: bool = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE id='inbox_strict_filter'",
-            [],
-            |row| {
-                let s: String = row.get(0)?;
-                Ok(s != "false")
-            },
-        )
-        .unwrap_or(true);
 
     let mut latest_taken: i64 = since;
 
@@ -187,23 +174,20 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
             }
         };
 
-        // Round 23: 厳格フィルタ (OCR 空 or score=0) → photo_inbox に INSERT しない。
+        // Round 23: OCR 空 or score=0 → photo_inbox に INSERT しない (常時 ON)。
         // 既に inbox/ にコピーした jpg ファイルは削除して帯域・ストレージも回収。
-        // is_favorite による免除はしない (♥は家族写真等にも付くため強シグナルにならない)。
-        if strict_filter {
-            let ocr_empty = ocr_text
-                .as_ref()
-                .map(|s| s.trim().is_empty())
-                .unwrap_or(true);
-            let zero_score = match score {
-                Some(s) => s <= 0.001,
-                None => true,
-            };
-            if ocr_empty || zero_score {
-                let _ = std::fs::remove_file(&photo.file_path);
-                summary.skipped += 1;
-                continue;
-            }
+        let ocr_empty = ocr_text
+            .as_ref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        let zero_score = match score {
+            Some(s) => s <= 0.001,
+            None => true,
+        };
+        if ocr_empty || zero_score {
+            let _ = std::fs::remove_file(&photo.file_path);
+            summary.skipped += 1;
+            continue;
         }
 
         let id = uuid::Uuid::new_v4().to_string();

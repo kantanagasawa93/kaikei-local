@@ -108,50 +108,6 @@ export interface ScanResult {
   skipped?: number;
 }
 
-const SETTING_STRICT_FILTER = "inbox_strict_filter";
-
-/**
- * Round 23: 厳格フィルタの設定を読み出す。デフォルト true (= ON)。
- * "false" 文字列が明示的に保存されている時だけ false。
- */
-async function getStrictFilter(): Promise<boolean> {
-  try {
-    const { data } = await db
-      .from("app_settings")
-      .select("value")
-      .eq("id", SETTING_STRICT_FILTER)
-      .single();
-    const v = (data as { value?: string } | null)?.value;
-    if (v === undefined || v === null) return true;
-    return v !== "false";
-  } catch {
-    return true;
-  }
-}
-
-export async function setStrictFilter(enabled: boolean): Promise<void> {
-  const value = enabled ? "true" : "false";
-  const updated_at = new Date().toISOString();
-  const { data } = await db
-    .from("app_settings")
-    .select("id")
-    .eq("id", SETTING_STRICT_FILTER)
-    .single();
-  if (data) {
-    await db
-      .from("app_settings")
-      .update({ value, updated_at })
-      .eq("id", SETTING_STRICT_FILTER);
-  } else {
-    await db
-      .from("app_settings")
-      .insert({ id: SETTING_STRICT_FILTER, value, updated_at });
-  }
-}
-
-export async function isStrictFilterEnabled(): Promise<boolean> {
-  return getStrictFilter();
-}
 
 /**
  * Round 16 ㊀: scanNow の per-item progress イベント。
@@ -247,9 +203,6 @@ export async function scanNow(
   }
   const customWords = Array.from(customWordsSet).slice(0, 200); // Vision 上限気にして 200 で打ち切り
 
-  // Round 23: 厳格フィルタ — OCR 空 + score=0 を photo_inbox に INSERT しない
-  const strictFilter = await getStrictFilter();
-
   let newPhotos = 0;
   let receiptCount = 0;
   let autoDismissed = 0;
@@ -334,14 +287,10 @@ export async function scanNow(
         }
       }
 
-      // Round 23: 厳格フィルタ — OCR 空 + classifier.score == 0 のものは
+      // Round 23: OCR 空 + classifier.score == 0 のものは
       // 「明らかに領収書ではない」として photo_inbox に INSERT すらしない。
-      // 受信箱の「未判定」を雪崩のように並べないための事前フィルタ。
-      // OFF にしたいユーザは設定 → 写真スキャン → 厳格フィルタを切る。
-      // is_favorite による免除はしない (♥を家族写真/思い出に付けてるユーザが多く、
-      //  領収書として取り込む強シグナルにはならないため)。
+      // 受信箱の「未判定」を雪崩のように並べないための常時 ON のフィルタ。
       if (
-        strictFilter &&
         initialState !== "receipt" &&
         initialState !== "dismissed"
       ) {
