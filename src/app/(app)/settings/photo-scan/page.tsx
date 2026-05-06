@@ -28,8 +28,6 @@ import {
   launchAgentInstall,
   launchAgentUninstall,
   recentScanLog,
-  isStrictFilterEnabled,
-  setStrictFilter,
   type AuthStatus,
   type LaunchAgentStatus,
   type ScanLogRow,
@@ -50,8 +48,6 @@ export default function PhotoScanSettingsPage() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [logs, setLogs] = useState<ScanLogRow[]>([]);
   const [autoJournal, setAutoJournalState] = useState(false);
-  // Round 23: 厳格フィルタ ON/OFF
-  const [strict, setStrict] = useState(true);
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
@@ -61,17 +57,6 @@ export default function PhotoScanSettingsPage() {
     if (a.time) setScheduleTime(a.time);
     setLogs(await recentScanLog(5));
     setAutoJournalState(await getAutoJournalMode());
-    setStrict(await isStrictFilterEnabled());
-  };
-
-  const handleStrictToggle = async (enabled: boolean) => {
-    setStrict(enabled);
-    await setStrictFilter(enabled);
-    toast.success(
-      enabled
-        ? "厳格フィルタ ON — 明らかに領収書ではない写真は取り込みません"
-        : "厳格フィルタ OFF — すべての写真を未判定として取り込みます",
-    );
   };
 
   const handleScheduleEnable = async () => {
@@ -296,48 +281,6 @@ export default function PhotoScanSettingsPage() {
               </Button>
             </Link>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Round 23: 厳格フィルタ — 明らかに領収書ではない写真を取り込み前に除外 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">厳格フィルタ (取り込み前の事前選別)</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground leading-relaxed">
-            ON にすると、以下の条件で「明らかに領収書ではない写真」を受信箱に
-            取り込みません (写真ライブラリ側には残ります)。
-          </p>
-          <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-5">
-            <li>Apple Photos の「非表示」アルバムにある写真</li>
-            <li>短辺が 600px 未満 (アイコン・サムネ画像)</li>
-            <li>縦横比が 1:5 を超える (パノラマ等の風景写真)</li>
-            <li>OCR で文字が 1 つも読めなかった (景色・人物のみ)</li>
-            <li>領収書キーワードが 1 つもヒットしない (家族写真・自撮り等)</li>
-          </ul>
-          <p className="text-xs text-muted-foreground">
-            お気に入り
-            <span aria-label="ハート">♥</span> による特別扱いはしません
-            (♥は家族写真・思い出にも付くため、領収書取り込みの強シグナルとして
-            は扱いません)。
-          </p>
-          <div className="flex items-center gap-3 pt-2">
-            <input
-              id="strict-filter"
-              type="checkbox"
-              checked={strict}
-              onChange={(e) => void handleStrictToggle(e.target.checked)}
-              className="h-4 w-4"
-            />
-            <label htmlFor="strict-filter" className="text-sm font-medium select-none">
-              厳格フィルタを有効にする (推奨)
-            </label>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            OFF にすると、新規写真をすべて「未判定」として受信箱に並べます
-            (旧挙動)。領収書の取りこぼしが心配な時だけ OFF を検討してください。
-          </p>
         </CardContent>
       </Card>
 
