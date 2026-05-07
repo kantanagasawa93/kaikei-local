@@ -86,8 +86,53 @@ function isReleaseNotPublished(msg: string): boolean {
 }
 
 /**
+ * Round 26 ⓖ: transient (network/timeout 系) の判定.
+ * これに該当する error なら静かに 1 回 retry する。
+ * cert 不正 / 構文エラー (latest.json 不正な JSON) などは即諦める。
+ */
+function isTransientUpdaterError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("timeout") ||
+    m.includes("timed out") ||
+    m.includes("network") ||
+    m.includes("connection") ||
+    m.includes("dns") ||
+    m.includes("getaddrinfo") ||
+    m.includes("econnrefused") ||
+    m.includes("enotfound") ||
+    m.includes("503") ||
+    m.includes("502") ||
+    m.includes("500") ||
+    m.includes("temporarily")
+  );
+}
+
+/**
+ * 内部用 — 1 回だけ check() を呼ぶ。retry の有無は呼び出し側で制御。
+ */
+async function checkOnce(): Promise<AutoUpdaterStatus> {
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const update = await check();
+  if (!update) {
+    const { getVersion } = await import("@tauri-apps/api/app");
+    const v = await getVersion();
+    return { kind: "up_to_date", currentVersion: v };
+  }
+  return {
+    kind: "available",
+    version: update.version,
+    currentVersion: update.currentVersion,
+    body: update.body,
+    date: update.date,
+  };
+}
+
+/**
  * latest.json を check し、新しい version があれば available にする。
  * 既に最新なら up_to_date、Tauri 環境外なら idle のまま。
+ *
+ * Round 26 ⓖ: transient エラーは 10 秒後に 1 回静かに retry する.
  */
 export async function checkAutoUpdate(): Promise<AutoUpdaterStatus> {
   if (!isTauri()) {
@@ -95,27 +140,9 @@ export async function checkAutoUpdate(): Promise<AutoUpdaterStatus> {
     return _status;
   }
   setStatus({ kind: "checking" });
-  try {
-    const { check } = await import("@tauri-apps/plugin-updater");
-    const update = await check();
-    if (!update) {
-      // tauri-plugin-updater の最新仕様: null = 最新
-      const { getVersion } = await import("@tauri-apps/api/app");
-      const v = await getVersion();
-      setStatus({ kind: "up_to_date", currentVersion: v });
-      return _status;
-    }
-    setStatus({
-      kind: "available",
-      version: update.version,
-      currentVersion: update.currentVersion,
-      body: update.body,
-      date: update.date,
-    });
-    return _status;
-  } catch (e) {
+
+  const handleError = async (e: unknown): Promise<AutoUpdaterStatus> => {
     const msg = (e as Error).message ?? String(e);
-    // Round 22 ㊚: "latest.json 未公開" は error ではなく up_to_date 扱い
     if (isReleaseNotPublished(msg)) {
       console.info(
         `[auto-updater] latest.json は未公開扱い (${msg.slice(0, 80)}) — up_to_date として静かに継続`,
@@ -123,13 +150,36 @@ export async function checkAutoUpdate(): Promise<AutoUpdaterStatus> {
       try {
         const { getVersion } = await import("@tauri-apps/api/app");
         const v = await getVersion();
-        setStatus({ kind: "up_to_date", currentVersion: v });
+        return { kind: "up_to_date", currentVersion: v };
       } catch {
-        setStatus({ kind: "up_to_date", currentVersion: "unknown" });
+        return { kind: "up_to_date", currentVersion: "unknown" };
       }
-      return _status;
     }
-    setStatus({ kind: "error", message: msg });
+    return { kind: "error", message: msg };
+  };
+
+  try {
+    const next = await checkOnce();
+    setStatus(next);
+    return _status;
+  } catch (e1) {
+    const msg1 = (e1 as Error).message ?? String(e1);
+    // Round 26 ⓖ: transient なら 10 秒待って 1 回 retry
+    if (isTransientUpdaterError(msg1) && !isReleaseNotPublished(msg1)) {
+      console.info(
+        `[auto-updater] transient error: ${msg1.slice(0, 80)} — 10 秒後に 1 回 retry`,
+      );
+      await new Promise((r) => setTimeout(r, 10_000));
+      try {
+        const next = await checkOnce();
+        setStatus(next);
+        return _status;
+      } catch (e2) {
+        setStatus(await handleError(e2));
+        return _status;
+      }
+    }
+    setStatus(await handleError(e1));
     return _status;
   }
 }

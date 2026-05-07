@@ -20,6 +20,9 @@ import {
   reverseJournalToInbox,
   undoLastReverse,
   getReverseUndoCount,
+  bulkDeleteJournals,
+  undoBulkDelete,
+  getBulkDeleteUndoCount,
 } from "@/lib/auto-journal";
 import { buildJournalsCsv, downloadCsv, buildFiscalYearSummary } from "@/lib/journal-export";
 import { exportFiscalYearSummaryPdf, downloadBlob } from "@/lib/pdf-export";
@@ -77,6 +80,8 @@ export default function JournalsPage() {
   const [page, setPage] = useState(0);
   // ㊍ Round 6: 直近の差し戻しを取り消せる件数 (0 なら button 非表示)
   const [undoCount, setUndoCount] = useState(0);
+  // Round 26 ⓓ: bulk delete の undo 可能件数
+  const [bulkUndoCount, setBulkUndoCount] = useState(0);
   // Round 21 ⓒ: タグ編集モーダル対象の仕訳 ID
   const [tagEditFor, setTagEditFor] = useState<string | null>(null);
   // Round 22 ㊛: 仕訳の bulk select 状態 (id Set) + bulk タグ追加モーダル
@@ -136,9 +141,39 @@ export default function JournalsPage() {
     toast.success(`${updated} 件から「${tag}」を外しました`);
   }
 
+  // Round 26 ⓓ: bulk delete + Undo
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    if (
+      !confirm(
+        `${ids.length} 件の仕訳を削除します。\n\n` +
+          `(直後なら「直近の一括削除を取り消す」で復元できます)`,
+      )
+    )
+      return;
+    const deleted = await bulkDeleteJournals(ids);
+    setJournals((prev) => prev.filter((j) => !selectedIds.has(j.id)));
+    setSelectedIds(new Set());
+    setBulkUndoCount(await getBulkDeleteUndoCount());
+    toast.success(`${deleted} 件の仕訳を削除しました (取消可能)`);
+  }
+
+  async function handleUndoBulkDelete() {
+    const r = await undoBulkDelete();
+    if (r.restored === 0) {
+      toast.info("取り消せる削除がありません");
+    } else {
+      toast.success(`${r.restored} 件の仕訳を復元しました`);
+      await loadJournals();
+    }
+    setBulkUndoCount(await getBulkDeleteUndoCount());
+  }
+
   useEffect(() => {
     loadJournals();
     void getReverseUndoCount().then(setUndoCount);
+    void getBulkDeleteUndoCount().then(setBulkUndoCount);
   }, []);
 
   async function loadJournals() {
@@ -359,6 +394,18 @@ export default function JournalsPage() {
               <Badge variant="secondary" className="ml-2 text-[10px]">{undoCount}</Badge>
             </Button>
           )}
+          {/* Round 26 ⓓ: 直近の bulk delete を取り消す */}
+          {bulkUndoCount > 0 && (
+            <Button
+              variant="outline"
+              onClick={() => void handleUndoBulkDelete()}
+              title="直近の一括削除を取り消して仕訳を復元"
+            >
+              <RotateCcw className="h-4 w-4 mr-1" />
+              直近の一括削除を取り消す
+              <Badge variant="secondary" className="ml-2 text-[10px]">{bulkUndoCount}</Badge>
+            </Button>
+          )}
           {/* ㊒ CSV エクスポート — 月フィルタ適用、画像 URL + 受信箱フラグ込み */}
           <Button variant="outline" onClick={() => handleExportCsv()} title="仕訳帳を CSV でダウンロード (画像 URL + 受信箱由来フラグ込み)">
             <Download className="h-4 w-4 mr-1" />
@@ -569,6 +616,16 @@ export default function JournalsPage() {
             title="選択した仕訳から「経費精算済」を外す"
           >
             ✕ 経費精算済
+          </Button>
+          {/* Round 26 ⓓ: bulk delete (Undo 可能) */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleBulkDelete()}
+            title="選択した仕訳を一括削除 (直後なら取消可能)"
+          >
+            <Trash2 className="h-3 w-3 mr-1" />
+            削除
           </Button>
           <Button size="sm" variant="ghost" onClick={clearSelection}>
             選択解除

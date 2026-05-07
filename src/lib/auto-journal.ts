@@ -771,6 +771,9 @@ export async function quickConfirmOne(inboxId: string): Promise<string> {
 
 const UNDO_KEY = "reverse_undo_stack";
 const UNDO_MAX = 5;
+// Round 26 ⓓ: 仕訳 bulk delete の undo 用スタック (本体 reverse とは別)
+const BULK_DELETE_UNDO_KEY = "bulk_delete_undo_stack";
+const BULK_DELETE_UNDO_MAX = 3;
 
 interface ReverseUndoSnapshot {
   ts: string; // ISO
@@ -1068,4 +1071,139 @@ export async function setAutoJournalMode(enabled: boolean): Promise<void> {
   } else {
     await db.from("app_settings").insert({ id: KEY, value, updated_at });
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// Round 26 ⓓ: 仕訳 bulk delete + Undo
+//
+// journals/page.tsx の bulk action toolbar から呼ぶ。複数仕訳 + 紐付く lines を
+// 削除する前にスナップショットを撮って、Undo で復元できるようにする。
+// reverse stack (UNDO_KEY) とは別の stack を使う (差し戻しと混ざらないため)。
+// ────────────────────────────────────────────────────────────
+
+interface BulkDeleteSnapshot {
+  ts: string; // ISO
+  journals: Record<string, unknown>[];
+  journal_lines: Record<string, unknown>[];
+}
+
+async function getBulkDeleteUndoStack(): Promise<BulkDeleteSnapshot[]> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", BULK_DELETE_UNDO_KEY)
+      .single();
+    const raw = (data as { value?: string } | null)?.value;
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function setBulkDeleteUndoStack(stack: BulkDeleteSnapshot[]): Promise<void> {
+  const value = JSON.stringify(stack);
+  const updated_at = new Date().toISOString();
+  const { data: existing } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", BULK_DELETE_UNDO_KEY)
+    .single();
+  if (existing) {
+    await db
+      .from("app_settings")
+      .update({ value, updated_at })
+      .eq("id", BULK_DELETE_UNDO_KEY);
+  } else {
+    await db
+      .from("app_settings")
+      .insert({ id: BULK_DELETE_UNDO_KEY, value, updated_at });
+  }
+}
+
+export async function getBulkDeleteUndoCount(): Promise<number> {
+  return (await getBulkDeleteUndoStack()).length;
+}
+
+/**
+ * 複数の仕訳を一括削除。事前にスナップショットを undo stack に push する。
+ * @returns 実際に削除できた件数
+ */
+export async function bulkDeleteJournals(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  // スナップショット採取
+  const journals: Record<string, unknown>[] = [];
+  const journalLines: Record<string, unknown>[] = [];
+  for (const id of ids) {
+    try {
+      const { data: j } = await db
+        .from("journals")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (j) journals.push(j as Record<string, unknown>);
+      const { data: lns } = await db
+        .from("journal_lines")
+        .select("*")
+        .eq("journal_id", id);
+      for (const ln of (lns as Record<string, unknown>[] | null) ?? []) {
+        journalLines.push(ln);
+      }
+    } catch (e) {
+      console.warn(`bulkDeleteJournals snapshot ${id} failed:`, e);
+    }
+  }
+  // stack に push (古いものから捨てる)
+  const stack = await getBulkDeleteUndoStack();
+  stack.unshift({
+    ts: new Date().toISOString(),
+    journals,
+    journal_lines: journalLines,
+  });
+  while (stack.length > BULK_DELETE_UNDO_MAX) stack.pop();
+  await setBulkDeleteUndoStack(stack);
+
+  // 実削除 (lines → journals 順、ON DELETE CASCADE があるが明示的に)
+  let deleted = 0;
+  for (const id of ids) {
+    try {
+      await db.from("journal_lines").delete().eq("journal_id", id);
+      await db.from("journals").delete().eq("id", id);
+      deleted++;
+    } catch (e) {
+      console.warn(`bulkDeleteJournals delete ${id} failed:`, e);
+    }
+  }
+  return deleted;
+}
+
+/**
+ * 直近の bulk delete を取り消して仕訳 + lines を復元する。
+ * @returns 復元した仕訳件数 (0 なら stack 空)
+ */
+export async function undoBulkDelete(): Promise<{ restored: number }> {
+  const stack = await getBulkDeleteUndoStack();
+  if (stack.length === 0) return { restored: 0 };
+  const snap = stack.shift()!;
+  await setBulkDeleteUndoStack(stack);
+
+  let restored = 0;
+  for (const j of snap.journals) {
+    try {
+      await db.from("journals").insert(j);
+      restored++;
+    } catch (e) {
+      console.warn(`undoBulkDelete journals.insert failed:`, e);
+    }
+  }
+  for (const ln of snap.journal_lines) {
+    try {
+      await db.from("journal_lines").insert(ln);
+    } catch (e) {
+      console.warn(`undoBulkDelete journal_lines.insert failed:`, e);
+    }
+  }
+  return { restored };
 }

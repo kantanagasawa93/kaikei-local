@@ -224,6 +224,27 @@ export async function checkReadiness(
     /* silent */
   }
 
+  // Round 26 ⓐ: AI OCR 失敗 (state='receipt_failed') が残ってないか
+  try {
+    const { data: rf } = await db
+      .from("photo_inbox")
+      .select("id")
+      .eq("state", "receipt_failed");
+    const failedCount = ((rf as { id: string }[] | null) ?? []).length;
+    if (failedCount > 0) {
+      checks.push({
+        id: "receipt_failed",
+        label: "AI OCR 失敗",
+        status: "warning",
+        detail: `${failedCount} 件 — 受信箱「失敗」タブで再試行 / 手動仕訳`,
+        href: "/inbox",
+      });
+    }
+    // 0 件は「ok」項目を増やすとリストが長くなるので非表示
+  } catch {
+    /* silent */
+  }
+
   // 5) 最終仕訳日が前年 12 月以前 (= 当年に何も入力されていない) なら警告
   if (lastJournalDate && lastJournalDate < `${year}-12-01` && inWindow) {
     checks.push({

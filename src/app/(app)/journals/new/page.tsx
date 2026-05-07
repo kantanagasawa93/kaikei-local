@@ -20,6 +20,8 @@ export default function NewJournalPage() {
   // Round 25 ㊡: 過去の仕訳から複製するためのサジェスト
   const [recentJournals, setRecentJournals] = useState<RecentJournal[]>([]);
   const [partners, setPartners] = useState<Map<string, string>>(new Map());
+  // Round 26 ㊢: partner 連動フィルタ — 選択された partner の仕訳のみ表示
+  const [filterPartnerId, setFilterPartnerId] = useState<string>("");
   // 複製した値を JournalForm に渡すため (key 変更で remount)
   const [seedKey, setSeedKey] = useState(0);
   const [seed, setSeed] = useState<{
@@ -137,21 +139,55 @@ export default function NewJournalPage() {
         </CardContent>
       </Card>
 
-      {/* Round 25 ㊡: 過去の仕訳から複製サジェスト */}
-      {recentJournals.length > 0 && (
+      {/* Round 25 ㊡ + Round 26 ㊢: 過去の仕訳から複製サジェスト + partner 連動フィルタ */}
+      {recentJournals.length > 0 && (() => {
+        // partner_id でフィルタ (どの行にもその partner が含まれてれば該当)
+        const visible = filterPartnerId
+          ? recentJournals.filter((j) =>
+              j.journal_lines.some((ln) => ln.partner_id === filterPartnerId),
+            )
+          : recentJournals;
+        // フィルタ select 用に「過去仕訳に登場する partner」だけ取得
+        const usedPartners = (() => {
+          const set = new Set<string>();
+          for (const j of recentJournals) {
+            for (const ln of j.journal_lines) {
+              if (ln.partner_id) set.add(ln.partner_id);
+            }
+          }
+          return Array.from(set)
+            .map((id) => ({ id, name: partners.get(id) ?? id }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        })();
+        return (
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between pb-2 gap-2">
             <CardTitle className="text-base flex items-center gap-2">
               <History className="h-4 w-4" />
-              過去 90 日の仕訳から複製 ({recentJournals.length} 件)
+              過去 90 日の仕訳から複製 ({visible.length}/{recentJournals.length} 件)
             </CardTitle>
+            {usedPartners.length > 0 && (
+              <select
+                value={filterPartnerId}
+                onChange={(e) => setFilterPartnerId(e.target.value)}
+                className="border rounded px-2 py-1 text-xs h-8"
+                title="特定の取引先の仕訳だけに絞る"
+              >
+                <option value="">すべての取引先</option>
+                {usedPartners.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-xs text-muted-foreground">
               似た仕訳をクリックで上のフォームに複製できます (日付は今日に上書き)。
             </p>
             <div className="space-y-1.5">
-              {recentJournals.map((j) => {
+              {visible.map((j) => {
                 const partnerNames = Array.from(
                   new Set(
                     j.journal_lines
@@ -192,7 +228,8 @@ export default function NewJournalPage() {
             </div>
           </CardContent>
         </Card>
-      )}
+        );
+      })()}
     </div>
   );
 }

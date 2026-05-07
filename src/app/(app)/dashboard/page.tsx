@@ -539,15 +539,39 @@ function MonthlyBarChart({
   );
   const fmt = (n: number) => new Intl.NumberFormat("ja-JP").format(Math.round(n));
 
+  // Round 26 ⓒ: 年間平均 + 中央値 (0 月を含むかどうかは "実績がある月のみ"
+  // で判断 — 12 月分すべてを平均すると 0 月が混ざって低めに出るため、
+  // 売上/経費どちらかが 0 でない月だけを母集団にする)
+  const incomeMonths = data.filter((b) => b.income !== 0);
+  const expenseMonths = data.filter((b) => b.expense !== 0);
+  const avg = (xs: number[]) =>
+    xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length;
+  const median = (xs: number[]) => {
+    if (xs.length === 0) return 0;
+    const s = [...xs].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+  };
+  const incomeAvg = avg(incomeMonths.map((b) => b.income));
+  const incomeMedian = median(incomeMonths.map((b) => b.income));
+  const expenseAvg = avg(expenseMonths.map((b) => b.expense));
+  const expenseMedian = median(expenseMonths.map((b) => b.expense));
+
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-12 gap-1 items-end h-40">
         {data.map((b) => {
           const incPct = (Math.abs(b.income) / maxVal) * 100;
           const expPct = (Math.abs(b.expense) / maxVal) * 100;
-          const tooltip = `${b.month}月: 売上 ¥${fmt(b.income)} / 経費 ¥${fmt(b.expense)}${
-            onMonthClick ? "\n(クリックで仕訳一覧へ)" : ""
-          }`;
+          // Round 26 ⓒ: 年間統計を tooltip に併記して比較しやすく
+          const incomeDelta = b.income - incomeAvg;
+          const expenseDelta = b.expense - expenseAvg;
+          const sign = (n: number) => (n > 0 ? "+" : "");
+          const tooltip =
+            `${b.month}月: 売上 ¥${fmt(b.income)} / 経費 ¥${fmt(b.expense)}\n` +
+            `年間平均比: 売上 ${sign(incomeDelta)}¥${fmt(incomeDelta)} / ` +
+            `経費 ${sign(expenseDelta)}¥${fmt(expenseDelta)}` +
+            (onMonthClick ? "\n(クリックで仕訳一覧へ)" : "");
           const inner = (
             <div className="flex flex-col-reverse h-full">
               <div
@@ -593,7 +617,7 @@ function MonthlyBarChart({
           <div key={b.month}>{Number(b.month)}月</div>
         ))}
       </div>
-      <div className="flex gap-4 text-xs text-muted-foreground pt-2">
+      <div className="flex gap-4 text-xs text-muted-foreground pt-2 flex-wrap">
         <span className="inline-flex items-center gap-1">
           <span className="inline-block w-3 h-3 bg-green-500 rounded-sm" />
           売上
@@ -602,6 +626,17 @@ function MonthlyBarChart({
           <span className="inline-block w-3 h-3 bg-red-400 rounded-sm" />
           経費
         </span>
+        {/* Round 26 ⓒ: 年間平均と中央値 (実績がある月のみが母集団) */}
+        {incomeMonths.length > 0 && (
+          <span className="ml-4">
+            売上 平均/中央値: <b>¥{fmt(incomeAvg)}</b> / ¥{fmt(incomeMedian)}
+          </span>
+        )}
+        {expenseMonths.length > 0 && (
+          <span>
+            経費 平均/中央値: <b>¥{fmt(expenseAvg)}</b> / ¥{fmt(expenseMedian)}
+          </span>
+        )}
       </div>
     </div>
   );
