@@ -46,6 +46,10 @@ export default function JournalsPage() {
   // window.location.search を直接読む (Tauri の static export ではこれで十分).
   const [journals, setJournals] = useState<JournalWithLines[]>([]);
   const [monthFilter, setMonthFilter] = useState("");
+  // Round 25 ⓒ: from/to レンジを URL クエリで受ける (dashboard ドリルダウン用)
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -57,6 +61,11 @@ export default function JournalsPage() {
     if (params.get("incomplete") === "1") {
       setIncompleteOnly(true);
     }
+    // Round 25 ⓒ: ?from=YYYY-MM-DD&to=YYYY-MM-DD レンジ
+    const f = params.get("from");
+    const t = params.get("to");
+    if (f && /^\d{4}-\d{2}-\d{2}$/.test(f)) setDateFrom(f);
+    if (t && /^\d{4}-\d{2}-\d{2}$/.test(t)) setDateTo(t);
   }, []);
   const [tagFilter, setTagFilter] = useState("");
   // Round 23 ⓒ: 摘要検索 + 金額レンジ
@@ -249,6 +258,9 @@ export default function JournalsPage() {
 
   const filteredJournals = journals.filter((j) => {
     if (monthFilter && !j.date.startsWith(monthFilter)) return false;
+    // Round 25 ⓒ: from/to レンジフィルタ
+    if (dateFrom && j.date < dateFrom) return false;
+    if (dateTo && j.date > dateTo) return false;
     if (tagFilter) {
       const ts = parseTags(j.tags ?? null);
       if (!ts.includes(tagFilter)) return false;
@@ -421,6 +433,34 @@ export default function JournalsPage() {
         </div>
       </div>
 
+      {/* Round 25 ⓒ: from/to レンジ active 時の chip 表示 + 解除ボタン */}
+      {(dateFrom || dateTo) && (
+        <div className="flex items-center gap-2 text-xs">
+          <Badge variant="outline" className="bg-blue-50 border-blue-200 text-blue-700">
+            期間: {dateFrom || "..."} 〜 {dateTo || "..."}
+          </Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setDateFrom("");
+              setDateTo("");
+              // URL からも消す
+              if (typeof window !== "undefined") {
+                const url = new URL(window.location.href);
+                url.searchParams.delete("from");
+                url.searchParams.delete("to");
+                window.history.replaceState({}, "", url.toString());
+              }
+            }}
+            className="h-6 text-xs"
+          >
+            解除
+          </Button>
+        </div>
+      )}
+
       <div className="flex gap-2 items-center flex-wrap">
         <Input
           type="month"
@@ -482,11 +522,27 @@ export default function JournalsPage() {
         </label>
       </div>
 
-      {/* Round 22 ㊛: bulk action toolbar — selectedIds が 1 件以上ある時だけ表示 */}
-      {selectedIds.size > 0 && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-md">
+      {/* Round 22 ㊛: bulk action toolbar — selectedIds が 1 件以上ある時だけ表示
+          Round 25 ⓓ: 選択中の借方/貸方合計をワンライナーで表示 */}
+      {selectedIds.size > 0 && (() => {
+        let totalDebit = 0;
+        let totalCredit = 0;
+        for (const j of journals) {
+          if (!selectedIds.has(j.id)) continue;
+          for (const ln of j.journal_lines ?? []) {
+            totalDebit += ln.debit_amount || 0;
+            totalCredit += ln.credit_amount || 0;
+          }
+        }
+        const fmt = (n: number) =>
+          new Intl.NumberFormat("ja-JP").format(n);
+        return (
+        <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-md flex-wrap">
           <span className="text-sm font-medium text-blue-700">
             {selectedIds.size} 件選択中
+          </span>
+          <span className="text-xs text-blue-700/80 tabular-nums">
+            借方 ¥{fmt(totalDebit)} / 貸方 ¥{fmt(totalCredit)}
           </span>
           <Button
             size="sm"
@@ -526,7 +582,8 @@ export default function JournalsPage() {
             ページ内すべて選択
           </Button>
         </div>
-      )}
+        );
+      })()}
 
       {pagedJournals.length === 0 ? (
         <Card>

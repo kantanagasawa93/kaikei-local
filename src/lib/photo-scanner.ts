@@ -206,6 +206,68 @@ async function saveLastScanSummary(s: LastScanSummary): Promise<void> {
   await upsertSetting(SETTING_LAST_SCAN_SUMMARY, JSON.stringify(s));
 }
 
+const SETTING_LAST_PURGE_SWEEP = "inbox_last_purge_sweep_unix";
+
+/**
+ * Round 25 ⓕ: 90 日経過した dismissed を物理削除する.
+ *
+ * 大量の家族写真を取り込んだあと dismissed に流したケースで、
+ * inbox/ ディレクトリに jpg ファイルが溜まり続けるのを抑制。
+ * - state='dismissed' AND taken_at < 90 日前 → SQL DELETE + jpg 削除
+ * - 1 日 1 回まで sweep (boot.tsx 起動時)
+ * - 関連 ai_ocr_log は ON DELETE CASCADE で自動連動 (migration v3 で定義済み)
+ */
+export async function purgeOldDismissed(): Promise<{ purged: number }> {
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", SETTING_LAST_PURGE_SWEEP)
+      .single();
+    const last = parseInt((data as { value?: string } | null)?.value ?? "0", 10);
+    if (now - last < 24 * 3600) return { purged: 0 };
+  } catch {
+    // 未設定なら走る
+  }
+
+  const cutoff = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+  const { data: targets } = await db
+    .from("photo_inbox")
+    .select("id, file_path")
+    .eq("state", "dismissed")
+    .lt("taken_at", cutoff);
+
+  const rows = (targets as { id: string; file_path: string | null }[] | null) ?? [];
+  let purged = 0;
+  for (const row of rows) {
+    try {
+      // 1) jpg ファイル削除 (失敗しても DB は消す方針 — file 不整合は致命的ではない)
+      if (row.file_path) {
+        try {
+          const { remove } = await import("@tauri-apps/plugin-fs");
+          await remove(row.file_path);
+        } catch {
+          /* file が既に無い等は無視 */
+        }
+      }
+      // 2) DB から削除
+      await db.from("photo_inbox").delete().eq("id", row.id);
+      purged++;
+    } catch (e) {
+      console.warn(`purgeOldDismissed: ${row.id} failed:`, e);
+    }
+  }
+
+  await upsertSetting(SETTING_LAST_PURGE_SWEEP, String(now));
+  if (purged > 0) {
+    console.info(
+      `[inbox] 90 日経過の dismissed ${purged} 件を物理削除 (jpg + DB 行)`,
+    );
+  }
+  return { purged };
+}
+
 export interface ScanResult {
   scanned: number;
   newPhotos: number;

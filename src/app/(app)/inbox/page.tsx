@@ -1020,20 +1020,64 @@ export default function InboxPage() {
         </div>
       )}
 
-      {/* Round 24 ⓖ: 破棄タブだけ「期限切れ自動破棄のみ」フィルタを出す */}
-      {filter === "dismissed" && (
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={expiredOnly}
-              onChange={(e) => setExpiredOnly(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
-            30 日経過で自動破棄されたもののみ表示
-          </label>
-        </div>
-      )}
+      {/* Round 24 ⓖ: 破棄タブだけ「期限切れ自動破棄のみ」フィルタを出す
+          Round 25 ⓑ: reason 別件数バッジ */}
+      {filter === "dismissed" && (() => {
+        // reason 別集計
+        let expired = 0;
+        let duplicate = 0;
+        let pattern = 0;
+        let manual = 0;
+        for (const it of items) {
+          if (!it.auto_dismissed_reason) {
+            manual++;
+            continue;
+          }
+          try {
+            const r = JSON.parse(it.auto_dismissed_reason) as { reason?: string };
+            if (r.reason === "expired_30d") expired++;
+            else if (r.reason === "duplicate") duplicate++;
+            else if (r.reason === "pattern" || r.reason === undefined) pattern++;
+            else pattern++;
+          } catch {
+            manual++;
+          }
+        }
+        return (
+          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+            <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={expiredOnly}
+                onChange={(e) => setExpiredOnly(e.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              30 日経過で自動破棄されたもののみ表示
+            </label>
+            <span className="text-foreground">理由別:</span>
+            {expired > 0 && (
+              <Badge variant="outline" className="text-[10px]">
+                期限切れ {expired}
+              </Badge>
+            )}
+            {duplicate > 0 && (
+              <Badge variant="outline" className="text-[10px]">
+                重複 {duplicate}
+              </Badge>
+            )}
+            {pattern > 0 && (
+              <Badge variant="outline" className="text-[10px]">
+                過去類似 {pattern}
+              </Badge>
+            )}
+            {manual > 0 && (
+              <Badge variant="outline" className="text-[10px]">
+                手動 {manual}
+              </Badge>
+            )}
+          </div>
+        );
+      })()}
 
       {(() => {
         // Round 24 ⓖ: dismissed + expiredOnly のときに auto_dismissed_reason を見て絞り込む
@@ -1548,6 +1592,11 @@ function ScoreSignalsBadge({
   }
   const signals = parsed?.signals ?? [];
 
+  // Round 25 ⓖ: click でもトグルで開ける (touch / keyboard 対応).
+  // hover も従来通り、click は明示的に保持される (sticky モード).
+  const [stickyOpen, setStickyOpen] = useState(false);
+  const visible = open || stickyOpen;
+
   return (
     <div
       className="absolute top-2 right-2"
@@ -1556,14 +1605,28 @@ function ScoreSignalsBadge({
       onFocus={() => signalsJson && setOpen(true)}
       onBlur={() => setOpen(false)}
     >
-      <Badge
-        variant="secondary"
-        className={`text-[10px] font-mono ${signalsJson ? "cursor-help" : ""}`}
-        tabIndex={signalsJson ? 0 : -1}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (signalsJson) setStickyOpen((v) => !v);
+        }}
+        className={`block ${signalsJson ? "cursor-pointer" : "cursor-default"}`}
+        aria-expanded={visible}
+        aria-label={
+          signalsJson ? "スコア内訳を開閉" : `score ${score.toFixed(2)}`
+        }
       >
-        score {score.toFixed(2)}
-      </Badge>
-      {open && signals.length > 0 && (
+        <Badge
+          variant="secondary"
+          className="text-[10px] font-mono"
+          tabIndex={signalsJson ? 0 : -1}
+        >
+          score {score.toFixed(2)}
+        </Badge>
+      </button>
+      {visible && signals.length > 0 && (
         <div
           className="absolute top-full right-0 mt-1 z-30 w-72 p-3
                      bg-popover text-popover-foreground rounded-md shadow-xl

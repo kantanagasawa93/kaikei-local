@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
-import { Receipt, BookOpen, TrendingUp, TrendingDown, Download, AlertTriangle } from "lucide-react";
+import { Receipt, BookOpen, TrendingUp, TrendingDown, Download, AlertTriangle, FileSpreadsheet } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { Journal, JournalLine } from "@/types";
@@ -14,7 +14,9 @@ import {
   buildMonthlySummaryCsv,
   downloadCsv,
 } from "@/lib/journal-export";
+import { checkReadiness, type ReadinessReport } from "@/lib/etax/readiness";
 import { toast } from "@/lib/toast";
+import { CheckCircle2, AlertCircle } from "lucide-react";
 
 interface Stats {
   receiptCount: number;
@@ -46,12 +48,18 @@ export default function DashboardPage() {
   const [availableYears, setAvailableYears] = useState<number[]>([]);
   // Round 24 ㊟: 要確認の仕訳件数 (今年度)
   const [incompleteCount, setIncompleteCount] = useState(0);
+  // Round 25 ㊠: 確定申告期の準備状況
+  const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
 
   useEffect(() => {
     loadStats();
     loadRecentJournals();
     loadIncompleteCount();
     loadAvailableYears();
+    // Round 25 ㊠: 確定申告期の準備状況 (1/1〜3/15 のみ自動表示)
+    void checkReadiness().then((r) => {
+      if (r.inWindow) setReadiness(r);
+    });
   }, []);
 
   // chartYear が変わったら月次グラフ再ロード
@@ -325,6 +333,61 @@ export default function DashboardPage() {
         </StaggerItem>
       </StaggerContainer>
 
+      {/* Round 25 ㊠: 確定申告期 (1/1〜3/15) の準備状況カード */}
+      {readiness && (
+        <Card className="border-blue-300 bg-blue-50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileSpreadsheet className="h-4 w-4" />
+              確定申告 ({readiness.year} 年分) の準備状況
+              <span className="ml-auto text-sm font-normal text-blue-900">
+                {readiness.completionPct}% 完了
+                {readiness.blockers > 0 && (
+                  <span className="ml-2 text-red-700">
+                    ({readiness.blockers} 件 要対応)
+                  </span>
+                )}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5">
+            {readiness.checks.map((c) => {
+              const icon =
+                c.status === "ok" ? (
+                  <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0" />
+                ) : c.status === "warning" ? (
+                  <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0" />
+                );
+              const inner = (
+                <div className="flex items-start gap-2 text-sm py-1">
+                  {icon}
+                  <div className="flex-1">
+                    <p className="font-medium">{c.label}</p>
+                    <p className="text-xs text-muted-foreground">{c.detail}</p>
+                  </div>
+                  {c.href && <span className="text-blue-700 text-xs">→</span>}
+                </div>
+              );
+              return c.href ? (
+                <Link
+                  key={c.id}
+                  href={c.href}
+                  className="block hover:bg-blue-100/60 rounded px-1 -mx-1"
+                >
+                  {inner}
+                </Link>
+              ) : (
+                <div key={c.id} className="px-1 -mx-1">
+                  {inner}
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Round 24 ㊟: 要確認の仕訳ウィジェット (1 件以上ある時だけ表示) */}
       {incompleteCount > 0 && (
         <Link href="/journals?incomplete=1" className="block">
@@ -402,8 +465,12 @@ export default function DashboardPage() {
           <MonthlyBarChart
             data={monthly}
             onMonthClick={(month) => {
-              // ⓓ ドリルダウン: /journals?month=YYYY-MM
-              router.push(`/journals?month=${chartYear}-${month}`);
+              // Round 22 ⓓ ドリルダウン → Round 25 ⓒ で from/to レンジ化
+              const m = parseInt(month, 10);
+              const start = `${chartYear}-${month}-01`;
+              const lastDay = new Date(chartYear, m, 0).getDate();
+              const end = `${chartYear}-${month}-${String(lastDay).padStart(2, "0")}`;
+              router.push(`/journals?from=${start}&to=${end}`);
             }}
           />
         </CardContent>

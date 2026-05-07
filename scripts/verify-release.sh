@@ -167,6 +167,33 @@ else
 fi
 
 echo ""
+echo "==> 5. docs サイト (kantanagasawa93.github.io) の導線確認"
+# Round 25 ⓔ: install.html / index.html で DMG リンクが古いタグや 404 を指してないか
+# 最低限の検証として、ページが 200 で返り中身に latest/download や KAIKEI_LOCAL.dmg
+# が含まれているかを確認する。version 一致は手動確認 (LP は手動更新前提)。
+DOCS_BASE="https://kantanagasawa93.github.io/kaikei-local"
+for path in "/install.html" "/"; do
+  url="${DOCS_BASE}${path}"
+  status=$(curl -sILo /dev/null -w "%{http_code}" "$url" -L --max-time 30 || echo "000")
+  if [ "$status" = "200" ]; then
+    body=$(curl -fsSL --max-time 30 "$url" 2>/dev/null || echo "")
+    if echo "$body" | grep -q "KAIKEI_LOCAL.dmg\|releases/latest/download\|releases/download"; then
+      pass "${path} — ページ表示 + DMG リンクあり"
+    else
+      warn "${path} — 200 だが DMG リンクが見つからない (LP 更新忘れ?)"
+    fi
+  elif [ "$status" = "404" ]; then
+    if [ "$path" = "/" ]; then
+      fail "${path} → HTTP $status (LP が公開されていない)"
+    else
+      warn "${path} → HTTP 404 (このページは未公開)"
+    fi
+  else
+    warn "${path} → HTTP $status"
+  fi
+done
+
+echo ""
 echo "============================================================"
 if [ "$failures" -eq 0 ]; then
   printf "${PASS_COLOR}OK${RESET}: 致命エラー 0 件 / 警告 ${warnings} 件\n"

@@ -75,59 +75,71 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 25) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 26) 候補 — ユーザは「全部やって」希望 (10 個)
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊗ → ㊠ → ㊡ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
+推し優先順は ㊗ → ㊢ → ㊣ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
 
-ユーザの判断 / 操作を増やさない方向 (Round 22 のフィードバックに引き続き準拠)。
+ユーザの判断 / 操作を増やさない方向 (Round 22 以来の方針継続)。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (4 ラウンド持ち越し中)
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (5 ラウンド持ち越し中)
 - credentials 1 回入れたら `release.sh v0.3.0` で発火、updater bundle 同梱済
 
-### ㊠ 確定申告期に「準備状況」を勝手にチェック ★★★★★
-- 1/1〜3/15 にダッシュボードを開くと自動で「e-Tax 準備状況」カード表示
-- 仕訳件数 / 未仕訳の領収書 / issuer_settings 未設定 等を自動診断 + ✓/✗
-- 対象: dashboard/page.tsx に新 Card + lib/etax/readiness.ts (新規)
+### ㊢ 仕訳の「過去サジェスト」を partner 連動に格上げ ★★★★
+- Round 25 ㊡ は「過去 90 日の任意仕訳」だった。partner_id を選んだ瞬間、その partner の
+  過去仕訳のみフィルタリング表示する
+- 対象: src/app/(app)/journals/new/page.tsx の RecentJournals (現在の partners Map を活用)
 
-### ㊡ 仕訳画面に「過去の同じ取引先の仕訳」を提示 ★★★★
-- 仕訳の partner_id を選んだ瞬間、過去 90 日の同 partner 仕訳を 5 件サジェスト
-- ワンクリックで「内容コピー」(摘要・科目・金額) — 入力作業を激減
-- 対象: src/app/(app)/journals/new/page.tsx + journals/edit/page.tsx
+### ㊣ 取引先「未使用」の自動掃除提案 ★★★★
+- Round 25 ⓐ で usageMap=0 = 削除候補と判定済み。1 月に 1 回、起動時に
+  auto-learned & 使用 0 件 & 30 日以上経過 を集計し、「N 件削除しますか?」 toast
+- 対象: src/lib/photo-scanner.ts に近い場所 (新規 src/lib/partner-cleanup.ts)
+        + boot.tsx 起動時呼出
 
-### ⓐ 取引先一覧で auto-learned partner の「使用回数」を表示 ★★★
-- 何件の仕訳でその partner が使われてるかを Badge で表示
-- 0 件 = 一度も使われてない auto-learned → 削除候補
-- 対象: src/app/(app)/partners/page.tsx
+### ⓐ 仕訳の AI OCR 失敗を確定申告期に通知 ★★★
+- Round 25 ㊠ readiness で receipt_failed の件数も判定
+- 1/1〜3/15 の間に未解消の receipt_failed があれば readiness check に追加
+- 対象: src/lib/etax/readiness.ts に check 追加
 
-### ⓑ 受信箱の「破棄」タブで auto_dismissed_reason 別の件数 ★★★
-- Round 24 ⓖ で expired_30d フィルタを入れた。同様に reason='duplicate' /
-  'pattern' (過去類似) も件数バッジで分類表示
+### ⓑ 受信箱「破棄」の理由別フィルタ拡張 ★★★
+- Round 25 ⓑ で件数バッジは出した。期限切れ以外も個別フィルタできるように
+  (Badge クリックで「重複だけ」「過去類似だけ」)
 - 対象: src/app/(app)/inbox/page.tsx の dismissed タブ
 
-### ⓒ 月次グラフのドリルダウン先を範囲指定 ★★★
-- 棒クリック → /journals?from=YYYY-MM-01&to=YYYY-MM-31 (現状は month=YYYY-MM)
-- monthFilter とは別に from/to レンジで仕訳一覧をフィルタ
-- 対象: journals/page.tsx + dashboard MonthlyBarChart
+### ⓒ 月次グラフ tooltip に「平均 / 中央値」を追加 ★★★
+- 棒クリックで遷移は OK。hover 時のツールチップに「年間平均 ¥X」を併記
+- 対象: src/app/(app)/dashboard/page.tsx MonthlyBarChart
 
-### ⓓ 仕訳一覧の bulk select に「複数仕訳の合計を表示」 ★★
-- 複数選択中、ツールバーに「選択中合計: ¥1,234,567」を表示
-- 確定申告前の検算用途で便利
-- 対象: src/app/(app)/journals/page.tsx
+### ⓓ 仕訳の bulk delete (確認ダイアログ + Undo) ★★★
+- Round 22 ㊛ で bulk タグ追加は実装済。同 toolbar に bulk delete を加える
+- 削除後 60 秒は Undo 可能 (auto-journal.ts の reverse stack 流用)
+- 対象: src/app/(app)/journals/page.tsx + src/lib/auto-journal.ts
 
-### ⓔ release.sh の verify-release を docs サイトの導線まで確認 ★★
-- 現状は GitHub Release URL 200 のみ。kantanagasawa93.github.io/install.html
-  のスクリプト埋め込みも検証
+### ⓔ verify-release で docs サイトの version 文字列も検証 ★★
+- Round 25 ⓔ で docs URL 200 確認は OK。次は `body` 内の v0.X.Y 文字列が
+  リリースタグと一致するかチェック (古いバージョンが LP に残ってないか)
 - 対象: scripts/verify-release.sh
 
-### ⓕ 「破棄」した photo_inbox を 90 日経過で物理削除 ★★
-- dismissed 状態 + dismissed_at が 90 日前以前 → SQL DELETE + jpg 削除
-- ストレージ抑制目的、boot.tsx で 1 日 1 回 sweep
-- 対象: photo-scanner.ts に purgeOldDismissed() 追加
+### ⓕ 期限切れの photo_inbox 物理削除を「破棄タブの 件数バッジ」に反映 ★★
+- Round 25 ⓕ purgeOldDismissed が動いた直後に reason 別件数も再集計
+- 期限切れだけ大量削除されたあと「期限切れ 0 件」が見える
+- 対象: src/app/(app)/inbox/page.tsx の refresh で再ロード
 
-### ⓖ ScoreSignalsBadge をクリックでも開けるように (touch / a11y) ★★
-- 現状は hover のみ。click で toggle、focus で同様
-- 対象: src/app/(app)/inbox/page.tsx ScoreSignalsBadge
+### ⓖ updater のリトライ機構 ★★
+- 現状は失敗→ボタン押し直しのみ。check が transient エラーで 1 回失敗したら
+  10 秒後に静かに再試行 (1 回のみ)
+- 対象: src/lib/auto-updater.ts checkAutoUpdate
+
+### ✓ Round 25 で完了した項目 (履歴)
+- ㊠ 確定申告期 (1/1〜3/15) 準備状況カード (etax/readiness.ts + dashboard 統合)
+- ㊡ 過去 90 日の仕訳から複製サジェスト (journals/new に History Card)
+- ⓐ partner 一覧の使用回数 Badge (0 = 未使用、>0 = 使用 N)
+- ⓑ 破棄タブで reason 別件数バッジ (期限切れ/重複/過去類似/手動)
+- ⓒ 月次グラフドリルダウンを from/to レンジに (URL クエリ対応)
+- ⓓ 仕訳 bulk toolbar に借方/貸方合計表示
+- ⓔ verify-release.sh で docs サイト導線確認 (DMG リンク含有チェック)
+- ⓕ 90 日超 dismissed の物理削除 (purgeOldDismissed in boot.tsx)
+- ⓖ ScoreSignalsBadge を click でもトグル (touch/keyboard 対応)
 
 ### ✓ Round 24 で完了した項目 (履歴)
 - ㊞ 取引先名 → 勘定科目の自動補完 (suggestAccountForVendor)
