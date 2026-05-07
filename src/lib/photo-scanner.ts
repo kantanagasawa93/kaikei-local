@@ -93,6 +93,119 @@ export async function setLastScanUnix(unix: number): Promise<void> {
   }
 }
 
+/** Round 23: app_settings 共通 upsert ヘルパ */
+async function upsertSetting(id: string, value: string): Promise<void> {
+  const updated_at = new Date().toISOString();
+  const { data } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", id)
+    .single();
+  if (data) {
+    await db.from("app_settings").update({ value, updated_at }).eq("id", id);
+  } else {
+    await db.from("app_settings").insert({ id, value, updated_at });
+  }
+}
+
+const SETTING_LAST_EXPIRE_SWEEP = "inbox_last_expire_sweep_unix";
+const SETTING_LAST_SCAN_SUMMARY = "last_scan_summary";
+
+/**
+ * Round 23 ㊜: 30 日経過 + 一度も hover/操作されていない candidate を
+ * 静かに dismissed へ移す。
+ *
+ * - 起動時に呼ぶ (boot.tsx 想定) が、24 時間に 1 回しか実行しない
+ * - state='candidate' AND last_viewed_at IS NULL AND taken_at < 30日前 が対象
+ * - auto_dismissed_reason に { reason: "expired_30d", ... } を JSON で残す
+ *   (受信箱「破棄」タブから後で確認できる)
+ *
+ * UI には何も出さない (= ユーザに作業させない)。期限切れで静かに片付くだけ。
+ */
+export async function expireOldCandidates(): Promise<{ swept: number }> {
+  // 1 日 1 回までに抑制
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", SETTING_LAST_EXPIRE_SWEEP)
+      .single();
+    const last = parseInt((data as { value?: string } | null)?.value ?? "0", 10);
+    if (now - last < 24 * 3600) return { swept: 0 };
+  } catch {
+    // 未設定なら走らせる
+  }
+
+  const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const { data: targets } = await db
+    .from("photo_inbox")
+    .select("id, taken_at, last_viewed_at")
+    .eq("state", "candidate")
+    .lt("taken_at", cutoff);
+
+  // last_viewed_at IS NULL は localDb の query builder では表現できないので JS で
+  const rows = (
+    (targets as
+      | { id: string; taken_at: string; last_viewed_at: string | null }[]
+      | null) ?? []
+  ).filter((r) => !r.last_viewed_at);
+  let swept = 0;
+  for (const row of rows) {
+    const reason = JSON.stringify({
+      reason: "expired_30d",
+      swept_at: new Date().toISOString(),
+      taken_at: row.taken_at,
+    });
+    try {
+      await db
+        .from("photo_inbox")
+        .update({ state: "dismissed", auto_dismissed_reason: reason })
+        .eq("id", row.id);
+      swept++;
+    } catch (e) {
+      console.warn(`expireOldCandidates: ${row.id} failed:`, e);
+    }
+  }
+
+  await upsertSetting(SETTING_LAST_EXPIRE_SWEEP, String(now));
+  if (swept > 0) {
+    console.info(
+      `[inbox] 30 日経過の未閲覧 candidate ${swept} 件を自動 dismissed に移動`,
+    );
+  }
+  return { swept };
+}
+
+/** Round 23 ⓖ: 受信箱上部の「直近スキャン」サマリー用 */
+export interface LastScanSummary {
+  scanned: number;
+  newPhotos: number;
+  receiptCount: number;
+  skipped: number;
+  duplicate: number;
+  finished_at: string;
+}
+
+export async function getLastScanSummary(): Promise<LastScanSummary | null> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", SETTING_LAST_SCAN_SUMMARY)
+      .single();
+    const raw = (data as { value?: string } | null)?.value;
+    if (!raw) return null;
+    return JSON.parse(raw) as LastScanSummary;
+  } catch {
+    return null;
+  }
+}
+
+async function saveLastScanSummary(s: LastScanSummary): Promise<void> {
+  await upsertSetting(SETTING_LAST_SCAN_SUMMARY, JSON.stringify(s));
+}
+
 export interface ScanResult {
   scanned: number;
   newPhotos: number;
@@ -106,6 +219,9 @@ export interface ScanResult {
    *  - JS 側で OCR 空 + score=0 で弾いた数
    *  の合算 (透明性のため scan 結果 toast に表示)。 */
   skipped?: number;
+  /** Round 23 ⓐ: OCR テキスト先頭一致で「既に取り込み済みの receipt と重複」と
+   *  判定して dismissed にした件数。 */
+  duplicate?: number;
 }
 
 
@@ -207,6 +323,7 @@ export async function scanNow(
   let receiptCount = 0;
   let autoDismissed = 0;
   let skipped = 0;
+  let duplicateCount = 0;
   let processed = 0;
   let cancelled = false;
   for (const photo of scanned) {
@@ -284,6 +401,44 @@ export async function scanNow(
             matched_past_snippet: reason.matchedPastSnippet,
             decided_at: new Date().toISOString(),
           });
+        }
+      }
+
+      // Round 23 ⓐ: 重複領収書の自動統合.
+      // OCR テキストの先頭 60 文字が、過去 90 日以内の receipt / imported と
+      // 一致したら「同じレシートを 2 回撮影 / 取込」とみなして dismissed。
+      // 文字数が少ないとノイズになるので 30 文字以上で初めてチェックする。
+      let duplicateOf: string | null = null;
+      if (
+        ocrText &&
+        ocrText.trim().length >= 30 &&
+        initialState !== "dismissed"
+      ) {
+        const fp = ocrText.trim().slice(0, 60).replace(/[%_]/g, " ");
+        const cutoff90d = new Date(
+          Date.now() - 90 * 24 * 3600 * 1000,
+        ).toISOString();
+        try {
+          const { data: dupes } = await db
+            .from("photo_inbox")
+            .select("id, state")
+            .in("state", ["receipt", "imported"])
+            .gte("taken_at", cutoff90d)
+            .like("ocr_text", `${fp}%`)
+            .limit(1);
+          const arr = (dupes as { id: string; state: string }[] | null) ?? [];
+          if (arr.length > 0) {
+            duplicateOf = arr[0].id;
+            initialState = "dismissed";
+            autoDismissedReason = JSON.stringify({
+              reason: "duplicate",
+              duplicate_of: duplicateOf,
+              decided_at: new Date().toISOString(),
+            });
+            duplicateCount++;
+          }
+        } catch (e) {
+          console.warn(`dedupe check failed for ${photo.asset_id}:`, e);
         }
       }
 
@@ -406,6 +561,21 @@ export async function scanNow(
     // 「user_cancelled」を errors の先頭に積んで呼出側で判別可能に
     errors.unshift("user_cancelled");
   }
+
+  // Round 23 ⓖ: 受信箱に表示する「直近スキャン」サマリーを app_settings に保存
+  try {
+    await saveLastScanSummary({
+      scanned: scanned.length,
+      newPhotos,
+      receiptCount,
+      skipped,
+      duplicate: duplicateCount,
+      finished_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn("saveLastScanSummary failed:", e);
+  }
+
   return {
     scanned: scanned.length,
     newPhotos,
@@ -413,6 +583,7 @@ export async function scanNow(
     errors,
     autoDismissed,
     skipped,
+    duplicate: duplicateCount,
   };
 }
 

@@ -75,62 +75,66 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 23) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 24) 候補 — ユーザは「全部やって」希望 (10 個)
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊗ → ㊜ → ㊝ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
+推し優先順は ㊗ → ㊞ → ㊟ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (Round 21-22 で持ち越し)
-- 手元で `scripts/release-setup-credentials.sh` → `scripts/release.sh v0.3.0`
-- updater bundle (latest.json + .app.tar.gz + .sig) は release.sh 側で自動同梱
-- Apple credentials が用意できた瞬間に発火可能
+ユーザの判断 / 操作を増やさない方向に偏重。
 
-### ㊜ tax_classes / accounts マスタ画面を実装 ★★★★
-- 現状 DB には入っているが UI から閲覧/編集できない
-- 対象: src/app/(app)/masters/ 配下に新規 page (税区分 + 勘定科目)
-- commit サイズ: 中 (~200 行)
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (持ち越し中)
+- credentials を入れた瞬間に `release.sh v0.3.0` で発火可能 (3〜5 ラウンド持ち越し)
 
-### ㊝ 仕訳の検索バー (摘要 + 金額レンジ) ★★★★
-- 仕訳が増えると monthFilter だけでは足りない。摘要 LIKE + 金額の上限/下限
-- 対象: journals/page.tsx (既存 monthFilter / tagFilter と並列化)
-- commit サイズ: 中 (~150 行)
+### ㊞ 仕訳の自動補完: 取引先名 → 勘定科目 ★★★★
+- partners.default_account_code を仕訳画面で活用。摘要に partner.name が含まれてたら
+  default_account_code を自動セット (ユーザは確認だけ)
+- 対象: src/lib/auto-journal.ts の suggestAccount + journals/new + edit
 
-### ⓐ 月次グラフに「年度切替」セレクタ ★★★
-- 現状は今年度のみ。過去年度をプルダウンで選んで月次推移を比較
-- 対象: dashboard/page.tsx (loadMonthly に year 引数)
-- commit サイズ: 小 (~80 行)
+### ㊟ ダッシュボードに「要確認の仕訳」ウィジェット ★★★★
+- Round 23 ⓓ の判定ロジックを再利用。ダッシュボードに「要確認 N 件」のカードを
+  出してクリックで /journals?incomplete=1 へ遷移
+- 対象: dashboard/page.tsx + journals/page.tsx の URL クエリ受理拡張
 
-### ⓑ 領収書一覧の bulk delete + bulk export ★★★
-- Round 22 ㊛ で journals に bulk select を入れた。同パターンを receipts に
+### ⓐ 重複領収書統合の対象に Vision OCR 結果も含める ★★★
+- 現状 Round 23 ⓐ は ocr_text 先頭一致のみ。同一画像 (file_hash) の比較も追加
+- 対象: photo-scanner.ts に SHA256 計算 (Tauri command 経由)
+
+### ⓑ 領収書一覧 bulk delete + bulk export ★★★
+- Round 22 ㊛ パターンを receipts に。CSV エクスポートも同梱
 - 対象: src/app/(app)/receipts/page.tsx
-- commit サイズ: 中 (~120 行)
 
-### ⓒ ScoreSignalsBadge をクリックで詳細モーダル化 ★★
-- Round 22 ⓖ の popover は hover 限定。タッチ機種・キーボードのみのユーザは
-  click でも開けるように
-- 対象: src/app/(app)/inbox/page.tsx ScoreSignalsBadge
-- commit サイズ: 小 (~50 行)
+### ⓒ updater 自動チェックを「設定」画面から手動実行 ★★
+- 現状は起動 4 秒後の自動チェックのみ。「今すぐ確認」「最新の状態か診断」ボタン
+- 対象: settings/page.tsx + auto-updater.ts
 
-### ⓓ partners 一括承認時にメモを残す ★★
-- Round 22 ⓑ で承認時に notes から [auto-learned] 行を消すが、「いつ承認したか」
-  が分からない。承認日時を notes に追記する
-- 対象: src/app/(app)/partners/page.tsx の bulkApprove
-- commit サイズ: 小 (~30 行)
+### ⓓ verify-app.sh smoke-report に migrations 状態を追加 ★★
+- migrations_status の v1〜v9 出力をレポートに含める
+- 対象: scripts/verify-app.sh
 
-### ⓔ 年度サマリ PDF にロゴ + 発行者情報を入れる ★★★
-- issuer_settings (Round 2 ㊁) を読んで PDF ヘッダに屋号 + 住所 + インボイス番号
-- 対象: src/lib/pdf-export.ts の exportFiscalYearSummaryPdf
-- commit サイズ: 中 (~100 行)
+### ⓔ 月次グラフに「年度切替」セレクタ ★★★
+- 過去年度をプルダウンで選んで比較
+- 対象: dashboard/page.tsx (loadMonthly に year 引数)
 
-### ⓕ updater 自動チェックを「設定」画面から手動実行できるように ★★
-- 現状は起動 4 秒後の自動チェックのみ。設定画面で「今すぐ確認」ボタン
-- 対象: src/app/(app)/settings/page.tsx + auto-updater.ts
-- commit サイズ: 小 (~60 行)
+### ⓕ tax_classes / accounts マスタ画面 ★★★
+- DB には入ってるが UI 未実装。閲覧 + ユーザ追加 + デフォルト変更
+- 対象: src/app/(app)/masters/{tax-classes,accounts}/page.tsx (新規)
 
-### ⓖ verify-app.sh smoke-report に migrations 状態を追加 ★★
-- 現状は DB 内容のダンプのみ。migrations_status の出力 (v1〜v9) を含める
-- 対象: scripts/verify-app.sh の cmd_smoke_report
-- commit サイズ: 小 (~40 行)
+### ⓖ 受信箱「破棄」タブで「expired_30d」だけフィルタ ★★
+- Round 23 ㊜ で auto_dismissed_reason に "expired_30d" を入れた。
+  「期限切れだけ復活したい」需要のために理由別フィルタ
+- 対象: src/app/(app)/inbox/page.tsx
+
+### ✓ Round 23 で完了した項目 (履歴)
+- ㊜ 30 日経過の未閲覧 candidate を自動 dismissed (boot.tsx で 1 日 1 回 sweep)
+- ㊝ AI OCR 失敗の自動リトライ (network/server bucket だけ 1 回)
+- ⓐ 重複領収書の自動統合 (ocr_text 先頭 60 文字一致 + 過去 90 日)
+- ⓑ 月次リマインダー (LaunchAgent 経由、月末/2月15日/3月10日)
+- ⓒ 仕訳の検索バー (摘要 + 金額レンジ)
+- ⓓ 不完全な仕訳の amber Badge + 「要確認のみ」フィルタ
+- ⓔ 年度サマリ PDF に issuer_settings (屋号/owner/住所/インボイス番号)
+- ⓕ 連写バーストの代表のみ取り込み (representsBurst)
+- ⓖ 受信箱上部に直近スキャンサマリーバー (取込/除外/重複統合 + 設定リンク)
+- 写真スキャン厳格フィルタ (常時 ON、設定トグル無し) — Round 22.5 で対応済み
 
 ### ✓ Round 22 で完了した項目 (履歴)
 - ㊚ updater 失敗時 404=未公開 を error 扱いしない (auto-updater + UpdateBanner 二重ガード)

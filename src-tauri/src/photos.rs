@@ -67,6 +67,8 @@ const PH_SUBTYPE_PHOTO_SCREENSHOT: u64 = 1 << 2;
 #[allow(dead_code)]
 const PH_SUBTYPE_PHOTO_LIVE: u64 = 1 << 3;
 const PH_SUBTYPE_PHOTO_DEPTH_EFFECT: u64 = 1 << 4;
+/// Round 23 ⓕ: バースト撮影の subtype フラグ
+const PH_SUBTYPE_PHOTO_BURST: u64 = 1 << 5;
 /// 「領収書ではあり得ない」subtype のビット和
 const PH_SUBTYPE_NON_RECEIPT_MASK: u64 =
     PH_SUBTYPE_PHOTO_SCREENSHOT
@@ -263,6 +265,16 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
             let subtypes: u64 = msg_send![asset, mediaSubtypes];
             if (subtypes & PH_SUBTYPE_NON_RECEIPT_MASK) != 0 {
                 continue;
+            }
+
+            // Round 23 ⓕ: 連写バーストの場合、代表 (representsBurst=YES) 以外は skip。
+            // バーストは典型的には数十枚同一シーンが入って来る。レシートをバースト撮影
+            // するケースは稀だが、念のため代表 1 枚は通して候補化する。
+            if (subtypes & PH_SUBTYPE_PHOTO_BURST) != 0 {
+                let represents_burst: BOOL = msg_send![asset, representsBurst];
+                if !represents_burst {
+                    continue;
+                }
             }
 
             let local_id_ns: id = msg_send![asset, localIdentifier];
