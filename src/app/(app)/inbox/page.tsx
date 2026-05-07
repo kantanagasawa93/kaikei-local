@@ -75,6 +75,8 @@ export default function InboxPage() {
   // Round 23 ⓖ: 直近スキャン結果のサマリーバー
   const [lastScan, setLastScan] = useState<LastScanSummary | null>(null);
   const [filter, setFilter] = useState<InboxState | "all">("candidate");
+  // Round 24 ⓖ: 破棄タブで「expired_30d 自動破棄のみ」フィルタ
+  const [expiredOnly, setExpiredOnly] = useState(false);
   const [, setAutoMode] = useState(false);
   const [journalizing, setJournalizing] = useState(false);
   const [progress, setProgress] = useState<{
@@ -1018,18 +1020,51 @@ export default function InboxPage() {
         </div>
       )}
 
-      {items.length === 0 ? (
+      {/* Round 24 ⓖ: 破棄タブだけ「期限切れ自動破棄のみ」フィルタを出す */}
+      {filter === "dismissed" && (
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={expiredOnly}
+              onChange={(e) => setExpiredOnly(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            30 日経過で自動破棄されたもののみ表示
+          </label>
+        </div>
+      )}
+
+      {(() => {
+        // Round 24 ⓖ: dismissed + expiredOnly のときに auto_dismissed_reason を見て絞り込む
+        const visible =
+          filter === "dismissed" && expiredOnly
+            ? items.filter((it) => {
+                if (!it.auto_dismissed_reason) return false;
+                try {
+                  const parsed = JSON.parse(it.auto_dismissed_reason) as {
+                    reason?: string;
+                  };
+                  return parsed.reason === "expired_30d";
+                } catch {
+                  return false;
+                }
+              })
+            : items;
+        return visible.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
             <Camera className="h-10 w-10 mx-auto mb-3 opacity-30" />
             {filter === "candidate"
               ? "未判定の写真はありません。「今すぐスキャン」を押すと最近の写真を取り込みます。"
-              : "該当する写真はありません。"}
+              : filter === "dismissed" && expiredOnly
+                ? "30 日経過で自動破棄された写真はありません。"
+                : "該当する写真はありません。"}
           </CardContent>
         </Card>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {items.map((it, idx) => (
+          {visible.map((it, idx) => (
             <InboxCard
               key={it.id}
               row={it}
@@ -1072,7 +1107,8 @@ export default function InboxPage() {
             />
           ))}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

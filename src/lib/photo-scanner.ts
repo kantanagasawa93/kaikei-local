@@ -404,12 +404,56 @@ export async function scanNow(
         }
       }
 
-      // Round 23 ⓐ: 重複領収書の自動統合.
-      // OCR テキストの先頭 60 文字が、過去 90 日以内の receipt / imported と
-      // 一致したら「同じレシートを 2 回撮影 / 取込」とみなして dismissed。
-      // 文字数が少ないとノイズになるので 30 文字以上で初めてチェックする。
+      // Round 23 ⓐ + Round 24 ⓐ: 重複領収書の自動統合.
+      //   1. file_hash (SHA-256) が既存 receipts.file_hash と完全一致 → 確実に重複
+      //   2. OCR テキスト先頭 60 文字が photo_inbox.ocr_text と一致 (過去 90 日)
+      //      → 同じレシートを 2 回撮ったケース
+      // どちらかにヒットすれば dismissed (auto_dismissed_reason に reason 記録)。
       let duplicateOf: string | null = null;
+      let duplicateMatchKind: "file_hash" | "ocr_text" | null = null;
+
+      // 1) file_hash 比較 — Web Crypto API で SHA-256 計算 (~50ms / 5MB)
+      if (initialState !== "dismissed") {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const bytes = await invoke<number[] | Uint8Array>("read_image_file", {
+            path: photo.file_path,
+          });
+          const data =
+            bytes instanceof Uint8Array
+              ? bytes
+              : new Uint8Array(bytes as number[]);
+          // SHA-256 計算 — TS の BufferSource は ArrayBuffer/TypedArray<ArrayBuffer> を要求
+          const buf = await crypto.subtle.digest(
+            "SHA-256",
+            data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength,
+            ) as ArrayBuffer,
+          );
+          const hash = Array.from(new Uint8Array(buf))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          // 既存 receipts.file_hash と一致するものを検索
+          const { data: existRcpt } = await db
+            .from("receipts")
+            .select("id")
+            .eq("file_hash", hash)
+            .limit(1);
+          const arr = (existRcpt as { id: string }[] | null) ?? [];
+          if (arr.length > 0) {
+            duplicateOf = arr[0].id;
+            duplicateMatchKind = "file_hash";
+          }
+        } catch (e) {
+          // hash 計算失敗 (file_path が読めない等) は致命的ではない
+          console.warn(`file_hash dedupe check failed for ${photo.asset_id}:`, e);
+        }
+      }
+
+      // 2) OCR テキスト先頭一致 (file_hash で見つからなかった場合)
       if (
+        !duplicateOf &&
         ocrText &&
         ocrText.trim().length >= 30 &&
         initialState !== "dismissed"
@@ -429,17 +473,22 @@ export async function scanNow(
           const arr = (dupes as { id: string; state: string }[] | null) ?? [];
           if (arr.length > 0) {
             duplicateOf = arr[0].id;
-            initialState = "dismissed";
-            autoDismissedReason = JSON.stringify({
-              reason: "duplicate",
-              duplicate_of: duplicateOf,
-              decided_at: new Date().toISOString(),
-            });
-            duplicateCount++;
+            duplicateMatchKind = "ocr_text";
           }
         } catch (e) {
-          console.warn(`dedupe check failed for ${photo.asset_id}:`, e);
+          console.warn(`ocr_text dedupe check failed for ${photo.asset_id}:`, e);
         }
+      }
+
+      if (duplicateOf) {
+        initialState = "dismissed";
+        autoDismissedReason = JSON.stringify({
+          reason: "duplicate",
+          duplicate_of: duplicateOf,
+          match_kind: duplicateMatchKind,
+          decided_at: new Date().toISOString(),
+        });
+        duplicateCount++;
       }
 
       // Round 23: OCR 空 + classifier.score == 0 のものは

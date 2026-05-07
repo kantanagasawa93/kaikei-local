@@ -75,54 +75,70 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 24) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 25) 候補 — ユーザは「全部やって」希望 (10 個)
 
 新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊗ → ㊞ → ㊟ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
+推し優先順は ㊗ → ㊠ → ㊡ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
 
-ユーザの判断 / 操作を増やさない方向に偏重。
+ユーザの判断 / 操作を増やさない方向 (Round 22 のフィードバックに引き続き準拠)。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (持ち越し中)
-- credentials を入れた瞬間に `release.sh v0.3.0` で発火可能 (3〜5 ラウンド持ち越し)
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (4 ラウンド持ち越し中)
+- credentials 1 回入れたら `release.sh v0.3.0` で発火、updater bundle 同梱済
 
-### ㊞ 仕訳の自動補完: 取引先名 → 勘定科目 ★★★★
-- partners.default_account_code を仕訳画面で活用。摘要に partner.name が含まれてたら
-  default_account_code を自動セット (ユーザは確認だけ)
-- 対象: src/lib/auto-journal.ts の suggestAccount + journals/new + edit
+### ㊠ 確定申告期に「準備状況」を勝手にチェック ★★★★★
+- 1/1〜3/15 にダッシュボードを開くと自動で「e-Tax 準備状況」カード表示
+- 仕訳件数 / 未仕訳の領収書 / issuer_settings 未設定 等を自動診断 + ✓/✗
+- 対象: dashboard/page.tsx に新 Card + lib/etax/readiness.ts (新規)
 
-### ㊟ ダッシュボードに「要確認の仕訳」ウィジェット ★★★★
-- Round 23 ⓓ の判定ロジックを再利用。ダッシュボードに「要確認 N 件」のカードを
-  出してクリックで /journals?incomplete=1 へ遷移
-- 対象: dashboard/page.tsx + journals/page.tsx の URL クエリ受理拡張
+### ㊡ 仕訳画面に「過去の同じ取引先の仕訳」を提示 ★★★★
+- 仕訳の partner_id を選んだ瞬間、過去 90 日の同 partner 仕訳を 5 件サジェスト
+- ワンクリックで「内容コピー」(摘要・科目・金額) — 入力作業を激減
+- 対象: src/app/(app)/journals/new/page.tsx + journals/edit/page.tsx
 
-### ⓐ 重複領収書統合の対象に Vision OCR 結果も含める ★★★
-- 現状 Round 23 ⓐ は ocr_text 先頭一致のみ。同一画像 (file_hash) の比較も追加
-- 対象: photo-scanner.ts に SHA256 計算 (Tauri command 経由)
+### ⓐ 取引先一覧で auto-learned partner の「使用回数」を表示 ★★★
+- 何件の仕訳でその partner が使われてるかを Badge で表示
+- 0 件 = 一度も使われてない auto-learned → 削除候補
+- 対象: src/app/(app)/partners/page.tsx
 
-### ⓑ 領収書一覧 bulk delete + bulk export ★★★
-- Round 22 ㊛ パターンを receipts に。CSV エクスポートも同梱
-- 対象: src/app/(app)/receipts/page.tsx
+### ⓑ 受信箱の「破棄」タブで auto_dismissed_reason 別の件数 ★★★
+- Round 24 ⓖ で expired_30d フィルタを入れた。同様に reason='duplicate' /
+  'pattern' (過去類似) も件数バッジで分類表示
+- 対象: src/app/(app)/inbox/page.tsx の dismissed タブ
 
-### ⓒ updater 自動チェックを「設定」画面から手動実行 ★★
-- 現状は起動 4 秒後の自動チェックのみ。「今すぐ確認」「最新の状態か診断」ボタン
-- 対象: settings/page.tsx + auto-updater.ts
+### ⓒ 月次グラフのドリルダウン先を範囲指定 ★★★
+- 棒クリック → /journals?from=YYYY-MM-01&to=YYYY-MM-31 (現状は month=YYYY-MM)
+- monthFilter とは別に from/to レンジで仕訳一覧をフィルタ
+- 対象: journals/page.tsx + dashboard MonthlyBarChart
 
-### ⓓ verify-app.sh smoke-report に migrations 状態を追加 ★★
-- migrations_status の v1〜v9 出力をレポートに含める
-- 対象: scripts/verify-app.sh
+### ⓓ 仕訳一覧の bulk select に「複数仕訳の合計を表示」 ★★
+- 複数選択中、ツールバーに「選択中合計: ¥1,234,567」を表示
+- 確定申告前の検算用途で便利
+- 対象: src/app/(app)/journals/page.tsx
 
-### ⓔ 月次グラフに「年度切替」セレクタ ★★★
-- 過去年度をプルダウンで選んで比較
-- 対象: dashboard/page.tsx (loadMonthly に year 引数)
+### ⓔ release.sh の verify-release を docs サイトの導線まで確認 ★★
+- 現状は GitHub Release URL 200 のみ。kantanagasawa93.github.io/install.html
+  のスクリプト埋め込みも検証
+- 対象: scripts/verify-release.sh
 
-### ⓕ tax_classes / accounts マスタ画面 ★★★
-- DB には入ってるが UI 未実装。閲覧 + ユーザ追加 + デフォルト変更
-- 対象: src/app/(app)/masters/{tax-classes,accounts}/page.tsx (新規)
+### ⓕ 「破棄」した photo_inbox を 90 日経過で物理削除 ★★
+- dismissed 状態 + dismissed_at が 90 日前以前 → SQL DELETE + jpg 削除
+- ストレージ抑制目的、boot.tsx で 1 日 1 回 sweep
+- 対象: photo-scanner.ts に purgeOldDismissed() 追加
 
-### ⓖ 受信箱「破棄」タブで「expired_30d」だけフィルタ ★★
-- Round 23 ㊜ で auto_dismissed_reason に "expired_30d" を入れた。
-  「期限切れだけ復活したい」需要のために理由別フィルタ
-- 対象: src/app/(app)/inbox/page.tsx
+### ⓖ ScoreSignalsBadge をクリックでも開けるように (touch / a11y) ★★
+- 現状は hover のみ。click で toggle、focus で同様
+- 対象: src/app/(app)/inbox/page.tsx ScoreSignalsBadge
+
+### ✓ Round 24 で完了した項目 (履歴)
+- ㊞ 取引先名 → 勘定科目の自動補完 (suggestAccountForVendor)
+- ㊟ ダッシュ「要確認の仕訳」ウィジェット (amber Card → /journals?incomplete=1)
+- ⓐ 重複検出に file_hash (SHA-256) を追加 (file_hash → ocr_text → なし の順)
+- ⓑ 領収書一覧 bulk delete + CSV export
+- ⓒ updater「今すぐ確認」ボタン (UpdaterCheckCard in 設定)
+- ⓓ smoke-report に _sqlx_migrations 状態を追加
+- ⓔ 月次グラフ年度切替セレクタ (chartYear state + availableYears)
+- ⓕ tax_classes / accounts マスタ画面 + マスタ index ページ
+- ⓖ 受信箱「破棄」タブで expired_30d フィルタ
 
 ### ✓ Round 23 で完了した項目 (履歴)
 - ㊜ 30 日経過の未閲覧 candidate を自動 dismissed (boot.tsx で 1 日 1 回 sweep)

@@ -20,7 +20,7 @@
 
 import { db } from "@/lib/localDb";
 import { ocrWithClaude, getApiKey, hasAiOcrConsent } from "@/lib/ai-ocr";
-import { suggestAccount } from "@/lib/accounts";
+import { suggestAccount, suggestAccountForVendor } from "@/lib/accounts";
 import type { OcrResult } from "@/types";
 
 const BATCH_SIZE = 100;
@@ -310,9 +310,13 @@ export async function autoJournalizeOne(
 
   // receipts 行
   const receiptId = crypto.randomUUID();
-  const suggested = ocr.vendor_name
-    ? suggestAccount(`${ocr.vendor_name} ${ocr.raw_text || ""}`)
-    : null;
+  // Round 24 ㊞: partners.default_account_code を優先 (ユーザが取引先ごとに
+  // 決めた既定科目があればそれを使う)。なければ既存のキーワード抽出にフォール
+  // バック。Claude OCR が suggested_account_* を返してた場合はさらに優先する。
+  const suggested = await suggestAccountForVendor(
+    ocr.vendor_name,
+    ocr.raw_text || "",
+  );
   const accountCode = ocr.suggested_account_code || suggested?.code || "699";
   const accountName = ocr.suggested_account_name || suggested?.name || "雑費";
 
