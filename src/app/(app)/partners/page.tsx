@@ -66,10 +66,38 @@ export default function PartnersPage() {
   // Round 22 ⓑ: auto-learned のみ表示するフィルタ + bulk select
   const [autoOnly, setAutoOnly] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Round 25 ⓐ: partner_id → 使用件数 (receipts + journal_lines の合算)
+  const [usageMap, setUsageMap] = useState<Record<string, number>>({});
 
   useEffect(() => {
     load();
+    void loadUsage();
   }, []);
+
+  async function loadUsage() {
+    const map: Record<string, number> = {};
+    try {
+      const { data: rec } = await supabase
+        .from("receipts")
+        .select("partner_id");
+      for (const r of (rec as { partner_id: string | null }[] | null) ?? []) {
+        if (r.partner_id) {
+          map[r.partner_id] = (map[r.partner_id] ?? 0) + 1;
+        }
+      }
+      const { data: jl } = await supabase
+        .from("journal_lines")
+        .select("partner_id");
+      for (const r of (jl as { partner_id: string | null }[] | null) ?? []) {
+        if (r.partner_id) {
+          map[r.partner_id] = (map[r.partner_id] ?? 0) + 1;
+        }
+      }
+    } catch {
+      /* DB 失敗は表示なしで続行 */
+    }
+    setUsageMap(map);
+  }
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -343,6 +371,30 @@ export default function PartnersPage() {
                               auto-learned
                             </Badge>
                           )}
+                          {/* Round 25 ⓐ: 使用回数 Badge (0 回 = 削除候補) */}
+                          {(() => {
+                            const count = usageMap[p.id] ?? 0;
+                            if (count === 0) {
+                              return (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] bg-red-50 border-red-200 text-red-700"
+                                  title="一度も仕訳・領収書で使われていません — 削除候補"
+                                >
+                                  未使用
+                                </Badge>
+                              );
+                            }
+                            return (
+                              <Badge
+                                variant="secondary"
+                                className="text-[10px]"
+                                title="紐付いている仕訳行 + 領収書の合計件数"
+                              >
+                                使用 {count}
+                              </Badge>
+                            );
+                          })()}
                         </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">

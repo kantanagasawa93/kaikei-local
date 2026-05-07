@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { installErrorReporter } from "@/lib/error-reporter";
 import { runAutoBackup } from "@/lib/auto-backup";
 import { checkForUpdate } from "@/lib/update-check";
-import { expireOldCandidates } from "@/lib/photo-scanner";
+import { expireOldCandidates, purgeOldDismissed } from "@/lib/photo-scanner";
 
 /**
  * 起動時の1回限りのセットアップ。
@@ -26,6 +26,13 @@ export function Boot() {
         console.warn("expireOldCandidates failed:", e),
       );
     }, 8_000);
+    // Round 25 ⓕ: 90 日経過の dismissed を物理削除 (jpg + DB 行)
+    // (1 日 1 回まで、UI には何も出さない、ストレージ抑制目的)
+    setTimeout(() => {
+      purgeOldDismissed().catch((e) =>
+        console.warn("purgeOldDismissed failed:", e),
+      );
+    }, 12_000);
   }, []);
   return null;
 }
