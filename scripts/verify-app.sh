@@ -986,7 +986,7 @@ cmd_smoke_report() {
     shot_logs=$(cmd_ui_screenshot "/tmp/kaikei-verify-${ts}-ai-ocr-log.png" 2>/dev/null) || shot_logs=""
   fi
 
-  local scan_json inbox_json log_lines app_errors
+  local scan_json inbox_json log_lines app_errors migrations_status
   if [ -n "${NO_GUI:-}" ]; then
     scan_json='{"skipped":"NO_GUI=1 のため simulate-scan は実行しない"}'
   else
@@ -996,6 +996,20 @@ cmd_smoke_report() {
   log_lines=$(cmd_tail_log 20 2>/dev/null || true)
   # ㊘ Round 8: アプリ本体ログから WARN/ERR 行のみを 30 行抽出
   app_errors=$(ERRORS_ONLY=1 cmd_app_log 30 2>/dev/null || true)
+
+  # Round 24 ⓓ: _sqlx_migrations の現在状態 (DB の v いくつまで適用されてるか)
+  # sqlite3 で直接読む。GUI 起動なしでも DB ファイルがあれば取れる。
+  local db_path="$HOME/Library/Application Support/dev.kaikei.app/kaikei.db"
+  if [ -f "$db_path" ] && command -v sqlite3 >/dev/null 2>&1; then
+    migrations_status=$(sqlite3 -separator '|' "$db_path" \
+      "SELECT version, description, success FROM _sqlx_migrations ORDER BY version DESC;" \
+      2>/dev/null | awk -F'|' '{
+        ok = ($3 == "1") ? "✓" : "✗"
+        printf "  v%-2s %s  %s\n", $1, ok, $2
+      }' || echo "(取得失敗)")
+  else
+    migrations_status="(sqlite3 / DB 不在)"
+  fi
   # ㉫ Round 12: 自動破棄理由 (auto_dismissed_reason) を集計してパターン上位を表示
   local autodismiss_summary
   autodismiss_summary=$(echo "$inbox_json" | python3 -c "
@@ -1057,6 +1071,12 @@ for k in sorted(buckets):
     echo ""
     echo '```json'
     echo "$scan_json"
+    echo '```'
+    echo ""
+    echo "## DB マイグレーション (_sqlx_migrations)"
+    echo ""
+    echo '```'
+    echo "$migrations_status"
     echo '```'
     echo ""
     echo "## photo_inbox サマリー"

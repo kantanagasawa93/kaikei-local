@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
-import { Receipt, BookOpen, TrendingUp, TrendingDown, Download } from "lucide-react";
+import { Receipt, BookOpen, TrendingUp, TrendingDown, Download, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { Journal, JournalLine } from "@/types";
@@ -41,15 +41,78 @@ export default function DashboardPage() {
   const [recentJournals, setRecentJournals] = useState<Journal[]>([]);
   // Round 21 ⓓ: 月次グラフ用バケット
   const [monthly, setMonthly] = useState<MonthlyBucket[]>([]);
+  // Round 24 ⓔ: 月次グラフ用の年度切替
+  const [chartYear, setChartYear] = useState(new Date().getFullYear());
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
+  // Round 24 ㊟: 要確認の仕訳件数 (今年度)
+  const [incompleteCount, setIncompleteCount] = useState(0);
 
   useEffect(() => {
     loadStats();
     loadRecentJournals();
-    loadMonthly();
+    loadIncompleteCount();
+    loadAvailableYears();
   }, []);
 
-  async function loadMonthly() {
+  // chartYear が変わったら月次グラフ再ロード
+  useEffect(() => {
+    loadMonthly(chartYear);
+  }, [chartYear]);
+
+  async function loadAvailableYears() {
+    const { data } = await supabase
+      .from("journals")
+      .select("date")
+      .order("date", { ascending: false });
+    const years = new Set<number>();
+    for (const j of (data as { date: string }[] | null) ?? []) {
+      const y = parseInt(j.date.slice(0, 4), 10);
+      if (Number.isFinite(y)) years.add(y);
+    }
+    // 今年も常に選択肢に入れる
+    years.add(new Date().getFullYear());
+    setAvailableYears(Array.from(years).sort((a, b) => b - a));
+  }
+
+  async function loadIncompleteCount() {
     const year = new Date().getFullYear();
+    const start = `${year}-01-01`;
+    const end = `${year}-12-31`;
+    const { data: journalRows } = await supabase
+      .from("journals")
+      .select("id, description, journal_lines(debit_amount, credit_amount)")
+      .gte("date", start)
+      .lte("date", end);
+    let count = 0;
+    for (const j of (journalRows as Array<{
+      id: string;
+      description: string | null;
+      journal_lines: { debit_amount: number; credit_amount: number }[] | null;
+    }> | null) ?? []) {
+      const lines = j.journal_lines ?? [];
+      if (lines.length === 0) {
+        count++;
+        continue;
+      }
+      const total = lines.reduce(
+        (acc, ln) => acc + (ln.debit_amount || 0) + (ln.credit_amount || 0),
+        0,
+      );
+      if (total === 0) {
+        count++;
+        continue;
+      }
+      if (
+        j.description &&
+        (j.description.startsWith("不明 - ") || j.description === "不明")
+      ) {
+        count++;
+      }
+    }
+    setIncompleteCount(count);
+  }
+
+  async function loadMonthly(year: number = new Date().getFullYear()) {
     const start = `${year}-01-01`;
     const end = `${year}-12-31`;
     const { data: journalRows } = await supabase
@@ -262,21 +325,59 @@ export default function DashboardPage() {
         </StaggerItem>
       </StaggerContainer>
 
-      {/* Round 21 ⓓ: 月次グラフ (今年度の売上 / 経費)
-          Round 22 ⓐ: CSV エクスポートボタン + ⓓ 棒クリックで該当月の仕訳一覧へ */}
+      {/* Round 24 ㊟: 要確認の仕訳ウィジェット (1 件以上ある時だけ表示) */}
+      {incompleteCount > 0 && (
+        <Link href="/journals?incomplete=1" className="block">
+          <Card className="border-amber-300 bg-amber-50 hover:bg-amber-100 transition-colors cursor-pointer">
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium text-amber-900">
+                  要確認の仕訳が <b>{incompleteCount} 件</b> あります
+                </p>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  金額が 0 / 摘要が「不明」など、確定申告前に確認すべき仕訳。
+                  クリックで一覧へ。
+                </p>
+              </div>
+              <span className="text-amber-700 text-sm">→</span>
+            </CardContent>
+          </Card>
+        </Link>
+      )}
+
+      {/* Round 21 ⓓ: 月次グラフ (年度の売上 / 経費)
+          Round 22 ⓐ: CSV エクスポートボタン + ⓓ 棒クリックで該当月の仕訳一覧へ
+          Round 24 ⓔ: 年度切替セレクタ */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-lg">
-            月次集計 ({new Date().getFullYear()} 年度)
+        <CardHeader className="flex flex-row items-center justify-between pb-2 gap-2">
+          <CardTitle className="text-lg flex items-center gap-2">
+            月次集計
+            {availableYears.length > 1 ? (
+              <select
+                value={chartYear}
+                onChange={(e) => setChartYear(parseInt(e.target.value, 10))}
+                className="border rounded px-2 py-0.5 text-sm font-normal"
+              >
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>
+                    FY {y}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-sm font-normal text-muted-foreground">
+                ({chartYear} 年度)
+              </span>
+            )}
           </CardTitle>
           {monthly.length > 0 && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => {
-                const year = new Date().getFullYear();
                 const csv = buildMonthlySummaryCsv(
-                  year,
+                  chartYear,
                   monthly.map((b) => ({
                     month: b.month,
                     income: b.income,
@@ -286,7 +387,7 @@ export default function DashboardPage() {
                 );
                 downloadCsv(
                   csv,
-                  `kaikei_monthly_summary_FY${year}_${new Date().toISOString().slice(0, 10)}.csv`,
+                  `kaikei_monthly_summary_FY${chartYear}_${new Date().toISOString().slice(0, 10)}.csv`,
                 );
                 toast.success("月次集計を CSV でダウンロードしました");
               }}
@@ -302,8 +403,7 @@ export default function DashboardPage() {
             data={monthly}
             onMonthClick={(month) => {
               // ⓓ ドリルダウン: /journals?month=YYYY-MM
-              const year = new Date().getFullYear();
-              router.push(`/journals?month=${year}-${month}`);
+              router.push(`/journals?month=${chartYear}-${month}`);
             }}
           />
         </CardContent>

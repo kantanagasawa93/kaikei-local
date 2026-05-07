@@ -115,6 +115,60 @@ export function suggestAccount(text: string): { code: string; name: string } | n
   return null;
 }
 
+/**
+ * Round 24 ㊞: partners.default_account_code を優先してから suggestAccount.
+ *
+ * - vendor_name が partners と完全一致 (or 部分一致) かつ default_account_code
+ *   が登録されてれば、その科目を即返す (ユーザがその取引先用に決めた科目)
+ * - ヒットしなければキーワードマップ (suggestAccount) に fallback
+ *
+ * 効果: 「タリーズコーヒー」を partners に登録 + default_account_code='621'
+ *       (会議費) にしておけば、以後 OCR で同じ vendor が来た瞬間に会議費が
+ *       自動セットされる。ユーザの「毎回科目を選ぶ」操作が消える。
+ */
+export async function suggestAccountForVendor(
+  vendorName: string | null | undefined,
+  fullText: string,
+): Promise<{ code: string; name: string } | null> {
+  // partners 検索 (vendor_name が空なら skip)
+  if (vendorName && vendorName.trim().length >= 2) {
+    try {
+      const { db } = await import("@/lib/localDb");
+      // 1) 完全一致
+      const { data: exact } = await db
+        .from("partners")
+        .select("name, default_account_code")
+        .eq("name", vendorName.trim())
+        .single();
+      const exactRow = exact as
+        | { name: string; default_account_code: string | null }
+        | null;
+      if (exactRow?.default_account_code) {
+        const acc = DEFAULT_ACCOUNTS.find((a) => a.code === exactRow.default_account_code);
+        if (acc) return { code: acc.code, name: acc.name };
+      }
+      // 2) text に partners.name の一部が含まれているか部分一致
+      //    (店舗名表記揺れ対策: "タリーズコーヒー トリアス久山店" → "タリーズコーヒー")
+      const { data: all } = await db
+        .from("partners")
+        .select("name, default_account_code");
+      const rows = (all as { name: string; default_account_code: string | null }[] | null) ?? [];
+      const haystack = `${vendorName} ${fullText}`.toLowerCase();
+      for (const p of rows) {
+        if (!p.default_account_code || !p.name || p.name.length < 2) continue;
+        if (haystack.includes(p.name.toLowerCase())) {
+          const acc = DEFAULT_ACCOUNTS.find((a) => a.code === p.default_account_code);
+          if (acc) return { code: acc.code, name: acc.name };
+        }
+      }
+    } catch {
+      /* partners 取得失敗は致命的ではない、suggestAccount に fallback */
+    }
+  }
+  // partners ヒットなし → 既存のキーワードマッチ
+  return suggestAccount(`${vendorName ?? ""} ${fullText}`);
+}
+
 export function getAccountByCode(code: string): Account | undefined {
   return DEFAULT_ACCOUNTS.find((a) => a.code === code);
 }

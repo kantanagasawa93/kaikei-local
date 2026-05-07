@@ -53,6 +53,10 @@ export default function JournalsPage() {
     if (m && /^\d{4}-\d{2}$/.test(m)) {
       setMonthFilter(m);
     }
+    // Round 24 ㊟: ?incomplete=1 で「要確認のみ」フィルタ ON で開く
+    if (params.get("incomplete") === "1") {
+      setIncompleteOnly(true);
+    }
   }, []);
   const [tagFilter, setTagFilter] = useState("");
   // Round 23 ⓒ: 摘要検索 + 金額レンジ
