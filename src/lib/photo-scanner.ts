@@ -174,7 +174,47 @@ export async function expireOldCandidates(): Promise<{ swept: number }> {
       `[inbox] 30 日経過の未閲覧 candidate ${swept} 件を自動 dismissed に移動`,
     );
   }
-  return { swept };
+
+  // Round 27 ⓕ: 同じタイミングで stale な receipt_failed (30 日経過) も dismissed へ
+  // 失敗のまま放置されてる行は手動仕訳されることが少ないので、自動的に
+  // 受信箱から押し下げる (auto_dismissed_reason: stale_failure)
+  let staleSwept = 0;
+  try {
+    const cutoffFail = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const { data: fails } = await db
+      .from("photo_inbox")
+      .select("id, taken_at, last_error")
+      .eq("state", "receipt_failed")
+      .lt("taken_at", cutoffFail);
+    const failRows =
+      (fails as { id: string; taken_at: string; last_error: string | null }[] | null) ?? [];
+    for (const row of failRows) {
+      const reason = JSON.stringify({
+        reason: "stale_failure",
+        swept_at: new Date().toISOString(),
+        taken_at: row.taken_at,
+        last_error: row.last_error?.slice(0, 200) ?? null,
+      });
+      try {
+        await db
+          .from("photo_inbox")
+          .update({ state: "dismissed", auto_dismissed_reason: reason })
+          .eq("id", row.id);
+        staleSwept++;
+      } catch (e) {
+        console.warn(`stale_failure expire: ${row.id} failed:`, e);
+      }
+    }
+    if (staleSwept > 0) {
+      console.info(
+        `[inbox] 30 日経過の receipt_failed ${staleSwept} 件を自動 dismissed に移動`,
+      );
+    }
+  } catch {
+    /* silent */
+  }
+
+  return { swept: swept + staleSwept };
 }
 
 /** Round 23 ⓖ: 受信箱上部の「直近スキャン」サマリー用 */
@@ -204,6 +244,46 @@ export async function getLastScanSummary(): Promise<LastScanSummary | null> {
 
 async function saveLastScanSummary(s: LastScanSummary): Promise<void> {
   await upsertSetting(SETTING_LAST_SCAN_SUMMARY, JSON.stringify(s));
+}
+
+/**
+ * Round 27 ㊥: claude_result_json から OCR 信頼度を推定する.
+ *
+ * Claude OCR は confidence を返さないので、必須 4 フィールドの充足率を
+ * 0..1 に正規化する: vendor_name / amount / date / items[] のうちいくつ揃ったか。
+ * - 4/4 揃ってる: 1.0
+ * - 3/4: 0.75
+ * - 2/4: 0.5
+ * - 1/4: 0.25
+ * - 0/4: 0.0
+ *
+ * UI 側で 0.7 未満を「要確認」扱いに分類する。
+ */
+export function ocrConfidence(claudeResultJson: string | null): number {
+  if (!claudeResultJson) return 0;
+  let parsed: {
+    vendor_name?: string | null;
+    amount?: number | null;
+    date?: string | null;
+    items?: unknown[];
+    raw_text?: string | null;
+  };
+  try {
+    parsed = JSON.parse(claudeResultJson);
+  } catch {
+    return 0;
+  }
+  let filled = 0;
+  if (parsed.vendor_name && parsed.vendor_name.trim().length > 0) filled++;
+  if (
+    parsed.amount != null &&
+    Number.isFinite(parsed.amount) &&
+    parsed.amount > 0
+  )
+    filled++;
+  if (parsed.date && /\d{4}-\d{2}-\d{2}/.test(parsed.date)) filled++;
+  if (Array.isArray(parsed.items) && parsed.items.length > 0) filled++;
+  return filled / 4;
 }
 
 /**

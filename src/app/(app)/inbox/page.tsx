@@ -566,6 +566,33 @@ export default function InboxPage() {
     }
   };
 
+  // Round 27 ⓓ: 選択した写真をまとめて Vision OCR 再実行
+  const bulkReocr = async () => {
+    if (selected.size === 0) {
+      toast.info("選択された写真がありません");
+      return;
+    }
+    const ids = Array.from(selected);
+    let ok = 0;
+    let fail = 0;
+    for (const id of ids) {
+      try {
+        await reocrInboxRow(id, { twoPass: false });
+        ok++;
+      } catch (e) {
+        console.warn(`bulkReocr ${id} failed:`, e);
+        fail++;
+      }
+    }
+    if (fail === 0) {
+      toast.success(`${ok} 件を再 OCR しました`);
+    } else {
+      toast.info(`${ok} 件成功 / ${fail} 件失敗`);
+    }
+    clearSelection();
+    await refresh();
+  };
+
   // ㉵ Round 14 + ㉺ Round 15: 受信箱の 1 件を Vision で再 OCR
   // モード選択: 既定 (ja+en 同時) / ja-only / en-only / two-pass (独立結合)
   const [reocrModalFor, setReocrModalFor] = useState<string | null>(null);
@@ -775,6 +802,16 @@ export default function InboxPage() {
           <Button size="sm" variant="outline" onClick={() => bulkSetState("candidate")} title="未判定に戻す">
             <RotateCcw className="h-3.5 w-3.5 mr-1" />
             未判定
+          </Button>
+          {/* Round 27 ⓓ: 選択写真を一括 Vision 再 OCR */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void bulkReocr()}
+            title="選択した写真を Vision OCR で再認識"
+          >
+            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+            再 OCR
           </Button>
           <span className="mx-1 h-4 w-px bg-border" />
           <Button size="sm" variant="ghost" onClick={selectAllVisible} title="表示中の全件を選択">
@@ -1111,6 +1148,54 @@ export default function InboxPage() {
               >
                 解除
               </button>
+            )}
+            {/* Round 27 ⓑ: フィルタ中のものを一括 candidate に戻す */}
+            {(reasonFilter || expiredOnly) && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  // 現在 visible な dismissed (= フィルタ後) の id を集める
+                  const matchReason = (it: InboxRow, want: string): boolean => {
+                    if (!it.auto_dismissed_reason) return want === "manual";
+                    try {
+                      const p = JSON.parse(it.auto_dismissed_reason) as { reason?: string };
+                      const r = p.reason ?? "pattern";
+                      if (want === "manual") return false;
+                      if (want === "pattern") return r !== "expired_30d" && r !== "duplicate";
+                      return r === want;
+                    } catch {
+                      return want === "manual";
+                    }
+                  };
+                  const want = expiredOnly ? "expired_30d" : (reasonFilter ?? "");
+                  const targets = items.filter((it) => matchReason(it, want));
+                  if (targets.length === 0) return;
+                  if (
+                    !confirm(
+                      `${targets.length} 件を「未判定」に戻します。よろしいですか?`,
+                    )
+                  )
+                    return;
+                  let restored = 0;
+                  for (const it of targets) {
+                    try {
+                      await db
+                        .from("photo_inbox")
+                        .update({ state: "candidate", auto_dismissed_reason: null })
+                        .eq("id", it.id);
+                      restored++;
+                    } catch {
+                      /* silent */
+                    }
+                  }
+                  toast.success(`${restored} 件を未判定に戻しました`);
+                  await refresh();
+                }}
+                className="h-7 text-xs"
+              >
+                フィルタ中をすべて未判定に戻す
+              </Button>
             )}
             {/* Round 26 ⓕ: 最終 purge 日時 (90 日経過 dismissed の物理削除) */}
             {lastPurgeUnix && (
@@ -1649,6 +1734,16 @@ function ScoreSignalsBadge({
   // hover も従来通り、click は明示的に保持される (sticky モード).
   const [stickyOpen, setStickyOpen] = useState(false);
   const visible = open || stickyOpen;
+
+  // Round 27 ⓖ: ESC キーで sticky popover を閉じる (a11y)
+  useEffect(() => {
+    if (!stickyOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setStickyOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [stickyOpen]);
 
   return (
     <div

@@ -114,3 +114,81 @@ async function markChecked(unix: number): Promise<void> {
     await db.from("app_settings").insert({ id: SETTING_LAST_CHECK, value, updated_at });
   }
 }
+
+// ────────────────────────────────────────────────────────────
+// Round 27 ⓐ: partner 名の表記ゆれ自動検出
+//
+// 「タリーズコーヒー トリアス久山店」「タリーズコーヒー」「タリーズ」のように
+// 共通 prefix が長い partner ペアを検出して「同一かも」と提案する。
+//
+// 完全自動マージは誤統合リスクが高いので、検出だけして UI で「統合する?」
+// ボタンを出す。
+// ────────────────────────────────────────────────────────────
+
+export interface PartnerVariantPair {
+  /** 短い名前 (= 元の partner、ID とともに残す候補) */
+  base: { id: string; name: string; usage: number };
+  /** 長い名前 (= マージ先候補) */
+  variant: { id: string; name: string; usage: number };
+  /** 一致した共通 prefix の文字数 */
+  prefixLen: number;
+}
+
+/** 漢字・ひらがな・カタカナ・英字の混在を考慮した「先頭一致長」を計算 */
+function commonPrefixLen(a: string, b: string): number {
+  const min = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < min && a[i] === b[i]) i++;
+  return i;
+}
+
+/**
+ * partner 一覧から表記ゆれ候補のペアを検出する.
+ *
+ * 条件 (誤統合を最小化するため):
+ *   - 共通 prefix が 4 文字以上 (= 「タリーズ」レベル)
+ *   - 短い方の長さの 60% 以上を共通 prefix が占める
+ *   - 短い方が 2 文字以下なら除外 ("AB" + "ABC" のような誤検知防止)
+ *
+ * @param partners {id, name} のリスト
+ * @param usageMap 使用回数マップ (partner_id → count)
+ * @returns 検出されたペア (重複は除外)
+ */
+export function detectPartnerVariants(
+  partners: { id: string; name: string }[],
+  usageMap: Record<string, number>,
+): PartnerVariantPair[] {
+  const out: PartnerVariantPair[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < partners.length; i++) {
+    for (let j = i + 1; j < partners.length; j++) {
+      const a = partners[i];
+      const b = partners[j];
+      const shorter = a.name.length <= b.name.length ? a : b;
+      const longer = a.name.length <= b.name.length ? b : a;
+      if (shorter.name.length < 3) continue;
+      const prefixLen = commonPrefixLen(shorter.name, longer.name);
+      if (prefixLen < 4) continue;
+      if (prefixLen / shorter.name.length < 0.6) continue;
+      const key = [shorter.id, longer.id].sort().join(":");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        base: {
+          id: shorter.id,
+          name: shorter.name,
+          usage: usageMap[shorter.id] ?? 0,
+        },
+        variant: {
+          id: longer.id,
+          name: longer.name,
+          usage: usageMap[longer.id] ?? 0,
+        },
+        prefixLen,
+      });
+    }
+  }
+  // 共通 prefix が長い順 (信頼度高い順)
+  out.sort((a, b) => b.prefixLen - a.prefixLen);
+  return out;
+}

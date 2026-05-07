@@ -526,6 +526,28 @@ cmd_autorun() {
   git push origin "$current_branch"
   echo "  ✓ pushed to origin/$current_branch"
 
+  # Round 27 ⓔ: autorun 後に DRY_RUN=1 で release.sh を回し
+  # 「このコミットでリリースしたら何が起きるか」を smoke-report に追記。
+  # 環境変数 RELEASE_TAG_PREVIEW=v0.X.Y で対象タグを指定 (未指定なら現 version)
+  echo ""
+  echo "==> 4. release.sh DRY_RUN プレビュー"
+  local preview_tag="${RELEASE_TAG_PREVIEW:-v$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' src-tauri/tauri.conf.json 2>/dev/null || echo "?.?.?")}"
+  local dry_log="/tmp/kaikei-autorun-release-dry-${preview_tag}.log"
+  if UNSIGNED=1 DRY_RUN=1 SKIP_PRECHECK=1 SKIP_PUSH_CHECK=1 SKIP_STATUS=1 NOTARIZE_SKIP=1 \
+      "$SCRIPT_DIR/release.sh" "$preview_tag" >"$dry_log" 2>&1; then
+    echo "  ✓ release dry-run: $preview_tag → $dry_log"
+    {
+      echo ""
+      echo "## release.sh DRY_RUN プレビュー ($preview_tag)"
+      echo ""
+      echo '```'
+      tail -30 "$dry_log"
+      echo '```'
+    } >> "$report"
+  else
+    echo "  ⚠️  release.sh dry-run 失敗 — 詳細は $dry_log"
+  fi
+
   # ㊔ Round 20: REGEN_DEMO=1 なら autorun 後に demo 動画も再生成
   # UI が変わったら demo 動画も古くなるので、ラウンド完了時に
   # docs/assets/ + public/ の MP4 を最新版に差し替えるオプション。
