@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { installErrorReporter } from "@/lib/error-reporter";
 import { runAutoBackup } from "@/lib/auto-backup";
 import { checkForUpdate } from "@/lib/update-check";
+import { expireOldCandidates } from "@/lib/photo-scanner";
 
 /**
  * 起動時の1回限りのセットアップ。
@@ -18,6 +19,13 @@ export function Boot() {
     setTimeout(() => {
       checkForUpdate();
     }, 10_000);
+    // Round 23 ㊜: 30 日経過の未閲覧 candidate を静かに自動 dismissed へ
+    // (1 日 1 回までに抑制、UI には何も出さない)
+    setTimeout(() => {
+      expireOldCandidates().catch((e) =>
+        console.warn("expireOldCandidates failed:", e),
+      );
+    }, 8_000);
   }, []);
   return null;
 }

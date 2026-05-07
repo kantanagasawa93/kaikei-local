@@ -546,6 +546,12 @@ fn run_auto_scan_and_exit() -> ! {
             };
             scanner::log_line(&format!("[auto-scan] {}", body));
             scanner::post_notification("KAIKEI LOCAL", &body);
+
+            // Round 23 ⓑ: 月次リマインダー
+            // 月末 (28-31 日) または確定申告期 (2/15, 3/10) に未仕訳/未判定が
+            // 1 件以上あれば追加で通知。auto-scan のついでなので本体スキャンと
+            // 重複しないよう日付判定で limit。
+            maybe_post_monthly_reminder(&app_data);
         }
         Err(e) => {
             scanner::log_line(&format!("[auto-scan] error: {}", e));
@@ -557,6 +563,94 @@ fn run_auto_scan_and_exit() -> ! {
     }
     // launchd 上では即 exit すれば次回まで再実行されない
     std::process::exit(0);
+}
+
+/// Round 23 ⓑ: 月次リマインダー判定。
+///
+/// 月末 (28-31 日) または確定申告期 (2/15, 3/10) に photo_inbox の
+/// state='receipt' (= 仕訳化されてないが領収書と分かってる) と
+/// state='candidate' (未判定) を集計し、合計が 1 件以上なら通知を出す。
+///
+/// 1 日に 1 回までに抑制 (app_settings.last_reminder_date='YYYY-MM-DD' で記録)。
+#[cfg(target_os = "macos")]
+fn maybe_post_monthly_reminder(app_data: &std::path::Path) {
+    use chrono::{Datelike, Local};
+    let now = Local::now();
+    let day = now.day();
+    let month = now.month();
+    let is_reminder_day = day >= 28
+        || (month == 2 && day == 15)
+        || (month == 3 && day == 10);
+    if !is_reminder_day {
+        return;
+    }
+
+    let db_path = app_data.join("kaikei.db");
+    if !db_path.exists() {
+        return;
+    }
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            scanner::log_line(&format!("[reminder] open db failed: {}", e));
+            return;
+        }
+    };
+
+    // 1 日 1 回チェック
+    let today = now.format("%Y-%m-%d").to_string();
+    let last_date: String = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE id='last_reminder_date'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    if last_date == today {
+        return;
+    }
+
+    let receipt_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM photo_inbox WHERE state='receipt'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let candidate_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM photo_inbox WHERE state='candidate' AND last_viewed_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
+    if receipt_count == 0 && candidate_count == 0 {
+        return;
+    }
+
+    let body = match (receipt_count, candidate_count) {
+        (r, 0) if r > 0 => format!("未仕訳の領収書が {} 件あります", r),
+        (0, c) if c > 0 => format!("未確認の写真が {} 件あります", c),
+        (r, c) => format!("未仕訳 {} 件 / 未確認 {} 件 — 確認しておきましょう", r, c),
+    };
+    let title = if month == 2 && day == 15 {
+        "KAIKEI LOCAL — 確定申告期リマインダー"
+    } else if month == 3 && day == 10 {
+        "KAIKEI LOCAL — 確定申告まで残りわずか"
+    } else {
+        "KAIKEI LOCAL — 月次リマインダー"
+    };
+    scanner::log_line(&format!("[reminder] {} / {}", title, body));
+    scanner::post_notification(title, &body);
+
+    // 通知済みフラグを記録
+    let now_iso = now.to_rfc3339();
+    let _ = conn.execute(
+        "INSERT INTO app_settings (id, value, updated_at) VALUES ('last_reminder_date', ?, ?)
+         ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        rusqlite::params![today, now_iso],
+    );
 }
 
 /// 自律検証ハーネス用ヘルパ: ~/Library/Application Support/dev.kaikei.app

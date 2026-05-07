@@ -158,6 +158,13 @@ export interface FiscalYearSummary {
   journalCount: number;
   monthly: { month: string; income: number; expense: number }[]; // 12 行
   topExpenses: { account_code: string; account_name: string; amount: number }[];
+  /** Round 23 ⓔ: PDF ヘッダに出す発行者情報 (issuer_settings から) */
+  issuer?: {
+    business_name?: string | null;
+    owner_name?: string | null;
+    address?: string | null;
+    registered_number?: string | null;
+  };
 }
 
 export async function exportFiscalYearSummaryPdf(
@@ -201,8 +208,47 @@ export async function exportFiscalYearSummaryPdf(
     });
   };
 
-  // ヘッダ
+  // ヘッダ (左) — タイトル + 生成日時
   draw(`KAIKEI LOCAL — 年度サマリ FY${s.year}`, 40, { size: 18, b: true });
+
+  // Round 23 ⓔ: 発行者情報 (右上) — issuer_settings から自動引き
+  if (s.issuer) {
+    const issY = y;
+    const rightX = width - 40;
+    const drawRight = (text: string, yy: number, opts: { size?: number; b?: boolean } = {}) => {
+      const size = opts.size ?? 9;
+      const f = opts.b ? bold : regular;
+      const w = f.widthOfTextAtSize(text, size);
+      page.drawText(text, {
+        x: rightX - w,
+        y: yy,
+        size,
+        font: f,
+        color: rgb(0, 0, 0),
+      });
+    };
+    let yy = issY + 4;
+    if (s.issuer.business_name) {
+      drawRight(s.issuer.business_name, yy, { size: 11, b: true });
+      yy -= 13;
+    }
+    if (s.issuer.owner_name) {
+      drawRight(s.issuer.owner_name, yy, { size: 9 });
+      yy -= 11;
+    }
+    if (s.issuer.address) {
+      // 住所が長い場合は 1 行に収まる程度に切る (PDF は折り返し非対応)
+      const addr = s.issuer.address.length > 40
+        ? s.issuer.address.slice(0, 40) + "…"
+        : s.issuer.address;
+      drawRight(addr, yy, { size: 8 });
+      yy -= 10;
+    }
+    if (s.issuer.registered_number) {
+      drawRight(`登録番号: ${s.issuer.registered_number}`, yy, { size: 8 });
+    }
+  }
+
   y -= 22;
   draw(`生成日時: ${new Date().toLocaleString("ja-JP")}`, 40, { size: 9 });
   y -= 18;

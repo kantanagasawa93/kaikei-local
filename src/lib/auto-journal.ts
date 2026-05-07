@@ -587,7 +587,31 @@ export async function autoJournalizeAllReceipts(
     const attempts = (row.attempts ?? 0) + 1;
     let lastItem: ItemProgress;
     try {
-      const receiptId = await autoJournalizeOne(row);
+      // Round 23 ㊝: network/server エラーは 5 秒後に 1 回だけ自動リトライする。
+      //   - 一過性のネットワーク不調・OCR サーバー 5xx で「失敗」マークされる前に救う
+      //   - 既に attempts >= 2 の行は手動操作で来てるはずなので自動リトライしない
+      //   - license/consent/image エラーはユーザ介入必須なのでリトライしない
+      let receiptId: string | null = null;
+      try {
+        receiptId = await autoJournalizeOne(row);
+      } catch (e1) {
+        const msg1 = (e1 as Error).message;
+        const cls = classifyOcrError(msg1);
+        const isTransient = cls.bucket === "network" || cls.bucket === "server";
+        if (isTransient && attempts <= 1) {
+          console.info(
+            `[auto-journal] ${cls.bucket} エラー — 5 秒後に 1 回自動リトライ: ${row.id}`,
+          );
+          await new Promise((r) => setTimeout(r, 5000));
+          // attempts は 2 になる (autoJournalizeOne 自体は attempts を見ない)
+          receiptId = await autoJournalizeOne({
+            ...row,
+            attempts: (row.attempts ?? 0) + 1,
+          });
+        } else {
+          throw e1;
+        }
+      }
       result.imported++;
       // ㉱ 直近に保存された receipts 行から vendor / amount を引いて progress に
       let vendor: string | null = null;

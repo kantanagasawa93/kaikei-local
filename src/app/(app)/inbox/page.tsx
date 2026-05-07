@@ -46,8 +46,10 @@ import {
   markInboxViewed,
   markInboxAllViewed,
   getAuthStatus,
+  getLastScanSummary,
   type AuthStatus,
   type InboxRow,
+  type LastScanSummary,
 } from "@/lib/photo-scanner";
 import { classifyReceiptLines, type LineKind } from "@/lib/receipt-classifier";
 import {
@@ -70,6 +72,8 @@ export default function InboxPage() {
   const [items, setItems] = useState<InboxRow[]>([]);
   const [auth, setAuth] = useState<AuthStatus>("unknown");
   const [scanning, setScanning] = useState(false);
+  // Round 23 ⓖ: 直近スキャン結果のサマリーバー
+  const [lastScan, setLastScan] = useState<LastScanSummary | null>(null);
   const [filter, setFilter] = useState<InboxState | "all">("candidate");
   const [, setAutoMode] = useState(false);
   const [journalizing, setJournalizing] = useState(false);
@@ -260,6 +264,12 @@ export default function InboxPage() {
       }),
     );
     setAutoMode(await getAutoJournalMode());
+    // Round 23 ⓖ: 直近スキャンサマリーをロード
+    try {
+      setLastScan(await getLastScanSummary());
+    } catch {
+      /* silent */
+    }
     // 件数バッジ: 状態ごとに件数を取得 (検索条件は除外 — 全体を見せる)
     const all = await listInbox();
     const next: Record<InboxState | "all", number> = {
@@ -443,8 +453,12 @@ export default function InboxPage() {
         const skipMsg = result.skipped && result.skipped > 0
           ? ` / 明らかに対象外 ${result.skipped} 枚は除外`
           : "";
+        // Round 23 ⓐ: 重複統合した件数
+        const dupMsg = result.duplicate && result.duplicate > 0
+          ? ` / 重複 ${result.duplicate} 枚を統合`
+          : "";
         toast.success(
-          `新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}${autoMsg}${skipMsg}`,
+          `新規 ${result.newPhotos} 枚を取り込みました${receiptMsg}${autoMsg}${skipMsg}${dupMsg}`,
         );
       } else if (result.scanned === 0) {
         toast.info("新規の写真はありませんでした");
@@ -814,6 +828,41 @@ export default function InboxPage() {
           </Button>
         </div>
       </div>
+
+      {/* Round 23 ⓖ: 直近スキャンのサマリーバー (取り込み・除外・重複の透明性) */}
+      {lastScan &&
+        (lastScan.scanned > 0 || lastScan.skipped > 0) && (
+          <div className="flex items-center gap-3 text-xs px-3 py-2 rounded border bg-muted/30 text-muted-foreground">
+            <span className="font-medium text-foreground">直近スキャン:</span>
+            <span>
+              取込 <b>{lastScan.newPhotos}</b>
+            </span>
+            {lastScan.receiptCount > 0 && (
+              <span>
+                / 領収書 <b>{lastScan.receiptCount}</b>
+              </span>
+            )}
+            {lastScan.skipped > 0 && (
+              <span>
+                / 対象外 <b>{lastScan.skipped}</b> 枚を除外
+              </span>
+            )}
+            {lastScan.duplicate > 0 && (
+              <span>
+                / 重複 <b>{lastScan.duplicate}</b> 枚を統合
+              </span>
+            )}
+            <span className="ml-auto text-[10px]">
+              {new Date(lastScan.finished_at).toLocaleString("ja-JP")}
+            </span>
+            <Link
+              href="/settings/photo-scan"
+              className="text-primary hover:underline text-[11px]"
+            >
+              設定
+            </Link>
+          </div>
+        )}
 
       {/* ㉱ Round 13 + ㊀ Round 16: 仕訳化中 / スキャン中の最新 1 件をライブ表示。
           直前 1 件の店名/金額/score で「ちゃんと進んでいる」がひと目で分かる */}

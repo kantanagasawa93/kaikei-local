@@ -55,6 +55,12 @@ export default function JournalsPage() {
     }
   }, []);
   const [tagFilter, setTagFilter] = useState("");
+  // Round 23 ⓒ: 摘要検索 + 金額レンジ
+  const [descSearch, setDescSearch] = useState("");
+  const [amountMin, setAmountMin] = useState("");
+  const [amountMax, setAmountMax] = useState("");
+  // Round 23 ⓓ: 不完全な仕訳のみ表示
+  const [incompleteOnly, setIncompleteOnly] = useState(false);
   const [page, setPage] = useState(0);
   // ㊍ Round 6: 直近の差し戻しを取り消せる件数 (0 なら button 非表示)
   const [undoCount, setUndoCount] = useState(0);
@@ -217,12 +223,61 @@ export default function JournalsPage() {
     }
   }
 
+  // Round 23 ⓓ: 不完全な仕訳の判定
+  // - 借方・貸方すべて 0 円
+  // - 摘要が「不明 - 雑費」(autoJournalize の fallback)
+  // - 行が 0 件
+  const isIncomplete = (j: JournalWithLines): boolean => {
+    if (!j.journal_lines || j.journal_lines.length === 0) return true;
+    const total = j.journal_lines.reduce(
+      (acc, ln) => acc + (ln.debit_amount || 0) + (ln.credit_amount || 0),
+      0,
+    );
+    if (total === 0) return true;
+    if (
+      j.description &&
+      (j.description.startsWith("不明 - ") || j.description === "不明")
+    ) {
+      return true;
+    }
+    return false;
+  };
+
   const filteredJournals = journals.filter((j) => {
     if (monthFilter && !j.date.startsWith(monthFilter)) return false;
     if (tagFilter) {
       const ts = parseTags(j.tags ?? null);
       if (!ts.includes(tagFilter)) return false;
     }
+    // Round 23 ⓒ: 摘要検索 (description + 各行 account_name + memo を OR で部分一致)
+    if (descSearch.trim()) {
+      const q = descSearch.trim().toLowerCase();
+      const hay = [
+        j.description?.toLowerCase() ?? "",
+        ...(j.journal_lines ?? []).map(
+          (ln) =>
+            (ln.account_name ?? "").toLowerCase() +
+            " " +
+            (ln.memo ?? "").toLowerCase(),
+        ),
+      ].join(" ");
+      if (!hay.includes(q)) return false;
+    }
+    // 金額レンジ (借方の最大値で判定)
+    const amountMinNum = parseInt(amountMin.replace(/,/g, ""), 10);
+    const amountMaxNum = parseInt(amountMax.replace(/,/g, ""), 10);
+    if (
+      Number.isFinite(amountMinNum) ||
+      Number.isFinite(amountMaxNum)
+    ) {
+      const lineMax = (j.journal_lines ?? []).reduce(
+        (m, ln) => Math.max(m, ln.debit_amount || 0, ln.credit_amount || 0),
+        0,
+      );
+      if (Number.isFinite(amountMinNum) && lineMax < amountMinNum) return false;
+      if (Number.isFinite(amountMaxNum) && lineMax > amountMaxNum) return false;
+    }
+    if (incompleteOnly && !isIncomplete(j)) return false;
     return true;
   });
 
@@ -362,7 +417,7 @@ export default function JournalsPage() {
         </div>
       </div>
 
-      <div className="flex gap-2 items-center">
+      <div className="flex gap-2 items-center flex-wrap">
         <Input
           type="month"
           value={monthFilter}
@@ -384,6 +439,43 @@ export default function JournalsPage() {
             ))}
           </select>
         )}
+        {/* Round 23 ⓒ: 摘要 + 金額レンジ検索 */}
+        <Input
+          type="search"
+          placeholder="摘要・科目・メモを検索"
+          value={descSearch}
+          onChange={(e) => setDescSearch(e.target.value)}
+          className="w-56"
+        />
+        <Input
+          type="text"
+          inputMode="numeric"
+          placeholder="¥下限"
+          value={amountMin}
+          onChange={(e) => setAmountMin(e.target.value)}
+          className="w-24"
+          title="この金額以上の借方/貸方を含む仕訳"
+        />
+        <span className="text-xs text-muted-foreground">〜</span>
+        <Input
+          type="text"
+          inputMode="numeric"
+          placeholder="¥上限"
+          value={amountMax}
+          onChange={(e) => setAmountMax(e.target.value)}
+          className="w-24"
+          title="この金額以下の借方/貸方を含む仕訳"
+        />
+        {/* Round 23 ⓓ: 不完全な仕訳のみフィルタ */}
+        <label className="flex items-center gap-1.5 text-sm select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={incompleteOnly}
+            onChange={(e) => setIncompleteOnly(e.target.checked)}
+            className="h-4 w-4"
+          />
+          要確認のみ
+        </label>
       </div>
 
       {/* Round 22 ㊛: bulk action toolbar — selectedIds が 1 件以上ある時だけ表示 */}
@@ -531,6 +623,16 @@ export default function JournalsPage() {
                           >
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span>{journal.description}</span>
+                              {/* Round 23 ⓓ: 不完全な仕訳に amber Badge */}
+                              {isIncomplete(journal) && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] gap-1 bg-amber-50 border-amber-300 text-amber-800"
+                                  title="金額が 0 / 摘要が「不明」など、確定申告前に確認すべき仕訳"
+                                >
+                                  要確認
+                                </Badge>
+                              )}
                               {journal.receipt_id && (
                                 // 受信箱由来の自動仕訳である目印。
                                 // Phase 4 (auto-journal) で receipts.id が必ず紐付く。

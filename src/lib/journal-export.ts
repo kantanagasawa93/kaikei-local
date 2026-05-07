@@ -258,6 +258,7 @@ export function buildMonthlySummaryCsv(year: number, rows: MonthlySummaryRow[]):
 
 /**
  * Round 22 ⓔ: 年度サマリ (PDF 生成用) を 1 リクエストで組み立てる.
+ * Round 23 ⓔ: issuer_settings (屋号 / 住所 / インボイス番号) も同時取得.
  *
  * @returns FiscalYearSummary 互換の plain object
  */
@@ -267,6 +268,12 @@ export async function buildFiscalYearSummary(year: number): Promise<{
   journalCount: number;
   monthly: { month: string; income: number; expense: number }[];
   topExpenses: { account_code: string; account_name: string; amount: number }[];
+  issuer?: {
+    business_name?: string | null;
+    owner_name?: string | null;
+    address?: string | null;
+    registered_number?: string | null;
+  };
 }> {
   const monthly = (await summarizeByMonth(year)).map((b) => ({
     month: b.month,
@@ -341,7 +348,34 @@ export async function buildFiscalYearSummary(year: number): Promise<{
     topExpenses = Array.from(tally.values()).sort((a, b) => b.amount - a.amount);
   }
 
-  return { year, receiptCount, journalCount, monthly, topExpenses };
+  // Round 23 ⓔ: 発行者情報 (PDF ヘッダ用)
+  let issuer:
+    | {
+        business_name?: string | null;
+        owner_name?: string | null;
+        address?: string | null;
+        registered_number?: string | null;
+      }
+    | undefined;
+  try {
+    const { data: iss } = await db
+      .from("issuer_settings")
+      .select("business_name, owner_name, address, registered_number")
+      .eq("id", "singleton")
+      .single();
+    if (iss) {
+      issuer = iss as {
+        business_name?: string | null;
+        owner_name?: string | null;
+        address?: string | null;
+        registered_number?: string | null;
+      };
+    }
+  } catch {
+    // issuer 未登録でも PDF は生成できる
+  }
+
+  return { year, receiptCount, journalCount, monthly, topExpenses, issuer };
 }
 
 /** ブラウザ側でダウンロードトリガー (Tauri の dialog plugin は使わず簡素に) */
