@@ -75,55 +75,61 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 27) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 28) 候補 — ユーザは「全部やって」希望 (10 個)
 
-推し優先順は ㊗ → ㊤ → ㊥ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
-ユーザの判断 / 操作を増やさない方向 (Round 22 以来の方針継続)。
+推し優先順は ㊗ → ㊦ → ㊧ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (6 ラウンド持ち越し中)
-- credentials 1 回入れたら `release.sh v0.3.0` で発火、updater bundle 同梱済
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (7 ラウンド持ち越し中)
 
-### ㊤ 仕訳の「定期的な反復」を検出して提案 ★★★★
-- 月末払いの家賃・通信費など同じ description + 同 partner + 同金額が
-  毎月発生している場合、ダッシュボードに「定期取引候補 N 件」表示
-- ワンクリックで auto_rules テーブルにルール化
-- 対象: src/lib/auto-journal.ts に detectRecurring() 新規
+### ㊦ 定期取引候補をワンクリックで auto_rules に登録 ★★★★
+- Round 27 ㊤ で検出は OK。次は「ルール化」ボタンで auto_rules テーブルへ INSERT
+- 対象: src/app/(app)/dashboard/page.tsx + src/lib/auto-journal.ts
 
-### ㊥ 領収書 OCR の信頼度別仕分け ★★★★
-- claude_result_json の confidence を見て、低信頼度のものは別タブに
-- 高信頼度: 自動仕訳 OK、低信頼度: 「要確認」タブで手動レビュー
-- 対象: photo-scanner.ts + inbox/page.tsx に信頼度フィルタ
+### ㊧ 仕訳エクスポートに freee / マネーフォワード形式 ★★★
+- 現状は kaikei 標準 CSV のみ。会計ソフト移行を考えてる人向けに別形式 export
+- 対象: src/lib/journal-export.ts
 
-### ⓐ partner 名の表記ゆれ自動統合 ★★★
-- 「タリーズコーヒー トリアス久山店」「タリーズコーヒー」「タリーズ」を
-  Levenshtein 距離 + 共通 prefix で同一視 → 1 件に統合
-- 対象: src/lib/partner-cleanup.ts (新規 mergePartnerVariants)
+### ⓐ 月次グラフのドリルダウン先で前年比較も維持 ★★★
+- /journals?from=...&to=... 遷移時に前年同月の合計も上部に表示
+- 対象: src/app/(app)/journals/page.tsx
 
-### ⓑ 受信箱の「破棄」一括復元 ★★★
-- Round 26 ⓑ で reason 別 click filter を入れた。フィルタ中の項目を
-  ワンクリックで全部 candidate に戻すボタン
+### ⓑ partner 統合の Undo ★★★
+- Round 27 ⓐ で merge を実装したが取り消せない。snapshot stack で undo
+
+### ⓒ 受信箱「失敗」タブで failure bucket 別件数 ★★★
+- Round 23 で classifyOcrError は実装済。バケット別 (license/network/server/...)
+  件数を破棄タブと同じパターンで表示
 - 対象: src/app/(app)/inbox/page.tsx
 
-### ⓒ 月次グラフ年度比較 (前年同月) ★★★
-- 当年の棒の上に薄く前年同月の棒を重ねる (前年比%表示)
-- 対象: src/app/(app)/dashboard/page.tsx MonthlyBarChart
+### ⓓ readiness カードを「期間外でも開ける」 ★★★
+- 現状 1/1〜3/15 のみ表示。設定画面に「e-Tax 準備状況を見る」ボタンを置いて
+  通年で開けるように
+- 対象: src/app/(app)/settings/page.tsx
 
-### ⓓ 領収書 bulk OCR 再実行 ★★
-- 受信箱で複数選択 → 「Vision OCR 再実行」を一括 (再分類)
-- 対象: src/app/(app)/inbox/page.tsx (既存 reocrInboxRow を bulk 化)
+### ⓔ verify-app.sh demo-scenario に bulk delete + Undo 操作 ★★
+- 既存 demo-scenario は scan-now → スクショ。仕訳の bulk select → delete →
+  Undo もシナリオに組込
+- 対象: scripts/verify-app.sh cmd_demo_scenario
 
-### ⓔ verify-app.sh autorun に release.sh dry-run 同梱 ★★
-- autorun 後に DRY_RUN=1 release.sh v<X> を回して
-  「このコミットでリリースしたら何が起きるか」smoke-report に追記
-- 対象: scripts/verify-app.sh
+### ⓕ updater 失敗時の最終フォールバックを GitHub Release URL に固定 ★★
+- 現状 LP の install.html へ。直接 GitHub Release のほうが確実なケースもある
+- 対象: src/components/update-banner.tsx FALLBACK_URL
 
-### ⓕ photo_inbox.last_error の自動分類アーカイブ ★★
-- receipt_failed が 30 日以上残ったら自動 dismissed (理由 stale_failure)
-- 対象: src/lib/photo-scanner.ts expireOldCandidates 拡張
+### ⓖ inbox の「再 OCR」進捗 progress バー ★★
+- Round 27 ⓓ で bulk reocr を実装した。50 件処理だと数十秒かかるので
+  進捗ライブ表示を入れる
+- 対象: src/app/(app)/inbox/page.tsx bulkReocr
 
-### ⓖ ScoreSignalsBadge を ESC で閉じる ★★
-- Round 25 ⓖ で click toggle を入れた。ESC キーで閉じれるとさらに a11y 向上
-- 対象: src/app/(app)/inbox/page.tsx ScoreSignalsBadge
+### ✓ Round 27 で完了した項目 (履歴)
+- ㊤ 定期取引候補の自動検出 (lib/recurring.ts + dashboard widget)
+- ㊥ OCR 信頼度推定 (ocrConfidence — vendor/amount/date/items 充足率)
+- ⓐ partner 表記ゆれ検出 + 統合 (detectPartnerVariants + mergeVariantPair)
+- ⓑ 破棄タブでフィルタ中の N 件を candidate に一括復元
+- ⓒ 月次グラフ年度比較 (前年同月の薄い棒を重ねる)
+- ⓓ 受信箱 bulk Vision OCR 再実行 (selected を loop で reocrInboxRow)
+- ⓔ verify-app.sh autorun に release.sh DRY_RUN プレビュー追記
+- ⓕ 古い receipt_failed (30 日経過) を自動 stale_failure dismissed
+- ⓖ ScoreSignalsBadge ESC キーで sticky popover を閉じる
 
 ### ✓ Round 26 で完了した項目 (履歴)
 - ㊢ 過去サジェストを partner 連動に (selector + filter)

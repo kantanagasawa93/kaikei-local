@@ -21,9 +21,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, Users, Sparkles, CheckSquare, Square } from "lucide-react";
+import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, GitMerge } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
+import {
+  detectPartnerVariants,
+  type PartnerVariantPair,
+} from "@/lib/partner-cleanup";
 import type { Partner } from "@/types";
 
 const AUTO_LEARNED_TAG = "[auto-learned]";
@@ -68,6 +72,8 @@ export default function PartnersPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Round 25 ⓐ: partner_id → 使用件数 (receipts + journal_lines の合算)
   const [usageMap, setUsageMap] = useState<Record<string, number>>({});
+  // Round 27 ⓐ: 表記ゆれ候補ペア
+  const [variantPairs, setVariantPairs] = useState<PartnerVariantPair[]>([]);
 
   useEffect(() => {
     load();
@@ -97,6 +103,66 @@ export default function PartnersPage() {
       /* DB 失敗は表示なしで続行 */
     }
     setUsageMap(map);
+  }
+
+  // Round 27 ⓐ: partners + usageMap の両方が読まれた後に表記ゆれを再検出
+  useEffect(() => {
+    if (partners.length === 0) {
+      setVariantPairs([]);
+      return;
+    }
+    setVariantPairs(detectPartnerVariants(partners, usageMap));
+  }, [partners, usageMap]);
+
+  /**
+   * Round 27 ⓐ: 表記ゆれペアを統合する.
+   * 渡された pair の variant (長い方) を base (短い方) に向けてリンク貼り替え。
+   * - receipts.partner_id = variant.id の行を base.id に UPDATE
+   * - journal_lines.partner_id 同様
+   * - variant の partner 行を DELETE
+   * UI 上は variantPairs から消えるので、再検出されない。
+   */
+  async function mergeVariantPair(pair: PartnerVariantPair) {
+    const ok = window.confirm(
+      `「${pair.variant.name}」(使用 ${pair.variant.usage} 回) を ` +
+        `「${pair.base.name}」(使用 ${pair.base.usage} 回) に統合します。\n\n` +
+        `領収書 / 仕訳の partner_id を全部「${pair.base.name}」に書き換え、\n` +
+        `「${pair.variant.name}」を削除します。続行しますか?`,
+    );
+    if (!ok) return;
+    try {
+      // receipts.partner_id を base に
+      const { data: rec } = await supabase
+        .from("receipts")
+        .select("id")
+        .eq("partner_id", pair.variant.id);
+      for (const r of (rec as { id: string }[] | null) ?? []) {
+        await supabase
+          .from("receipts")
+          .update({ partner_id: pair.base.id })
+          .eq("id", r.id);
+      }
+      // journal_lines.partner_id を base に
+      const { data: jl } = await supabase
+        .from("journal_lines")
+        .select("id")
+        .eq("partner_id", pair.variant.id);
+      for (const ln of (jl as { id: string }[] | null) ?? []) {
+        await supabase
+          .from("journal_lines")
+          .update({ partner_id: pair.base.id })
+          .eq("id", ln.id);
+      }
+      // variant 自体を削除
+      await supabase.from("partners").delete().eq("id", pair.variant.id);
+      toast.success(
+        `「${pair.variant.name}」→「${pair.base.name}」に統合しました`,
+      );
+      load();
+      void loadUsage();
+    } catch (e) {
+      toast.error(`統合に失敗: ${(e as Error).message}`);
+    }
   }
 
   function toggleSelected(id: string) {
@@ -232,6 +298,50 @@ export default function PartnersPage() {
           </Button>
         )}
       </div>
+
+      {/* Round 27 ⓐ: 表記ゆれ候補ペア (検出されたら提示、ワンクリックで統合) */}
+      {variantPairs.length > 0 && (
+        <Card className="border-purple-200 bg-purple-50/40">
+          <CardContent className="p-4 space-y-2">
+            <p className="text-sm font-medium flex items-center gap-2">
+              <GitMerge className="h-4 w-4 text-purple-600" />
+              表記ゆれの可能性 ({variantPairs.length} ペア)
+            </p>
+            <p className="text-xs text-muted-foreground">
+              名前の先頭が一致する取引先ペアを検出しました。同じ取引先なら統合できます。
+            </p>
+            <div className="space-y-1">
+              {variantPairs.slice(0, 5).map((p) => (
+                <div
+                  key={`${p.base.id}:${p.variant.id}`}
+                  className="flex items-center gap-2 text-sm py-1 border-b border-purple-100 last:border-0"
+                >
+                  <span className="flex-1 truncate">
+                    <b>{p.base.name}</b>
+                    <span className="text-muted-foreground"> ({p.base.usage} 回) ↔ </span>
+                    <span>{p.variant.name}</span>
+                    <span className="text-muted-foreground"> ({p.variant.usage} 回)</span>
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void mergeVariantPair(p)}
+                    title="長い方を短い方に統合"
+                  >
+                    <GitMerge className="h-3 w-3 mr-1" />
+                    統合
+                  </Button>
+                </div>
+              ))}
+              {variantPairs.length > 5 && (
+                <p className="text-[10px] text-muted-foreground pt-1">
+                  …他 {variantPairs.length - 5} ペア
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Round 22 ⓑ: bulk action toolbar (auto-learned 候補をまとめて承認 / 削除) */}
       {selectedIds.size > 0 && (

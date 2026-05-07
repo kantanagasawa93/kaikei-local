@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/lib/supabase";
 import { Receipt, BookOpen, TrendingUp, TrendingDown, Download, AlertTriangle, FileSpreadsheet } from "lucide-react";
 import Link from "next/link";
@@ -15,8 +16,12 @@ import {
   downloadCsv,
 } from "@/lib/journal-export";
 import { checkReadiness, type ReadinessReport } from "@/lib/etax/readiness";
+import {
+  detectRecurringCandidates,
+  type RecurringCandidate,
+} from "@/lib/recurring";
 import { toast } from "@/lib/toast";
-import { CheckCircle2, AlertCircle } from "lucide-react";
+import { CheckCircle2, AlertCircle, Repeat } from "lucide-react";
 
 interface Stats {
   receiptCount: number;
@@ -25,11 +30,14 @@ interface Stats {
   totalExpense: number;
 }
 
-/** Round 21 ⓓ: 月次集計 (1月〜12月) */
+/** Round 21 ⓓ: 月次集計 (1月〜12月)
+ *  Round 27 ⓒ: 前年同月の値も保持する */
 interface MonthlyBucket {
   month: string; // "01" 〜 "12"
   income: number;
   expense: number;
+  prevIncome?: number;
+  prevExpense?: number;
 }
 
 export default function DashboardPage() {
@@ -50,6 +58,8 @@ export default function DashboardPage() {
   const [incompleteCount, setIncompleteCount] = useState(0);
   // Round 25 ㊠: 確定申告期の準備状況
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  // Round 27 ㊤: 定期取引候補
+  const [recurring, setRecurring] = useState<RecurringCandidate[]>([]);
 
   useEffect(() => {
     loadStats();
@@ -60,6 +70,8 @@ export default function DashboardPage() {
     void checkReadiness().then((r) => {
       if (r.inWindow) setReadiness(r);
     });
+    // Round 27 ㊤: 定期取引候補
+    void detectRecurringCandidates().then(setRecurring);
   }, []);
 
   // chartYear が変わったら月次グラフ再ロード
@@ -121,6 +133,8 @@ export default function DashboardPage() {
   }
 
   async function loadMonthly(year: number = new Date().getFullYear()) {
+    // Round 27 ⓒ: 前年同月のデータも一緒に取得して比較
+    const prevYear = year - 1;
     const start = `${year}-01-01`;
     const end = `${year}-12-31`;
     const { data: journalRows } = await supabase
@@ -161,6 +175,48 @@ export default function DashboardPage() {
         buckets[m].expense += ln.debit_amount - ln.credit_amount;
       }
     }
+
+    // Round 27 ⓒ: 前年データを取得して各 bucket に prevIncome / prevExpense を埋める
+    try {
+      const prevStart = `${prevYear}-01-01`;
+      const prevEnd = `${prevYear}-12-31`;
+      const { data: prevJournals } = await supabase
+        .from("journals")
+        .select("id, date")
+        .gte("date", prevStart)
+        .lte("date", prevEnd);
+      const prevDateMap = new Map<string, string>();
+      for (const j of (prevJournals as { id: string; date: string }[] | null) ?? []) {
+        const m = j.date.slice(5, 7);
+        if (m) prevDateMap.set(j.id, m);
+      }
+      if (prevDateMap.size > 0) {
+        const prevIds = Array.from(prevDateMap.keys());
+        const { data: prevLines } = await supabase
+          .from("journal_lines")
+          .select("journal_id, account_code, debit_amount, credit_amount")
+          .in("journal_id", prevIds);
+        for (const ln of (prevLines as Array<{
+          journal_id: string;
+          account_code: string;
+          debit_amount: number;
+          credit_amount: number;
+        }> | null) ?? []) {
+          const m = prevDateMap.get(ln.journal_id);
+          if (!m) continue;
+          buckets[m].prevIncome = buckets[m].prevIncome ?? 0;
+          buckets[m].prevExpense = buckets[m].prevExpense ?? 0;
+          if (ln.account_code.startsWith("4")) {
+            buckets[m].prevIncome! += ln.credit_amount - ln.debit_amount;
+          } else if (ln.account_code.startsWith("5") || ln.account_code.startsWith("6")) {
+            buckets[m].prevExpense! += ln.debit_amount - ln.credit_amount;
+          }
+        }
+      }
+    } catch {
+      /* 前年データなしでも当年は表示できる */
+    }
+
     setMonthly(Object.values(buckets));
   }
 
@@ -388,6 +444,59 @@ export default function DashboardPage() {
         </Card>
       )}
 
+      {/* Round 27 ㊤: 定期取引候補 (1 件以上のみ表示) */}
+      {recurring.length > 0 && (
+        <Card className="border-purple-200 bg-purple-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Repeat className="h-4 w-4 text-purple-600" />
+              定期取引候補 ({recurring.length} 件)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-2">
+              過去 6 ヶ月で繰り返し発生しているパターン。家賃・通信費・サブスク等。
+            </p>
+            <div className="space-y-1">
+              {recurring.slice(0, 5).map((r) => {
+                const fmt = (n: number) =>
+                  new Intl.NumberFormat("ja-JP").format(n);
+                const rhythmLabel =
+                  r.rhythm === "monthly" ? "月次" : r.rhythm === "weekly" ? "週次" : "不定期";
+                return (
+                  <div
+                    key={r.key}
+                    className="flex items-center gap-2 text-sm py-1 border-b border-purple-100 last:border-0"
+                    title={`過去 ${r.occurrences} 回 / 平均間隔 ${r.avgIntervalDays} 日 / 直近 ${r.lastSeen}`}
+                  >
+                    <span className="text-[10px] text-purple-700 font-medium w-12">
+                      {rhythmLabel}
+                    </span>
+                    <span className="flex-1 truncate">
+                      {r.partnerName ?? r.description}
+                    </span>
+                    <span className="text-xs text-muted-foreground w-20 truncate">
+                      {r.accountName}
+                    </span>
+                    <span className="text-sm tabular-nums w-24 text-right">
+                      ¥{fmt(r.amount)}
+                    </span>
+                    <Badge variant="secondary" className="text-[10px] w-12 justify-center">
+                      ×{r.occurrences}
+                    </Badge>
+                  </div>
+                );
+              })}
+              {recurring.length > 5 && (
+                <p className="text-[10px] text-muted-foreground pt-1">
+                  …他 {recurring.length - 5} 件
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Round 24 ㊟: 要確認の仕訳ウィジェット (1 件以上ある時だけ表示) */}
       {incompleteCount > 0 && (
         <Link href="/journals?incomplete=1" className="block">
@@ -564,24 +673,53 @@ function MonthlyBarChart({
           const incPct = (Math.abs(b.income) / maxVal) * 100;
           const expPct = (Math.abs(b.expense) / maxVal) * 100;
           // Round 26 ⓒ: 年間統計を tooltip に併記して比較しやすく
+          // Round 27 ⓒ: 前年同月比 (prevIncome / prevExpense) も併記
           const incomeDelta = b.income - incomeAvg;
           const expenseDelta = b.expense - expenseAvg;
           const sign = (n: number) => (n > 0 ? "+" : "");
+          const yoy =
+            b.prevIncome !== undefined || b.prevExpense !== undefined
+              ? `\n前年同月: 売上 ¥${fmt(b.prevIncome ?? 0)} / 経費 ¥${fmt(b.prevExpense ?? 0)}`
+              : "";
           const tooltip =
             `${b.month}月: 売上 ¥${fmt(b.income)} / 経費 ¥${fmt(b.expense)}\n` +
             `年間平均比: 売上 ${sign(incomeDelta)}¥${fmt(incomeDelta)} / ` +
             `経費 ${sign(expenseDelta)}¥${fmt(expenseDelta)}` +
+            yoy +
             (onMonthClick ? "\n(クリックで仕訳一覧へ)" : "");
+          // Round 27 ⓒ: 前年比 — 当年バーの隣に薄い前年バーを重ねる
+          const prevIncPct = b.prevIncome
+            ? (Math.abs(b.prevIncome) / maxVal) * 100
+            : 0;
+          const prevExpPct = b.prevExpense
+            ? (Math.abs(b.prevExpense) / maxVal) * 100
+            : 0;
+          const hasPrev =
+            b.prevIncome !== undefined || b.prevExpense !== undefined;
           const inner = (
-            <div className="flex flex-col-reverse h-full">
-              <div
-                className="bg-green-500 rounded-t-sm"
-                style={{ height: `${incPct}%`, minHeight: incPct > 0 ? "2px" : 0 }}
-              />
-              <div
-                className="bg-red-400 rounded-t-sm mt-0.5"
-                style={{ height: `${expPct}%`, minHeight: expPct > 0 ? "2px" : 0 }}
-              />
+            <div className="flex h-full items-end gap-0.5">
+              <div className="flex flex-col-reverse h-full flex-1 min-w-0">
+                <div
+                  className="bg-green-500 rounded-t-sm"
+                  style={{ height: `${incPct}%`, minHeight: incPct > 0 ? "2px" : 0 }}
+                />
+                <div
+                  className="bg-red-400 rounded-t-sm mt-0.5"
+                  style={{ height: `${expPct}%`, minHeight: expPct > 0 ? "2px" : 0 }}
+                />
+              </div>
+              {hasPrev && (
+                <div className="flex flex-col-reverse h-full w-1.5 min-w-0">
+                  <div
+                    className="bg-green-300/60 rounded-t-sm"
+                    style={{ height: `${prevIncPct}%`, minHeight: prevIncPct > 0 ? "1px" : 0 }}
+                  />
+                  <div
+                    className="bg-red-300/60 rounded-t-sm mt-0.5"
+                    style={{ height: `${prevExpPct}%`, minHeight: prevExpPct > 0 ? "1px" : 0 }}
+                  />
+                </div>
+              )}
             </div>
           );
           if (onMonthClick) {
@@ -626,6 +764,14 @@ function MonthlyBarChart({
           <span className="inline-block w-3 h-3 bg-red-400 rounded-sm" />
           経費
         </span>
+        {/* Round 27 ⓒ: 前年同月の凡例 (データある時だけ) */}
+        {data.some((b) => b.prevIncome !== undefined || b.prevExpense !== undefined) && (
+          <span className="inline-flex items-center gap-1">
+            <span className="inline-block w-1 h-3 bg-green-300/60 rounded-sm" />
+            <span className="inline-block w-1 h-3 bg-red-300/60 rounded-sm" />
+            前年同月
+          </span>
+        )}
         {/* Round 26 ⓒ: 年間平均と中央値 (実績がある月のみが母集団) */}
         {incomeMonths.length > 0 && (
           <span className="ml-4">
