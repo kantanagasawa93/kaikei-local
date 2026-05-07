@@ -206,6 +206,26 @@ async function saveLastScanSummary(s: LastScanSummary): Promise<void> {
   await upsertSetting(SETTING_LAST_SCAN_SUMMARY, JSON.stringify(s));
 }
 
+/**
+ * Round 26 ⓕ: 最終 purge 日時 (inbox/page.tsx の dismissed タブで表示).
+ * 単に inbox_last_purge_sweep_unix を unix epoch で読むだけ。
+ */
+export async function getLastPurgeUnix(): Promise<number | null> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", "inbox_last_purge_sweep_unix")
+      .single();
+    const raw = (data as { value?: string } | null)?.value;
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 const SETTING_LAST_PURGE_SWEEP = "inbox_last_purge_sweep_unix";
 
 /**

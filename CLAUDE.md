@@ -75,60 +75,66 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 26) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 27) 候補 — ユーザは「全部やって」希望 (10 個)
 
-新チャット起動時、起動ルーチン後にこの候補を 1 ラウンドにパックして実装する。
-推し優先順は ㊗ → ㊢ → ㊣ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
-
+推し優先順は ㊗ → ㊤ → ㊥ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
 ユーザの判断 / 操作を増やさない方向 (Round 22 以来の方針継続)。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (5 ラウンド持ち越し中)
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (6 ラウンド持ち越し中)
 - credentials 1 回入れたら `release.sh v0.3.0` で発火、updater bundle 同梱済
 
-### ㊢ 仕訳の「過去サジェスト」を partner 連動に格上げ ★★★★
-- Round 25 ㊡ は「過去 90 日の任意仕訳」だった。partner_id を選んだ瞬間、その partner の
-  過去仕訳のみフィルタリング表示する
-- 対象: src/app/(app)/journals/new/page.tsx の RecentJournals (現在の partners Map を活用)
+### ㊤ 仕訳の「定期的な反復」を検出して提案 ★★★★
+- 月末払いの家賃・通信費など同じ description + 同 partner + 同金額が
+  毎月発生している場合、ダッシュボードに「定期取引候補 N 件」表示
+- ワンクリックで auto_rules テーブルにルール化
+- 対象: src/lib/auto-journal.ts に detectRecurring() 新規
 
-### ㊣ 取引先「未使用」の自動掃除提案 ★★★★
-- Round 25 ⓐ で usageMap=0 = 削除候補と判定済み。1 月に 1 回、起動時に
-  auto-learned & 使用 0 件 & 30 日以上経過 を集計し、「N 件削除しますか?」 toast
-- 対象: src/lib/photo-scanner.ts に近い場所 (新規 src/lib/partner-cleanup.ts)
-        + boot.tsx 起動時呼出
+### ㊥ 領収書 OCR の信頼度別仕分け ★★★★
+- claude_result_json の confidence を見て、低信頼度のものは別タブに
+- 高信頼度: 自動仕訳 OK、低信頼度: 「要確認」タブで手動レビュー
+- 対象: photo-scanner.ts + inbox/page.tsx に信頼度フィルタ
 
-### ⓐ 仕訳の AI OCR 失敗を確定申告期に通知 ★★★
-- Round 25 ㊠ readiness で receipt_failed の件数も判定
-- 1/1〜3/15 の間に未解消の receipt_failed があれば readiness check に追加
-- 対象: src/lib/etax/readiness.ts に check 追加
+### ⓐ partner 名の表記ゆれ自動統合 ★★★
+- 「タリーズコーヒー トリアス久山店」「タリーズコーヒー」「タリーズ」を
+  Levenshtein 距離 + 共通 prefix で同一視 → 1 件に統合
+- 対象: src/lib/partner-cleanup.ts (新規 mergePartnerVariants)
 
-### ⓑ 受信箱「破棄」の理由別フィルタ拡張 ★★★
-- Round 25 ⓑ で件数バッジは出した。期限切れ以外も個別フィルタできるように
-  (Badge クリックで「重複だけ」「過去類似だけ」)
-- 対象: src/app/(app)/inbox/page.tsx の dismissed タブ
+### ⓑ 受信箱の「破棄」一括復元 ★★★
+- Round 26 ⓑ で reason 別 click filter を入れた。フィルタ中の項目を
+  ワンクリックで全部 candidate に戻すボタン
+- 対象: src/app/(app)/inbox/page.tsx
 
-### ⓒ 月次グラフ tooltip に「平均 / 中央値」を追加 ★★★
-- 棒クリックで遷移は OK。hover 時のツールチップに「年間平均 ¥X」を併記
+### ⓒ 月次グラフ年度比較 (前年同月) ★★★
+- 当年の棒の上に薄く前年同月の棒を重ねる (前年比%表示)
 - 対象: src/app/(app)/dashboard/page.tsx MonthlyBarChart
 
-### ⓓ 仕訳の bulk delete (確認ダイアログ + Undo) ★★★
-- Round 22 ㊛ で bulk タグ追加は実装済。同 toolbar に bulk delete を加える
-- 削除後 60 秒は Undo 可能 (auto-journal.ts の reverse stack 流用)
-- 対象: src/app/(app)/journals/page.tsx + src/lib/auto-journal.ts
+### ⓓ 領収書 bulk OCR 再実行 ★★
+- 受信箱で複数選択 → 「Vision OCR 再実行」を一括 (再分類)
+- 対象: src/app/(app)/inbox/page.tsx (既存 reocrInboxRow を bulk 化)
 
-### ⓔ verify-release で docs サイトの version 文字列も検証 ★★
-- Round 25 ⓔ で docs URL 200 確認は OK。次は `body` 内の v0.X.Y 文字列が
-  リリースタグと一致するかチェック (古いバージョンが LP に残ってないか)
-- 対象: scripts/verify-release.sh
+### ⓔ verify-app.sh autorun に release.sh dry-run 同梱 ★★
+- autorun 後に DRY_RUN=1 release.sh v<X> を回して
+  「このコミットでリリースしたら何が起きるか」smoke-report に追記
+- 対象: scripts/verify-app.sh
 
-### ⓕ 期限切れの photo_inbox 物理削除を「破棄タブの 件数バッジ」に反映 ★★
-- Round 25 ⓕ purgeOldDismissed が動いた直後に reason 別件数も再集計
-- 期限切れだけ大量削除されたあと「期限切れ 0 件」が見える
-- 対象: src/app/(app)/inbox/page.tsx の refresh で再ロード
+### ⓕ photo_inbox.last_error の自動分類アーカイブ ★★
+- receipt_failed が 30 日以上残ったら自動 dismissed (理由 stale_failure)
+- 対象: src/lib/photo-scanner.ts expireOldCandidates 拡張
 
-### ⓖ updater のリトライ機構 ★★
-- 現状は失敗→ボタン押し直しのみ。check が transient エラーで 1 回失敗したら
-  10 秒後に静かに再試行 (1 回のみ)
-- 対象: src/lib/auto-updater.ts checkAutoUpdate
+### ⓖ ScoreSignalsBadge を ESC で閉じる ★★
+- Round 25 ⓖ で click toggle を入れた。ESC キーで閉じれるとさらに a11y 向上
+- 対象: src/app/(app)/inbox/page.tsx ScoreSignalsBadge
+
+### ✓ Round 26 で完了した項目 (履歴)
+- ㊢ 過去サジェストを partner 連動に (selector + filter)
+- ㊣ partner-cleanup: 1 ヶ月に 1 回 toast 通知 (新規 lib/partner-cleanup.ts)
+- ⓐ readiness check に receipt_failed (state) を追加
+- ⓑ 破棄 reason 別 click filter (Badge クリックで toggle)
+- ⓒ 月次グラフ tooltip に年間平均/中央値 + 平均比デルタ
+- ⓓ 仕訳 bulk delete + Undo (BULK_DELETE_UNDO_KEY スタック)
+- ⓔ verify-release.sh で LP に v<TAG> が含まれるかチェック
+- ⓕ inbox dismissed タブに「最終物理削除」日時表示
+- ⓖ updater 再試行 (transient エラーは 10 秒後 1 回 retry)
 
 ### ✓ Round 25 で完了した項目 (履歴)
 - ㊠ 確定申告期 (1/1〜3/15) 準備状況カード (etax/readiness.ts + dashboard 統合)

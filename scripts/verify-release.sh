@@ -168,10 +168,12 @@ fi
 
 echo ""
 echo "==> 5. docs サイト (kantanagasawa93.github.io) の導線確認"
-# Round 25 ⓔ: install.html / index.html で DMG リンクが古いタグや 404 を指してないか
-# 最低限の検証として、ページが 200 で返り中身に latest/download や KAIKEI_LOCAL.dmg
-# が含まれているかを確認する。version 一致は手動確認 (LP は手動更新前提)。
+# Round 25 ⓔ + Round 26 ⓔ: install.html / index.html で
+#  - DMG リンク (latest/download or releases/download) が含まれてるか
+#  - リリースタグ (= $TAG) が body 内に文字列として現れるか
+#    → 古いバージョンが LP に残っていないかの「最新追従」確認
 DOCS_BASE="https://kantanagasawa93.github.io/kaikei-local"
+TAG_BARE="${TAG#v}"  # v0.3.0 → 0.3.0
 for path in "/install.html" "/"; do
   url="${DOCS_BASE}${path}"
   status=$(curl -sILo /dev/null -w "%{http_code}" "$url" -L --max-time 30 || echo "000")
@@ -181,6 +183,13 @@ for path in "/install.html" "/"; do
       pass "${path} — ページ表示 + DMG リンクあり"
     else
       warn "${path} — 200 だが DMG リンクが見つからない (LP 更新忘れ?)"
+    fi
+    # Round 26 ⓔ: リリースタグが LP 本文に現れているか
+    # (latest/download URL を使う場合は version が出ない可能性もあるので warn 止め)
+    if echo "$body" | grep -q "v${TAG_BARE}\|$TAG"; then
+      pass "${path} — リリース v${TAG_BARE} が LP に反映されている"
+    else
+      warn "${path} — LP 本文に v${TAG_BARE} が見つからない (latest URL 利用なら OK / 旧 ver 表記が残ってる可能性)"
     fi
   elif [ "$status" = "404" ]; then
     if [ "$path" = "/" ]; then

@@ -5,6 +5,7 @@ import { installErrorReporter } from "@/lib/error-reporter";
 import { runAutoBackup } from "@/lib/auto-backup";
 import { checkForUpdate } from "@/lib/update-check";
 import { expireOldCandidates, purgeOldDismissed } from "@/lib/photo-scanner";
+import { checkPartnerCleanup } from "@/lib/partner-cleanup";
 
 /**
  * 起動時の1回限りのセットアップ。
@@ -33,6 +34,13 @@ export function Boot() {
         console.warn("purgeOldDismissed failed:", e),
       );
     }, 12_000);
+    // Round 26 ㊣: 1 ヶ月に 1 回、auto-learned & 未使用 & 30 日経過の partner を集計
+    // → 件数が >0 なら toast.info で通知 (削除自体は手動)
+    setTimeout(() => {
+      checkPartnerCleanup().catch((e) =>
+        console.warn("checkPartnerCleanup failed:", e),
+      );
+    }, 15_000);
   }, []);
   return null;
 }

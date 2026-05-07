@@ -47,6 +47,7 @@ import {
   markInboxAllViewed,
   getAuthStatus,
   getLastScanSummary,
+  getLastPurgeUnix,
   type AuthStatus,
   type InboxRow,
   type LastScanSummary,
@@ -74,9 +75,15 @@ export default function InboxPage() {
   const [scanning, setScanning] = useState(false);
   // Round 23 ⓖ: 直近スキャン結果のサマリーバー
   const [lastScan, setLastScan] = useState<LastScanSummary | null>(null);
+  // Round 26 ⓕ: 90 日 purge の最終実行時刻 (dismissed タブで表示)
+  const [lastPurgeUnix, setLastPurgeUnix] = useState<number | null>(null);
   const [filter, setFilter] = useState<InboxState | "all">("candidate");
   // Round 24 ⓖ: 破棄タブで「expired_30d 自動破棄のみ」フィルタ
   const [expiredOnly, setExpiredOnly] = useState(false);
+  // Round 26 ⓑ: 破棄 reason 別 click filter (Badge クリックで toggle)
+  const [reasonFilter, setReasonFilter] = useState<
+    "expired_30d" | "duplicate" | "pattern" | "manual" | null
+  >(null);
   const [, setAutoMode] = useState(false);
   const [journalizing, setJournalizing] = useState(false);
   const [progress, setProgress] = useState<{
@@ -269,6 +276,12 @@ export default function InboxPage() {
     // Round 23 ⓖ: 直近スキャンサマリーをロード
     try {
       setLastScan(await getLastScanSummary());
+    } catch {
+      /* silent */
+    }
+    // Round 26 ⓕ: 最終 purge 日時 (dismissed タブで表示)
+    try {
+      setLastPurgeUnix(await getLastPurgeUnix());
     } catch {
       /* silent */
     }
@@ -1055,44 +1068,84 @@ export default function InboxPage() {
               30 日経過で自動破棄されたもののみ表示
             </label>
             <span className="text-foreground">理由別:</span>
-            {expired > 0 && (
-              <Badge variant="outline" className="text-[10px]">
-                期限切れ {expired}
-              </Badge>
+            {/* Round 26 ⓑ: クリックで個別フィルタ toggle (active 時は塗りつぶし) */}
+            {([
+              ["expired_30d", "期限切れ", expired],
+              ["duplicate", "重複", duplicate],
+              ["pattern", "過去類似", pattern],
+              ["manual", "手動", manual],
+            ] as const).map(([key, label, n]) => {
+              if (n === 0) return null;
+              const active = reasonFilter === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() =>
+                    setReasonFilter((prev) => (prev === key ? null : key))
+                  }
+                  className="inline-flex"
+                  aria-pressed={active}
+                >
+                  <Badge
+                    variant={active ? "default" : "outline"}
+                    className={`text-[10px] cursor-pointer ${
+                      active ? "" : "hover:bg-muted"
+                    }`}
+                    title={
+                      active
+                        ? `${label}フィルタを解除`
+                        : `${label}だけ表示 (クリック)`
+                    }
+                  >
+                    {label} {n}
+                  </Badge>
+                </button>
+              );
+            })}
+            {reasonFilter && (
+              <button
+                type="button"
+                onClick={() => setReasonFilter(null)}
+                className="text-[10px] text-muted-foreground hover:text-foreground underline"
+              >
+                解除
+              </button>
             )}
-            {duplicate > 0 && (
-              <Badge variant="outline" className="text-[10px]">
-                重複 {duplicate}
-              </Badge>
-            )}
-            {pattern > 0 && (
-              <Badge variant="outline" className="text-[10px]">
-                過去類似 {pattern}
-              </Badge>
-            )}
-            {manual > 0 && (
-              <Badge variant="outline" className="text-[10px]">
-                手動 {manual}
-              </Badge>
+            {/* Round 26 ⓕ: 最終 purge 日時 (90 日経過 dismissed の物理削除) */}
+            {lastPurgeUnix && (
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                最終物理削除: {new Date(lastPurgeUnix * 1000).toLocaleString("ja-JP")}
+              </span>
             )}
           </div>
         );
       })()}
 
       {(() => {
-        // Round 24 ⓖ: dismissed + expiredOnly のときに auto_dismissed_reason を見て絞り込む
+        // Round 24 ⓖ + Round 26 ⓑ: dismissed タブで reason 別フィルタを適用
+        const matchReason = (it: InboxRow, want: string): boolean => {
+          if (!it.auto_dismissed_reason) {
+            return want === "manual";
+          }
+          try {
+            const parsed = JSON.parse(it.auto_dismissed_reason) as {
+              reason?: string;
+            };
+            const r = parsed.reason ?? "pattern";
+            if (want === "manual") return false;
+            if (want === "pattern") return r !== "expired_30d" && r !== "duplicate";
+            return r === want;
+          } catch {
+            return want === "manual";
+          }
+        };
         const visible =
-          filter === "dismissed" && expiredOnly
+          filter === "dismissed" && (expiredOnly || reasonFilter)
             ? items.filter((it) => {
-                if (!it.auto_dismissed_reason) return false;
-                try {
-                  const parsed = JSON.parse(it.auto_dismissed_reason) as {
-                    reason?: string;
-                  };
-                  return parsed.reason === "expired_30d";
-                } catch {
-                  return false;
-                }
+                if (expiredOnly) return matchReason(it, "expired_30d");
+                if (reasonFilter) return matchReason(it, reasonFilter);
+                return true;
               })
             : items;
         return visible.length === 0 ? (
