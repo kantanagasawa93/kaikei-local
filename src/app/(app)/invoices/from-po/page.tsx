@@ -412,16 +412,60 @@ export default function FromPoPage() {
               )}
             </div>
 
-            <div className="flex justify-end gap-4 text-sm pt-2">
+            {/* 源泉徴収税 (個人事業主の報酬) を編集可能に */}
+            <div className="flex items-center justify-end gap-3 text-sm pt-2">
+              <Label htmlFor="po-withholding" className="text-xs text-muted-foreground">
+                源泉徴収税 (10.21% 等):
+              </Label>
+              <Input
+                id="po-withholding"
+                type="text"
+                inputMode="numeric"
+                value={result.withholding_tax != null ? String(result.withholding_tax) : ""}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9]/g, "");
+                  updateResult({ withholding_tax: raw === "" ? null : Number(raw) });
+                }}
+                placeholder="0"
+                className="w-32 text-right tabular-nums"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs"
+                title="小計 × 10.21% で源泉徴収税を自動計算"
+                onClick={() => {
+                  const s = result.subtotal ?? 0;
+                  updateResult({ withholding_tax: Math.floor(s * 0.1021) });
+                }}
+              >
+                自動計算
+              </Button>
+            </div>
+
+            <div className="flex justify-end gap-4 text-sm pt-2 border-t pt-3">
               <span>
                 小計: <b className="tabular-nums">¥{fmt(result.subtotal)}</b>
               </span>
               <span>
                 消費税: <b className="tabular-nums">¥{fmt(result.tax_amount)}</b>
               </span>
+              {(result.withholding_tax ?? 0) > 0 && (
+                <span className="text-red-700">
+                  − 源泉徴収: <b className="tabular-nums">¥{fmt(result.withholding_tax)}</b>
+                </span>
+              )}
               <span>
-                合計:{" "}
-                <b className="text-base tabular-nums">¥{fmt(result.total)}</b>
+                請求金額:{" "}
+                <b className="text-base tabular-nums">
+                  ¥
+                  {fmt(
+                    (result.subtotal ?? 0) +
+                      (result.tax_amount ?? 0) -
+                      (result.withholding_tax ?? 0),
+                  )}
+                </b>
               </span>
             </div>
 

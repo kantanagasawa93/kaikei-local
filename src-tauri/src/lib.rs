@@ -1228,6 +1228,12 @@ pub fn run() {
             sql: migrations::SCHEMA_V9_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "invoices_withholding_tax",
+            sql: migrations::SCHEMA_V10_SQL,
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

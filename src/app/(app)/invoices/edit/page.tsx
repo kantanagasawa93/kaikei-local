@@ -61,6 +61,8 @@ function EditInner() {
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<Invoice["status"]>("draft");
   const [items, setItems] = useState<ItemInput[]>([newItem()]);
+  // Round 28: 源泉徴収税 (個人事業主の報酬で計上)
+  const [withholding, setWithholding] = useState(0);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -85,6 +87,7 @@ function EditInner() {
           setSubject(i.subject || "");
           setNotes(i.notes || "");
           setStatus(i.status);
+          setWithholding(i.withholding_tax ?? 0);
         }
         const { data: itemRows } = await db
           .from("invoice_items")
@@ -129,7 +132,8 @@ function EditInner() {
     })();
   }, [id]);
 
-  // 請求書明細は「税抜」の unit_price 入力を想定する
+  // 請求書明細は「税抜」の unit_price 入力を想定する。
+  // total は 小計 + 消費税 − 源泉徴収 (実際にクライアントが振込む額)。
   const totals = useMemo(() => {
     let subtotal = 0;
     let tax = 0;
@@ -138,8 +142,8 @@ function EditInner() {
       subtotal += amt;
       tax += calculateTax(amt, it.tax_code);
     }
-    return { subtotal, tax, total: subtotal + tax };
-  }, [items]);
+    return { subtotal, tax, total: subtotal + tax - withholding };
+  }, [items, withholding]);
 
   const updateItem = (idx: number, patch: Partial<ItemInput>) => {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -175,6 +179,7 @@ function EditInner() {
       subject: subject || null,
       subtotal: totals.subtotal,
       tax_amount: totals.tax,
+      withholding_tax: withholding,
       total_amount: totals.total,
       status: saveStatus,
       notes: notes || null,
@@ -228,6 +233,7 @@ function EditInner() {
       subject: subject || null,
       subtotal: totals.subtotal,
       tax_amount: totals.tax,
+      withholding_tax: withholding,
       total_amount: totals.total,
       status,
       sent_at: null,
@@ -459,10 +465,44 @@ function EditInner() {
             <span className="text-muted-foreground">うち消費税</span>
             <span>¥{totals.tax.toLocaleString()}</span>
           </div>
+          <div className="flex justify-between items-center">
+            <span className="text-muted-foreground inline-flex items-center gap-2">
+              源泉徴収税
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 text-[10px] px-1.5"
+                title="小計 × 10.21% で自動計算 (個人事業主の報酬の標準税率)"
+                onClick={() =>
+                  setWithholding(Math.floor(totals.subtotal * 0.1021))
+                }
+              >
+                10.21%
+              </Button>
+            </span>
+            <Input
+              type="text"
+              inputMode="numeric"
+              value={withholding ? String(withholding) : ""}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^0-9]/g, "");
+                setWithholding(raw === "" ? 0 : Number(raw));
+              }}
+              placeholder="0"
+              className="w-32 h-8 text-right tabular-nums"
+            />
+          </div>
           <div className="flex justify-between text-lg font-bold pt-2 border-t">
-            <span>合計</span>
+            <span>請求金額 (差引)</span>
             <span>¥{totals.total.toLocaleString()}</span>
           </div>
+          {withholding > 0 && (
+            <p className="text-[11px] text-muted-foreground pt-1">
+              小計 ¥{totals.subtotal.toLocaleString()} + 消費税 ¥{totals.tax.toLocaleString()}
+              {" "}− 源泉徴収 ¥{withholding.toLocaleString()} = ¥{totals.total.toLocaleString()}
+            </p>
+          )}
         </CardContent>
       </Card>
 

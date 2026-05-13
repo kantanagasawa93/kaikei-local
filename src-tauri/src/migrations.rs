@@ -528,6 +528,16 @@ pub const SCHEMA_V9_SQL: &str = r#"
 ALTER TABLE journals ADD COLUMN tags TEXT;
 "#;
 
+/// v10: 請求書に源泉徴収税のカラムを追加 (Round 28).
+///
+/// 個人事業主の報酬では 10.21% (100万円超の部分は 20.42%) を源泉徴収するのが
+/// 一般的。発注書に「源泉徴収後の支払額」が書かれているケースが多く、
+/// 請求書側でも 小計 + 消費税 − 源泉徴収 = 請求額 の式を保持しないと
+/// 金額が食い違う。既存行はデフォルト 0 で影響なし。
+pub const SCHEMA_V10_SQL: &str = r#"
+ALTER TABLE invoices ADD COLUMN withholding_tax INTEGER DEFAULT 0;
+"#;
+
 /// v5: v4 二重実行で残るゴミテーブルの掃除。
 ///
 /// 経緯:

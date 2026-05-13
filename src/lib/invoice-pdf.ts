@@ -159,6 +159,12 @@ export async function exportInvoicePdf(
   y -= 14;
   draw("Tax", 380, y, { bold: true });
   draw(`${invoice.tax_amount.toLocaleString()} JPY`, 490, y);
+  // Round 28: 源泉徴収税 (Withholding) — 0 の時は表示省略
+  if ((invoice.withholding_tax ?? 0) > 0) {
+    y -= 14;
+    draw("Withholding", 380, y, { bold: true });
+    draw(`- ${(invoice.withholding_tax ?? 0).toLocaleString()} JPY`, 480, y);
+  }
   y -= 14;
   draw("TOTAL", 380, y, { size: 13, bold: true });
   draw(`${invoice.total_amount.toLocaleString()} JPY`, 480, y, { size: 13, bold: true });
