@@ -1,7 +1,7 @@
 /**
  * Round 28: 発注書 (Purchase Order) を OCR して請求書の元データを抽出する.
  *
- * 既存の領収書 OCR (ai-ocr.ts) とは別パスで Claude に投げる。
+ * 既存の領収書 OCR (ai-ocr.ts) とは別パスで AI OCR (Gemini Vision) に投げる。
  * /api/ocr/purchase-order エンドポイントを叩き、{ partner_name, items[], ... } を返す。
  */
 
@@ -49,10 +49,10 @@ async function getApiBase(): Promise<string> {
 }
 
 /**
- * 発注書画像を Claude OCR にかけて請求書の元データを返す.
+ * 発注書画像を AI OCR (Gemini Vision) にかけて請求書の元データを返す.
  *
  * @param imageBase64 base64 文字列 (data:URL のヘッダなし)
- * @param mediaType "image/jpeg" / "image/png" / "application/pdf" (Claude 対応)
+ * @param mediaType "image/jpeg" / "image/png" / "application/pdf"
  */
 export async function ocrPurchaseOrder(
   imageBase64: string,

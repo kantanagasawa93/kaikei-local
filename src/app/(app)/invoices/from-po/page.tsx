@@ -135,7 +135,7 @@ export default function FromPoPage() {
                     1. AI OCR の利用に同意する
                   </p>
                   <p className="text-xs text-amber-800">
-                    発注書画像を Claude OCR (Anthropic 経由) に送って読み取る
+                    発注書画像を AI OCR (Gemini 経由) に送って読み取る
                     ことへの同意。設定 → 「AI 読み取り」セクションで承諾します。
                   </p>
                 </div>
@@ -155,7 +155,7 @@ export default function FromPoPage() {
                     2. ライセンスキーを登録する
                   </p>
                   <p className="text-xs text-amber-800">
-                    Anthropic API の呼び出し枠を管理するライセンスキー。
+                    AI OCR API の呼び出し枠を管理するライセンスキー。
                     無料プランでも月 30 枚まで使えます。
                   </p>
                 </div>
@@ -420,7 +420,7 @@ export default function FromPoPage() {
             <p className="font-medium text-foreground">使い方</p>
             <ol className="list-decimal pl-5 space-y-0.5">
               <li>受け取った発注書 (PDF or 画像) を「ファイルを選択」</li>
-              <li>「AI で読み取る」で Claude OCR を起動 (~10 秒)</li>
+              <li>「AI で読み取る」で AI OCR を起動 (~10 秒)</li>
               <li>抽出された請求先 / 品目 / 金額を確認、必要なら微修正</li>
               <li>「請求書を作成」で <Badge variant="outline" className="text-[10px]">draft</Badge> 状態の請求書ができる</li>
               <li>編集画面で発行 → 送付 (PDF ダウンロード)</li>

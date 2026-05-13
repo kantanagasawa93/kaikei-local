@@ -161,3 +161,52 @@ export async function detectRecurringCandidates(): Promise<
   out.sort((a, b) => b.occurrences - a.occurrences);
   return out;
 }
+
+/**
+ * Round 28 ㊦: 定期取引候補をワンクリックで auto_rules に登録する.
+ *
+ * 銀行明細取込時に「同 partner / 近い金額」の取引へ勘定科目を自動提案させる。
+ * match_text は取引先名 (なければ摘要) を contains マッチ。金額は ±3% の窓。
+ * 戻り値は INSERT した行の id。
+ */
+export async function createAutoRuleFromCandidate(
+  c: RecurringCandidate,
+): Promise<string> {
+  const matchText = (c.partnerName ?? c.description ?? "").trim();
+  if (!matchText) throw new Error("ルール化できる取引先名/摘要がありません");
+  const lo = Math.round(c.amount * 0.97);
+  const hi = Math.round(c.amount * 1.03);
+  const { data, error } = await db
+    .from("auto_rules")
+    .insert({
+      bank_account_id: null,
+      is_income: null,
+      match_text: matchText,
+      match_type: "contains",
+      amount_min: lo,
+      amount_max: hi,
+      priority: 50,
+      action_type: "suggest_journal",
+      account_code: c.accountCode,
+      account_name: c.accountName,
+      tax_code: null,
+      partner_id: c.partnerId,
+    })
+    .select("id")
+    .single();
+  if (error) throw error;
+  return (data as { id: string }).id;
+}
+
+/**
+ * 既に同等の auto_rule が登録済みかどうかを判定する (match_text + account_code の一致)。
+ * ダッシュボードで「ルール済」表示を出すために使う。
+ */
+export async function listRuledMatchTexts(): Promise<Set<string>> {
+  const { data } = await db.from("auto_rules").select("match_text, account_code");
+  const set = new Set<string>();
+  for (const r of (data as { match_text: string; account_code: string | null }[] | null) ?? []) {
+    set.add(`${(r.match_text ?? "").trim().toLowerCase()}:${r.account_code ?? ""}`);
+  }
+  return set;
+}

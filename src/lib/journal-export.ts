@@ -228,6 +228,48 @@ export async function summarizeByMonth(year: number): Promise<MonthlySummaryRow[
   return Object.values(buckets);
 }
 
+/**
+ * Round 28 ⓐ: 任意の日付レンジ (含む) の売上/経費合計.
+ * dashboard ドリルダウン (/journals?from=&to=) の「前年同月比較」用。
+ */
+export async function summarizeByDateRange(
+  from: string,
+  to: string,
+): Promise<{ income: number; expense: number }> {
+  const { data: journalRows } = await db
+    .from("journals")
+    .select("id")
+    .gte("date", from)
+    .lte("date", to);
+  const ids = ((journalRows as { id: string }[] | null) ?? []).map((j) => j.id);
+  if (ids.length === 0) return { income: 0, expense: 0 };
+  const { data: lines } = await db
+    .from("journal_lines")
+    .select("journal_id, account_code, debit_amount, credit_amount")
+    .in("journal_id", ids);
+  let income = 0;
+  let expense = 0;
+  for (const ln of (lines as Array<{
+    account_code: string;
+    debit_amount: number;
+    credit_amount: number;
+  }> | null) ?? []) {
+    if (ln.account_code.startsWith("4")) {
+      income += ln.credit_amount - ln.debit_amount;
+    } else if (ln.account_code.startsWith("5") || ln.account_code.startsWith("6")) {
+      expense += ln.debit_amount - ln.credit_amount;
+    }
+  }
+  return { income, expense };
+}
+
+/** "YYYY-MM-DD" の年を n 引いた日付を返す (例: 2026-03-01 → 2025-03-01) */
+export function shiftYear(date: string, deltaYears: number): string {
+  const m = /^(\d{4})(-\d{2}-\d{2})$/.exec(date);
+  if (!m) return date;
+  return `${parseInt(m[1], 10) + deltaYears}${m[2]}`;
+}
+
 export function buildMonthlySummaryCsv(year: number, rows: MonthlySummaryRow[]): string {
   const header = ["月", "売上", "経費", "差引"];
   const lines: string[] = [header.map(csvEscape).join(",")];
@@ -376,6 +418,212 @@ export async function buildFiscalYearSummary(year: number): Promise<{
   }
 
   return { year, receiptCount, journalCount, monthly, topExpenses, issuer };
+}
+
+// -----------------------------------------------------------------------------
+// Round 28 ㊧: 他社会計ソフト向けエクスポート (freee / マネーフォワード クラウド)
+//
+// 会計ソフト移行を検討しているユーザ向けに、各サービスの「振替形式 / 仕訳インポート」
+// CSV を生成する。税区分名はサービスごとに異なるが、kaikei の tax_code をそのまま
+// 出力し、インポート前に手で読み替えてもらう前提 (空欄は「対象外」相当)。
+// -----------------------------------------------------------------------------
+
+interface FetchedJournal {
+  id: string;
+  date: string;
+  description: string;
+  lines: Array<{
+    account_code: string | null;
+    account_name: string;
+    debit_amount: number;
+    credit_amount: number;
+    tax_code: string | null;
+    memo: string | null;
+  }>;
+}
+
+async function fetchJournalsWithLines(opts: {
+  fromDate?: string | null;
+  toDate?: string | null;
+} = {}): Promise<FetchedJournal[]> {
+  let q = db
+    .from("journals")
+    .select("*, journal_lines(*)")
+    .order("date", { ascending: true });
+  if (opts.fromDate) q = q.gte("date", opts.fromDate);
+  if (opts.toDate) q = q.lte("date", opts.toDate);
+  const { data } = await q;
+  const rows = ((data as Array<{
+    id: string;
+    date: string;
+    description: string;
+    journal_lines: Array<{
+      account_code: string | null;
+      account_name: string;
+      debit_amount: number;
+      credit_amount: number;
+      tax_code: string | null;
+      memo: string | null;
+    }>;
+  }> | null) ?? []);
+  return rows.map((j) => ({
+    id: j.id,
+    date: j.date,
+    description: j.description,
+    lines: (j.journal_lines ?? []).map((ln) => ({
+      account_code: ln.account_code,
+      account_name: ln.account_name,
+      debit_amount: ln.debit_amount,
+      credit_amount: ln.credit_amount,
+      tax_code: ln.tax_code,
+      memo: ln.memo,
+    })),
+  }));
+}
+
+/** "YYYY-MM-DD" → "YYYY/MM/DD" (freee / MF とも斜線区切りを受け付ける) */
+function slashDate(d: string): string {
+  return d.replace(/-/g, "/");
+}
+
+/**
+ * freee 振替形式 CSV.
+ *
+ * 単一仕訳 (借方 1 行 + 貸方 1 行) は 1 行に圧縮。複合仕訳は freee の慣習に倣い
+ * 相手科目を「諸口」にして各行を展開する。
+ * 列: 日付, 借方勘定科目, 借方金額, 借方税区分, 貸方勘定科目, 貸方金額, 貸方税区分, 備考
+ */
+export async function buildFreeeJournalsCsv(opts: {
+  fromDate?: string | null;
+  toDate?: string | null;
+} = {}): Promise<string> {
+  const journals = await fetchJournalsWithLines(opts);
+  const header = [
+    "日付",
+    "借方勘定科目",
+    "借方金額",
+    "借方税区分",
+    "貸方勘定科目",
+    "貸方金額",
+    "貸方税区分",
+    "備考",
+  ];
+  const out: string[] = [header.map(csvEscape).join(",")];
+  const SUSPENSE = "諸口";
+  for (const j of journals) {
+    const debits = j.lines.filter((l) => l.debit_amount > 0);
+    const credits = j.lines.filter((l) => l.credit_amount > 0);
+    const memo = j.description || j.lines.find((l) => l.memo)?.memo || "";
+    if (debits.length === 1 && credits.length === 1) {
+      const d = debits[0];
+      const c = credits[0];
+      out.push(
+        [
+          slashDate(j.date),
+          d.account_name,
+          String(d.debit_amount),
+          d.tax_code ?? "",
+          c.account_name,
+          String(c.credit_amount),
+          c.tax_code ?? "",
+          memo,
+        ]
+          .map(csvEscape)
+          .join(","),
+      );
+      continue;
+    }
+    for (const d of debits) {
+      out.push(
+        [
+          slashDate(j.date),
+          d.account_name,
+          String(d.debit_amount),
+          d.tax_code ?? "",
+          SUSPENSE,
+          String(d.debit_amount),
+          "",
+          memo,
+        ]
+          .map(csvEscape)
+          .join(","),
+      );
+    }
+    for (const c of credits) {
+      out.push(
+        [
+          slashDate(j.date),
+          SUSPENSE,
+          String(c.credit_amount),
+          "",
+          c.account_name,
+          String(c.credit_amount),
+          c.tax_code ?? "",
+          memo,
+        ]
+          .map(csvEscape)
+          .join(","),
+      );
+    }
+  }
+  return "﻿" + out.join("\r\n") + "\r\n";
+}
+
+/**
+ * マネーフォワード クラウド会計「仕訳帳インポート」CSV.
+ *
+ * 同一「取引No」の複数行で 1 仕訳を表現できるため、journal_line 1 行 = CSV 1 行で
+ * 展開する (借方行 / 貸方行のどちらかに値を入れる)。
+ * 列: 取引No, 取引日, 借方勘定科目, 借方補助科目, 借方税区分, 借方金額(円), 貸方勘定科目,
+ *     貸方補助科目, 貸方税区分, 貸方金額(円), 摘要, 仕訳メモ
+ */
+export async function buildMoneyForwardJournalsCsv(opts: {
+  fromDate?: string | null;
+  toDate?: string | null;
+} = {}): Promise<string> {
+  const journals = await fetchJournalsWithLines(opts);
+  const header = [
+    "取引No",
+    "取引日",
+    "借方勘定科目",
+    "借方補助科目",
+    "借方税区分",
+    "借方金額(円)",
+    "貸方勘定科目",
+    "貸方補助科目",
+    "貸方税区分",
+    "貸方金額(円)",
+    "摘要",
+    "仕訳メモ",
+  ];
+  const out: string[] = [header.map(csvEscape).join(",")];
+  let txNo = 0;
+  for (const j of journals) {
+    txNo += 1;
+    const memo = j.description || "";
+    for (const ln of j.lines) {
+      const isDebit = ln.debit_amount > 0;
+      out.push(
+        [
+          String(txNo),
+          slashDate(j.date),
+          isDebit ? ln.account_name : "",
+          "",
+          isDebit ? ln.tax_code ?? "" : "",
+          isDebit ? String(ln.debit_amount) : "",
+          isDebit ? "" : ln.account_name,
+          "",
+          isDebit ? "" : ln.tax_code ?? "",
+          isDebit ? "" : String(ln.credit_amount),
+          memo,
+          ln.memo ?? "",
+        ]
+          .map(csvEscape)
+          .join(","),
+      );
+    }
+  }
+  return "﻿" + out.join("\r\n") + "\r\n";
 }
 
 /** ブラウザ側でダウンロードトリガー (Tauri の dialog plugin は使わず簡素に) */

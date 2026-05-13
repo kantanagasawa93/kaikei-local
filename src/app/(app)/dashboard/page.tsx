@@ -18,6 +18,8 @@ import {
 import { checkReadiness, type ReadinessReport } from "@/lib/etax/readiness";
 import {
   detectRecurringCandidates,
+  createAutoRuleFromCandidate,
+  listRuledMatchTexts,
   type RecurringCandidate,
 } from "@/lib/recurring";
 import { toast } from "@/lib/toast";
@@ -60,6 +62,8 @@ export default function DashboardPage() {
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   // Round 27 ㊤: 定期取引候補
   const [recurring, setRecurring] = useState<RecurringCandidate[]>([]);
+  // Round 28 ㊦: 既に auto_rules 登録済みのキー集合 ("match_text:account_code")
+  const [ruledKeys, setRuledKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadStats();
@@ -72,7 +76,23 @@ export default function DashboardPage() {
     });
     // Round 27 ㊤: 定期取引候補
     void detectRecurringCandidates().then(setRecurring);
+    // Round 28 ㊦: ルール済み判定
+    void listRuledMatchTexts().then(setRuledKeys);
   }, []);
+
+  // Round 28 ㊦: 定期取引候補をワンクリックで auto_rules に登録
+  function candidateRuleKey(r: RecurringCandidate): string {
+    return `${(r.partnerName ?? r.description ?? "").trim().toLowerCase()}:${r.accountCode ?? ""}`;
+  }
+  async function handleMakeRule(r: RecurringCandidate) {
+    try {
+      await createAutoRuleFromCandidate(r);
+      setRuledKeys((prev) => new Set(prev).add(candidateRuleKey(r)));
+      toast.success(`「${r.partnerName ?? r.description}」を自動登録ルールに追加しました`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "ルール登録に失敗しました");
+    }
+  }
 
   // chartYear が変わったら月次グラフ再ロード
   useEffect(() => {
@@ -456,6 +476,7 @@ export default function DashboardPage() {
           <CardContent>
             <p className="text-xs text-muted-foreground mb-2">
               過去 6 ヶ月で繰り返し発生しているパターン。家賃・通信費・サブスク等。
+              「ルール化」を押すと銀行明細取込時に勘定科目を自動提案します。
             </p>
             <div className="space-y-1">
               {recurring.slice(0, 5).map((r) => {
@@ -463,6 +484,7 @@ export default function DashboardPage() {
                   new Intl.NumberFormat("ja-JP").format(n);
                 const rhythmLabel =
                   r.rhythm === "monthly" ? "月次" : r.rhythm === "weekly" ? "週次" : "不定期";
+                const ruled = ruledKeys.has(candidateRuleKey(r));
                 return (
                   <div
                     key={r.key}
@@ -484,6 +506,21 @@ export default function DashboardPage() {
                     <Badge variant="secondary" className="text-[10px] w-12 justify-center">
                       ×{r.occurrences}
                     </Badge>
+                    {ruled ? (
+                      <Badge variant="outline" className="text-[10px] w-16 justify-center text-green-700 border-green-300">
+                        ✓ ルール済
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px] w-16"
+                        onClick={() => handleMakeRule(r)}
+                        title="この取引を自動登録ルールに追加"
+                      >
+                        ルール化
+                      </Button>
+                    )}
                   </div>
                 );
               })}

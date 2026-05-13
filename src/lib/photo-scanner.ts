@@ -249,7 +249,7 @@ async function saveLastScanSummary(s: LastScanSummary): Promise<void> {
 /**
  * Round 27 ㊥: claude_result_json から OCR 信頼度を推定する.
  *
- * Claude OCR は confidence を返さないので、必須 4 フィールドの充足率を
+ * AI OCR は confidence を返さないので、必須 4 フィールドの充足率を
  * 0..1 に正規化する: vendor_name / amount / date / items[] のうちいくつ揃ったか。
  * - 4/4 揃ってる: 1.0
  * - 3/4: 0.75

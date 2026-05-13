@@ -60,8 +60,10 @@ import {
   resetFailedToReceipt,
   resetAllFailedToReceipt,
   getFailureStats,
+  classifyOcrError,
   BlockedByPattern,
   type FailureStats,
+  type FailureBucket,
 } from "@/lib/auto-journal";
 import { Sparkles } from "lucide-react";
 import { toast } from "@/lib/toast";
@@ -81,6 +83,8 @@ export default function InboxPage() {
   // Round 24 ⓖ: 破棄タブで「expired_30d 自動破棄のみ」フィルタ
   const [expiredOnly, setExpiredOnly] = useState(false);
   // Round 26 ⓑ: 破棄 reason 別 click filter (Badge クリックで toggle)
+  // Round 28 ⓒ: 失敗タブで failure bucket 別フィルタ (Badge クリックで toggle)
+  const [failureBucketFilter, setFailureBucketFilter] = useState<FailureBucket | null>(null);
   const [reasonFilter, setReasonFilter] = useState<
     "expired_30d" | "duplicate" | "pattern" | "manual" | null
   >(null);
@@ -96,6 +100,13 @@ export default function InboxPage() {
   const [quickConfirming, setQuickConfirming] = useState<string | null>(null);
   // ㉵ Round 14: 再 OCR 実行中の inbox.id (カード単位のスピナー)
   const [reocrInProgress, setReocrInProgress] = useState<string | null>(null);
+  // Round 28 ⓖ: bulk 再 OCR の進捗 ({done, total, ok, fail} — null なら非表示)
+  const [bulkReocrProgress, setBulkReocrProgress] = useState<{
+    done: number;
+    total: number;
+    ok: number;
+    fail: number;
+  } | null>(null);
   // ㊅ Round 17: scanNow をキャンセルするための AbortController
   const scanAbortRef = useRef<AbortController | null>(null);
 
@@ -380,7 +391,7 @@ export default function InboxPage() {
     }
 
     const ok = window.confirm(
-      `${count} 枚の領収書を Claude OCR にかけて自動仕訳します。\n\n` +
+      `${count} 枚の領収書を AI OCR にかけて自動仕訳します。\n\n` +
         `Claude API への画像送信が ${count} 回発生します (ライセンスキーの月次使用量を消費)。${warnMsg}\n\n` +
         `続行しますか?`
     );
@@ -567,22 +578,30 @@ export default function InboxPage() {
   };
 
   // Round 27 ⓓ: 選択した写真をまとめて Vision OCR 再実行
+  // Round 28 ⓖ: 件数が多いと数十秒かかるので進捗バーをライブ表示する
   const bulkReocr = async () => {
     if (selected.size === 0) {
       toast.info("選択された写真がありません");
       return;
     }
+    if (bulkReocrProgress) return; // 二重起動防止
     const ids = Array.from(selected);
     let ok = 0;
     let fail = 0;
-    for (const id of ids) {
-      try {
-        await reocrInboxRow(id, { twoPass: false });
-        ok++;
-      } catch (e) {
-        console.warn(`bulkReocr ${id} failed:`, e);
-        fail++;
+    setBulkReocrProgress({ done: 0, total: ids.length, ok: 0, fail: 0 });
+    try {
+      for (let i = 0; i < ids.length; i++) {
+        try {
+          await reocrInboxRow(ids[i], { twoPass: false });
+          ok++;
+        } catch (e) {
+          console.warn(`bulkReocr ${ids[i]} failed:`, e);
+          fail++;
+        }
+        setBulkReocrProgress({ done: i + 1, total: ids.length, ok, fail });
       }
+    } finally {
+      setBulkReocrProgress(null);
     }
     if (fail === 0) {
       toast.success(`${ok} 件を再 OCR しました`);
@@ -620,7 +639,7 @@ export default function InboxPage() {
     }
   };
 
-  // ⓓ クイック確定: 1 クリックで Claude OCR → receipt + journal 作成
+  // ⓓ クイック確定: 1 クリックで AI OCR → receipt + journal 作成
   // Round 6 ㊋: BlockedByPattern (license/consent エラーが 2 件以上連続) は
   // 個別 modal で「設定を開く」を促し、それ以外のエラーは普通の toast.error
   const quickConfirm = async (inboxId: string) => {
@@ -777,6 +796,33 @@ export default function InboxPage() {
         />
       )}
 
+      {/* Round 28 ⓖ: bulk 再 OCR 進捗バー (上中央に固定表示) */}
+      {bulkReocrProgress && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[min(420px,90vw)]
+                        bg-card border-2 border-primary shadow-2xl rounded-lg px-4 py-3">
+          <div className="flex items-center justify-between text-sm mb-1.5">
+            <span className="font-medium inline-flex items-center gap-1.5">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              再 OCR 中… {bulkReocrProgress.done} / {bulkReocrProgress.total} 件
+            </span>
+            <span className="text-xs text-muted-foreground">
+              成功 {bulkReocrProgress.ok}
+              {bulkReocrProgress.fail > 0 && (
+                <span className="text-red-600"> / 失敗 {bulkReocrProgress.fail}</span>
+              )}
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-200"
+              style={{
+                width: `${Math.round((bulkReocrProgress.done / Math.max(1, bulkReocrProgress.total)) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* ㉜ Round 9: bulk action bar — selection が 1 件以上で下中央に固定表示 */}
       {selected.size > 0 && (
         <div
@@ -808,9 +854,10 @@ export default function InboxPage() {
             size="sm"
             variant="outline"
             onClick={() => void bulkReocr()}
+            disabled={!!bulkReocrProgress}
             title="選択した写真を Vision OCR で再認識"
           >
-            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${bulkReocrProgress ? "animate-spin" : ""}`} />
             再 OCR
           </Button>
           <span className="mx-1 h-4 w-px bg-border" />
@@ -869,7 +916,7 @@ export default function InboxPage() {
             variant="default"
             onClick={handleJournalizeAll}
             disabled={journalizing}
-            title="state=領収書 の写真を Claude OCR にかけて、receipts/journals を自動生成"
+            title="state=領収書 の写真を AI OCR にかけて、receipts/journals を自動生成"
           >
             <Sparkles className={`h-4 w-4 mr-1 ${journalizing ? "animate-pulse" : ""}`} />
             {journalizing
@@ -1070,6 +1117,63 @@ export default function InboxPage() {
         </div>
       )}
 
+      {/* Round 28 ⓒ: 失敗タブで failure bucket 別件数 (破棄タブの reason 別と同パターン) */}
+      {filter === "receipt_failed" && (() => {
+        const BUCKET_LABEL: Record<FailureBucket, string> = {
+          license: "ライセンス",
+          consent: "未同意",
+          network: "ネットワーク",
+          image: "画像読込",
+          server: "サーバー",
+          unknown: "原因不明",
+        };
+        const byBucket: Record<FailureBucket, number> = {
+          license: 0, consent: 0, network: 0, image: 0, server: 0, unknown: 0,
+        };
+        for (const it of items) {
+          byBucket[classifyOcrError(it.last_error).bucket]++;
+        }
+        const order: FailureBucket[] = ["license", "consent", "network", "server", "image", "unknown"];
+        const hasAny = order.some((b) => byBucket[b] > 0);
+        if (!hasAny) return null;
+        return (
+          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+            <span className="text-foreground">原因別:</span>
+            {order.map((b) => {
+              const n = byBucket[b];
+              if (n === 0) return null;
+              const active = failureBucketFilter === b;
+              return (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setFailureBucketFilter((prev) => (prev === b ? null : b))}
+                  className="inline-flex"
+                  aria-pressed={active}
+                >
+                  <Badge
+                    variant={active ? "default" : "outline"}
+                    className={`text-[10px] cursor-pointer ${active ? "" : "hover:bg-muted"}`}
+                    title={active ? `${BUCKET_LABEL[b]}フィルタを解除` : `${BUCKET_LABEL[b]}だけ表示 (クリック)`}
+                  >
+                    {BUCKET_LABEL[b]} {n}
+                  </Badge>
+                </button>
+              );
+            })}
+            {failureBucketFilter && (
+              <button
+                type="button"
+                onClick={() => setFailureBucketFilter(null)}
+                className="text-[10px] text-muted-foreground hover:text-foreground underline"
+              >
+                解除
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Round 24 ⓖ: 破棄タブだけ「期限切れ自動破棄のみ」フィルタを出す
           Round 25 ⓑ: reason 別件数バッジ */}
       {filter === "dismissed" && (() => {
@@ -1225,7 +1329,7 @@ export default function InboxPage() {
             return want === "manual";
           }
         };
-        const visible =
+        let visible =
           filter === "dismissed" && (expiredOnly || reasonFilter)
             ? items.filter((it) => {
                 if (expiredOnly) return matchReason(it, "expired_30d");
@@ -1233,6 +1337,12 @@ export default function InboxPage() {
                 return true;
               })
             : items;
+        // Round 28 ⓒ: 失敗タブの bucket フィルタ
+        if (filter === "receipt_failed" && failureBucketFilter) {
+          visible = visible.filter(
+            (it) => classifyOcrError(it.last_error).bucket === failureBucketFilter,
+          );
+        }
         return visible.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -1635,7 +1745,7 @@ function InboxCard({
               登録に進む
             </Button>
           )}
-          {/* ⓓ クイック確定: candidate / receipt から 1 クリックで Claude OCR + 仕訳作成 */}
+          {/* ⓓ クイック確定: candidate / receipt から 1 クリックで AI OCR + 仕訳作成 */}
           {(row.state === "candidate" || row.state === "receipt") && (
             <Button
               size="sm"

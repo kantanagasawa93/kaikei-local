@@ -19,8 +19,8 @@
 #   navigate <route>         起動中アプリを <route> に遷移させる (例: /inbox)
 #                            (CLI から control file を書く → Frontend が poll)
 #   simulate-action <name>   起動中アプリで allowlist された action を発火
-#                            (scan-now / journalize-all-receipts / open-help)
-#   demo-scenario            /inbox → scan-now → スクショの典型シナリオを実行
+#                            (scan-now / journalize-all-receipts / open-help / demo-bulk-delete-undo)
+#   demo-scenario            /inbox→scan-now→スクショ、続いて /journals→bulk delete+Undo→スクショ
 #   smoke                    スキャン → DB ダンプ → スクショまでを順に実行
 #   smoke-report [<file>]    smoke を Markdown レポートに書き出す
 #                            (既定: /tmp/kaikei-verify-<UTC>.md)
@@ -191,14 +191,23 @@ cmd_simulate_action() {
 
 # ㊇ Round 17: navigate + action + sleep を組合せた典型シナリオ。
 # /inbox に飛んで「今すぐスキャン」を発火し、4 秒後にスクショを撮る。
-# demo 動画の素材生成に使う。
+# Round 28 ⓔ: その後 /journals に飛んで bulk delete + Undo も踏んで、スクショを撮る。
+# demo 動画の素材生成 + E2E 回帰確認に使う。
 cmd_demo_scenario() {
   cmd_navigate "/inbox"
   cmd_simulate_action "scan-now"
   sleep 4
-  local out
-  out=$(cmd_ui_screenshot "/tmp/kaikei-demo-scenario-$(date -u +%Y%m%dT%H%M%SZ).png")
-  echo "$out"
+  local ts shot1 shot2
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  shot1=$(cmd_ui_screenshot "/tmp/kaikei-demo-scenario-inbox-$ts.png")
+  echo "$shot1"
+  # /journals で bulk delete → 即 Undo (1 行のみ、必ず復元される)
+  cmd_navigate "/journals"
+  sleep 1.5
+  cmd_simulate_action "demo-bulk-delete-undo"
+  sleep 3
+  shot2=$(cmd_ui_screenshot "/tmp/kaikei-demo-scenario-journals-$ts.png")
+  echo "$shot2"
 }
 
 # Round 9 ㉟ — ソース変更を検知して自動で再ビルド + smoke-report

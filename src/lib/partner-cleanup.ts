@@ -192,3 +192,149 @@ export function detectPartnerVariants(
   out.sort((a, b) => b.prefixLen - a.prefixLen);
   return out;
 }
+
+// ────────────────────────────────────────────────────────────
+// Round 28 ⓑ: partner 統合 (variant → base) + Undo
+//
+// mergeVariantPair の本体をここに移し、統合前にスナップショット (variant の
+// partner 行 + 書き換えた receipts / journal_lines の id 一覧) を app_settings の
+// undo stack に push する。誤統合を取り消せるようにするため。
+// ────────────────────────────────────────────────────────────
+
+const PARTNER_MERGE_UNDO_KEY = "partner_merge_undo_stack";
+const PARTNER_MERGE_UNDO_MAX = 5;
+
+interface PartnerMergeSnapshot {
+  ts: string;
+  variant: Record<string, unknown>; // 削除した partner 行 (全カラム)
+  baseName: string;
+  variantName: string;
+  receiptIds: string[]; // partner_id を base に書き換えた receipts.id
+  journalLineIds: string[]; // 同 journal_lines.id
+}
+
+async function getMergeUndoStack(): Promise<PartnerMergeSnapshot[]> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", PARTNER_MERGE_UNDO_KEY)
+      .single();
+    const raw = (data as { value?: string } | null)?.value;
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function setMergeUndoStack(stack: PartnerMergeSnapshot[]): Promise<void> {
+  const value = JSON.stringify(stack);
+  const updated_at = new Date().toISOString();
+  const { data: existing } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", PARTNER_MERGE_UNDO_KEY)
+    .single();
+  if (existing) {
+    await db
+      .from("app_settings")
+      .update({ value, updated_at })
+      .eq("id", PARTNER_MERGE_UNDO_KEY);
+  } else {
+    await db
+      .from("app_settings")
+      .insert({ id: PARTNER_MERGE_UNDO_KEY, value, updated_at });
+  }
+}
+
+export async function getPartnerMergeUndoCount(): Promise<number> {
+  return (await getMergeUndoStack()).length;
+}
+
+/**
+ * variant partner を base partner に統合する.
+ * receipts / journal_lines の partner_id を base に書き換え、variant 行を削除。
+ * 実行前にスナップショットを undo stack に push する。
+ */
+export async function mergePartnerVariant(args: {
+  variantId: string;
+  baseId: string;
+  variantName: string;
+  baseName: string;
+}): Promise<void> {
+  const { variantId, baseId, variantName, baseName } = args;
+
+  // variant の partner 行を丸ごと取得 (Undo で復元するため)
+  const { data: vRow } = await db
+    .from("partners")
+    .select("*")
+    .eq("id", variantId)
+    .single();
+  if (!vRow) throw new Error("統合元の取引先が見つかりません");
+
+  // 書き換え対象の id を収集
+  const { data: rec } = await db
+    .from("receipts")
+    .select("id")
+    .eq("partner_id", variantId);
+  const receiptIds = ((rec as { id: string }[] | null) ?? []).map((r) => r.id);
+  const { data: jl } = await db
+    .from("journal_lines")
+    .select("id")
+    .eq("partner_id", variantId);
+  const journalLineIds = ((jl as { id: string }[] | null) ?? []).map((r) => r.id);
+
+  // スナップショットを push
+  const stack = await getMergeUndoStack();
+  stack.unshift({
+    ts: new Date().toISOString(),
+    variant: vRow as Record<string, unknown>,
+    baseName,
+    variantName,
+    receiptIds,
+    journalLineIds,
+  });
+  while (stack.length > PARTNER_MERGE_UNDO_MAX) stack.pop();
+  await setMergeUndoStack(stack);
+
+  // 書き換え + 削除
+  for (const id of receiptIds) {
+    await db.from("receipts").update({ partner_id: baseId }).eq("id", id);
+  }
+  for (const id of journalLineIds) {
+    await db.from("journal_lines").update({ partner_id: baseId }).eq("id", id);
+  }
+  await db.from("partners").delete().eq("id", variantId);
+}
+
+/**
+ * 直近の partner 統合を取り消す.
+ * @returns 復元した取引先名 (null なら stack 空)
+ */
+export async function undoPartnerMerge(): Promise<{
+  restored: { variantName: string; baseName: string } | null;
+}> {
+  const stack = await getMergeUndoStack();
+  if (stack.length === 0) return { restored: null };
+  const snap = stack.shift()!;
+  await setMergeUndoStack(stack);
+
+  // variant partner 行を復元
+  try {
+    await db.from("partners").insert(snap.variant);
+  } catch (e) {
+    console.warn("undoPartnerMerge: partners.insert failed", e);
+  }
+  const variantId = (snap.variant as { id?: string }).id;
+  if (variantId) {
+    for (const id of snap.receiptIds) {
+      await db.from("receipts").update({ partner_id: variantId }).eq("id", id);
+    }
+    for (const id of snap.journalLineIds) {
+      await db.from("journal_lines").update({ partner_id: variantId }).eq("id", id);
+    }
+  }
+  return { restored: { variantName: snap.variantName, baseName: snap.baseName } };
+}

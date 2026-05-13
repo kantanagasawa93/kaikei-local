@@ -3,7 +3,7 @@
 /**
  * AI OCR 送信履歴ビュアー (Phase 4)
  *
- * 「どの画像を Claude API に送ったか」をユーザが後から検証できるよう、
+ * 「どの画像を AI OCR API に送ったか」をユーザが後から検証できるよう、
  * ai_ocr_log を時系列で表示する。プライバシーポリシー上の透明性のため
  * 必須のページ。
  */
@@ -63,7 +63,7 @@ export default function AiOcrLogPage() {
             AI OCR 送信履歴
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Claude API に送信した画像のログ (透明性のため公開)
+            AI OCR API に送信した画像のログ (透明性のため公開)
           </p>
         </div>
       </div>

@@ -491,7 +491,7 @@ function NewReceiptPageInner() {
           </div>
           {!hasApiKey && (
             <p className="text-xs text-muted-foreground mt-1">
-              AI読み取りを使うには <Link href="/settings" className="underline text-primary">設定</Link> で Claude API キーを登録してください
+              AI読み取りを使うには <Link href="/settings" className="underline text-primary">設定</Link> でライセンスキーを登録してください
             </p>
           )}
         </CardHeader>

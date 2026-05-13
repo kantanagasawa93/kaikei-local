@@ -123,6 +123,8 @@ export function NavigateBridge() {
       "scan-now",
       "journalize-all-receipts",
       "open-help",
+      // Round 28 ⓔ: verify-app.sh demo-scenario 用 — /journals で bulk delete + Undo
+      "demo-bulk-delete-undo",
     ]);
 
     const poll = async () => {

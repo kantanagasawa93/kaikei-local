@@ -175,7 +175,7 @@ export default function PhotoScanSettingsPage() {
               結果に近いものになります。
             </li>
             <li>
-              Claude OCR への送信は、ユーザが「この写真を仕訳化する」を実行した時のみ。
+              AI OCR への送信は、ユーザが「この写真を仕訳化する」を実行した時のみ。
               送信履歴はいつでも{" "}
               <Link href="/settings/ai-ocr-log" className="text-primary underline">
                 送信履歴ページ
@@ -354,7 +354,7 @@ export default function PhotoScanSettingsPage() {
         <CardContent className="space-y-3">
           <p className="text-xs text-muted-foreground leading-relaxed">
             受信箱で「領収書」状態になった写真を、毎日のスキャン後に自動で
-            Claude OCR にかけて仕訳まで完了させます。
+            AI OCR にかけて仕訳まで完了させます。
             <strong className="text-foreground"> Claude API への画像送信が発生する</strong>
             ため、ライセンスキー (有料プラン) が必要です。
           </p>
@@ -374,7 +374,7 @@ export default function PhotoScanSettingsPage() {
               }}
               className="w-4 h-4"
             />
-            <span className="text-sm">毎日のスキャン後に自動で Claude OCR + 仕訳作成</span>
+            <span className="text-sm">毎日のスキャン後に自動で AI OCR + 仕訳作成</span>
           </label>
           <Link href="/settings/ai-ocr-log" className="text-xs text-primary underline">
             AI OCR の送信履歴を確認 →
