@@ -80,6 +80,9 @@ async function callGemini(
       ],
       generationConfig: {
         temperature: 0,
+        // gemini-2.5-flash の "thinking" を無効化 — 構造化抽出では不要で、
+        // 有効だと出力トークンを食って JSON が途中で切れる (空レスポンスの原因)。
+        thinkingConfig: { thinkingBudget: 0 },
         maxOutputTokens: maxTokens,
         responseMimeType: "application/json",
       },
@@ -180,7 +183,7 @@ export async function POST(req: NextRequest) {
       "この領収書の内容を読み取ってください。",
       body.image,
       body.media_type,
-      1024,
+      4096,
     );
     const parsed = parseJsonLoose(text);
 
