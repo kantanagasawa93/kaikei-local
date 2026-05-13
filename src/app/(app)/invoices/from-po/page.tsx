@@ -26,8 +26,10 @@ import { toast } from "@/lib/toast";
 import {
   fileToBase64,
   hasAiOcrConsent,
+  setAiOcrConsent,
   getLicenseKey,
 } from "@/lib/ai-ocr";
+import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
 import {
   ocrPurchaseOrder,
   createInvoiceFromPo,
@@ -38,6 +40,7 @@ export default function FromPoPage() {
   const router = useRouter();
   const [consent, setConsent] = useState<boolean | null>(null);
   const [hasLicense, setHasLicense] = useState<boolean | null>(null);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -135,9 +138,18 @@ export default function FromPoPage() {
                     1. AI OCR の利用に同意する
                   </p>
                   <p className="text-xs text-amber-800">
-                    発注書画像を AI OCR (Gemini 経由) に送って読み取る
-                    ことへの同意。設定 → 「AI 読み取り」セクションで承諾します。
+                    発注書画像を AI OCR (Gemini 経由) に送って読み取ることへの同意。
                   </p>
+                  {!consent && (
+                    <Button
+                      size="sm"
+                      className="mt-1.5 h-7"
+                      onClick={() => setConsentDialogOpen(true)}
+                    >
+                      <Sparkles className="h-3.5 w-3.5 mr-1" />
+                      同意する
+                    </Button>
+                  )}
                 </div>
               </div>
               <div className="flex items-start gap-2">
@@ -182,6 +194,17 @@ export default function FromPoPage() {
             </p>
           </CardContent>
         </Card>
+
+        <AiOcrConsentDialog
+          open={consentDialogOpen}
+          onAgree={async () => {
+            await setAiOcrConsent(true);
+            setConsent(true);
+            setConsentDialogOpen(false);
+            toast.success("AI 読み取りに同意しました");
+          }}
+          onDecline={() => setConsentDialogOpen(false)}
+        />
       </div>
     );
   }

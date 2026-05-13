@@ -30,6 +30,8 @@ import {
   saveLicenseKey,
   verifyLicense,
   probeApiServer,
+  hasAiOcrConsent,
+  setAiOcrConsent,
 } from "@/lib/ai-ocr";
 import {
   checkAutoUpdate,
@@ -71,10 +73,17 @@ export default function SettingsPage() {
   const [licenseMessage, setLicenseMessage] = useState<string | null>(null);
   // API サーバー生存フラグ (未デプロイなら false)
   const [apiAlive, setApiAlive] = useState<boolean | null>(null);
+  // AI へのデータ送信同意フラグ
+  const [aiConsent, setAiConsent] = useState(false);
 
   // 初回ロードで API サーバー probe + 既存キーを読み込み & verify
   useEffect(() => {
     (async () => {
+      try {
+        setAiConsent(await hasAiOcrConsent());
+      } catch {
+        /* 取得失敗は false 扱い */
+      }
       const alive = await probeApiServer();
       setApiAlive(alive);
       if (!alive) return; // API 死んでたら verify スキップ
@@ -89,6 +98,16 @@ export default function SettingsPage() {
       }
     })();
   }, []);
+
+  const handleToggleConsent = async (next: boolean) => {
+    try {
+      await setAiOcrConsent(next);
+      setAiConsent(next);
+      setLicenseMessage(next ? "AI 読み取りに同意しました。" : "AI 読み取りの同意を撤回しました。");
+    } catch {
+      setLicenseMessage("エラー: 同意状態の保存に失敗しました");
+    }
+  };
 
   const handleLicenseSave = async () => {
     const key = licenseInput.trim();
@@ -553,6 +572,33 @@ export default function SettingsPage() {
               Tesseract OCR のみご利用いただけます。
             </div>
           )}
+
+          {/* データ送信の同意 (これが OFF だと AI 読み取り / 発注書→請求書 が使えない) */}
+          <div className={`rounded-md border p-3 space-y-1.5 ${aiConsent ? "" : "border-amber-300 bg-amber-50"}`}>
+            <label className="flex items-start gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={aiConsent}
+                onChange={(e) => void handleToggleConsent(e.target.checked)}
+                className="h-4 w-4 mt-0.5"
+              />
+              <span className="text-sm">
+                <b>AI 読み取りのデータ送信に同意する</b>
+                <br />
+                <span className={aiConsent ? "text-muted-foreground" : "text-amber-800"}>
+                  領収書 / 発注書の画像 (base64) のみを暗号化して AI OCR API (→ Google Gemini 2.5 Flash)
+                  に送信します。氏名・住所・利用者識別番号などの納税者情報は送りません。
+                  サーバー側で解析後に即破棄され、AI 学習にも使われません。
+                  {" "}<Link href="/legal" className="underline">プライバシーポリシー</Link>
+                </span>
+              </span>
+            </label>
+            {!aiConsent && (
+              <p className="text-[11px] text-amber-700 pl-6">
+                ※ これが OFF の間は「AI 読み取り」「発注書から請求書を作成」が使えません。
+              </p>
+            )}
+          </div>
 
           {/* ライセンスキー入力欄 */}
           <div className="rounded-md border p-3 space-y-2">
