@@ -114,16 +114,72 @@ export default function FromPoPage() {
           <h1 className="text-2xl font-bold">発注書から請求書を作成</h1>
         </div>
         <Card className="border-amber-300 bg-amber-50">
-          <CardContent className="py-6">
-            <p className="text-sm font-medium text-amber-900 mb-2">
-              この機能には AI OCR の利用同意とライセンスキーが必要です
+          <CardContent className="py-6 space-y-4">
+            <p className="text-sm font-medium text-amber-900">
+              この機能を使うには、以下の 2 ステップを設定画面で完了してください
             </p>
-            <p className="text-xs text-amber-800 mb-3">
-              発注書画像を Claude OCR (Anthropic 経由) に送って読み取ります。
+
+            <div className="space-y-2 text-sm">
+              <div className="flex items-start gap-2">
+                <span
+                  className={
+                    consent
+                      ? "text-green-600 font-mono w-6 text-center"
+                      : "text-red-600 font-mono w-6 text-center"
+                  }
+                >
+                  {consent ? "✓" : "✗"}
+                </span>
+                <div className="flex-1">
+                  <p className="font-medium text-amber-900">
+                    1. AI OCR の利用に同意する
+                  </p>
+                  <p className="text-xs text-amber-800">
+                    発注書画像を Claude OCR (Anthropic 経由) に送って読み取る
+                    ことへの同意。設定 → 「AI 読み取り」セクションで承諾します。
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <span
+                  className={
+                    hasLicense
+                      ? "text-green-600 font-mono w-6 text-center"
+                      : "text-red-600 font-mono w-6 text-center"
+                  }
+                >
+                  {hasLicense ? "✓" : "✗"}
+                </span>
+                <div className="flex-1">
+                  <p className="font-medium text-amber-900">
+                    2. ライセンスキーを登録する
+                  </p>
+                  <p className="text-xs text-amber-800">
+                    Anthropic API の呼び出し枠を管理するライセンスキー。
+                    無料プランでも月 30 枚まで使えます。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <Link href="/settings">
+                <Button size="sm">
+                  設定画面で AI OCR を有効化する
+                </Button>
+              </Link>
+              <Link href="/invoices/edit/">
+                <Button size="sm" variant="outline" title="AI を使わず手入力で請求書を作る">
+                  手入力で請求書を作る
+                </Button>
+              </Link>
+            </div>
+
+            <p className="text-[11px] text-amber-700 pt-2 border-t border-amber-200">
+              ※ 既存の領収書スキャンの AI OCR と同じ枠を使います。
+              すでに使ってる方は同意済み&ライセンス登録済みの可能性があります —
+              設定画面で「AI 読み取り」セクションを確認してください。
             </p>
-            <Link href="/settings">
-              <Button size="sm">設定画面へ</Button>
-            </Link>
           </CardContent>
         </Card>
       </div>
