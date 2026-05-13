@@ -152,7 +152,11 @@ export async function POST(req: NextRequest) {
         ],
         generationConfig: {
           temperature: 0,
-          maxOutputTokens: 2048,
+          // gemini-2.5-flash は既定で "thinking" に出力トークンを消費するため、
+          // 構造化抽出では thinkingBudget=0 で無効化 (空レスポンス防止 + 高速 + 低コスト)。
+          // それでも品目が多い発注書のために maxOutputTokens は余裕を持たせる。
+          thinkingConfig: { thinkingBudget: 0 },
+          maxOutputTokens: 4096,
           responseMimeType: "application/json",
         },
       }),
