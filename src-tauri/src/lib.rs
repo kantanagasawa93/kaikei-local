@@ -510,6 +510,78 @@ fn launchd_uninstall() -> Result<serde_json::Value, String> {
     }
 }
 
+/// Round 28: 発注書 PDF を PNG (1 ページ目) に変換して base64 で返す.
+///
+/// 一部の PDF (日本語フォントの ToUnicode マップが欠けたテキストレイヤ等) は
+/// Gemini が PDF として直接読むと文字化けして「中身が空っぽ」になる。
+/// macOS の `sips` でラスタライズしてから画像として渡すと安定して OCR できる。
+///
+/// 引数 / 戻り値とも base64 文字列 (data: ヘッダなし)。失敗時は Err(理由)。
+#[tauri::command]
+fn pdf_to_png_base64(pdf_base64: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use base64::Engine;
+        use std::process::Command;
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(pdf_base64.trim())
+            .map_err(|e| format!("base64 デコードに失敗: {e}"))?;
+        if bytes.is_empty() {
+            return Err("PDF データが空です".into());
+        }
+        // 簡易チェック: PDF マジックバイト
+        if !bytes.starts_with(b"%PDF") {
+            return Err("PDF ファイルではないようです (先頭が %PDF でない)".into());
+        }
+
+        let id = uuid::Uuid::new_v4();
+        let tmp = std::env::temp_dir();
+        let pdf_path = tmp.join(format!("kaikei-po-{id}.pdf"));
+        let png_path = tmp.join(format!("kaikei-po-{id}.png"));
+        std::fs::write(&pdf_path, &bytes).map_err(|e| format!("一時 PDF の書き込みに失敗: {e}"))?;
+
+        // sips でラスタライズ。--resampleHeightWidthMax で長辺 2400px 程度に。
+        let out = Command::new("/usr/bin/sips")
+            .args([
+                "-s",
+                "format",
+                "png",
+                "--resampleHeightWidthMax",
+                "2400",
+            ])
+            .arg(&pdf_path)
+            .arg("--out")
+            .arg(&png_path)
+            .output();
+
+        let result = (|| -> Result<String, String> {
+            let out = out.map_err(|e| format!("sips の起動に失敗: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "PDF の変換に失敗しました (sips: {})",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            let png = std::fs::read(&png_path).map_err(|e| format!("変換後 PNG の読み込みに失敗: {e}"))?;
+            if png.is_empty() {
+                return Err("変換後 PNG が空でした (PDF が暗号化されている可能性があります)".into());
+            }
+            Ok(base64::engine::general_purpose::STANDARD.encode(&png))
+        })();
+
+        // 後始末 (ベストエフォート)
+        let _ = std::fs::remove_file(&pdf_path);
+        let _ = std::fs::remove_file(&png_path);
+        result
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pdf_base64;
+        Err("PDF 変換は macOS のみ対応です".into())
+    }
+}
+
 /// `--auto-scan` 起動時のヘッドレススキャン処理。GUI を立ち上げずに
 /// scanner::run_once() を呼んで通知を出して exit する。
 #[cfg(target_os = "macos")]
@@ -1332,6 +1404,7 @@ pub fn run() {
             demo_action_clear,
             wipe_app_data,
             migrations_status,
+            pdf_to_png_base64,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
