@@ -222,7 +222,7 @@ export interface OcrResult {
   suggested_account_code: string | null;
   suggested_account_name: string | null;
   /**
-   * Claude OCR が返す品目一覧。
+   * AI OCR が返す品目一覧。
    * 旧形式: ["コーヒー", "ノート"]  (Round 7 ㊐)
    * 新形式: [{ name: "コーヒー", price: 580 }, { name: "ノート", price: 220 }]
    *         (Round 8 ㊕ — 価格按分による正確な仕訳分割が可能に)

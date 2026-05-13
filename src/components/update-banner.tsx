@@ -26,8 +26,12 @@ import {
 } from "@/lib/auto-updater";
 
 const STORAGE_DISMISSED = "kaikei_update_banner_dismissed";
+// Round 28 ⓕ: アプリ内アップデータが失敗した時の最終フォールバックは
+// LP の install.html ではなく GitHub Releases の最新版ページに固定する。
+// LP は静的サイト側のデプロイ遅延・リンク切れの影響を受けるが、Releases は
+// release.sh が DMG を直接添付するため常に最新が取れる。
 const FALLBACK_URL =
-  "https://kantanagasawa93.github.io/kaikei-local/install.html";
+  "https://github.com/kantanagasawa93/kaikei-local/releases/latest";
 
 function isTauri(): boolean {
   if (typeof window === "undefined") return false;

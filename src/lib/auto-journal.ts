@@ -1,5 +1,5 @@
 /**
- * Phase 4: 受信箱の「領収書」状態の写真を Claude OCR にかけて、
+ * Phase 4: 受信箱の「領収書」状態の写真を AI OCR にかけて、
  * 自動で receipts + journals を作るフロー。
  *
  * 流れ:
@@ -12,7 +12,7 @@
  *   7. photo_inbox.state='imported', imported_receipt_id を更新
  *
  * 注意:
- *   - Claude OCR は API 課金 + 画像送信を伴うので、ユーザの明示同意が必要
+ *   - AI OCR は API 課金 + 画像送信を伴うので、ユーザの明示同意が必要
  *     (既存の hasAiOcrConsent() チェックを必ず通る)
  *   - 失敗した写真は state を変えず、ai_ocr_log に error を残す
  *   - 1 回の呼び出しで 100 件以上は処理しない (バッチサイズ上限)
@@ -312,7 +312,7 @@ export async function autoJournalizeOne(
   const receiptId = crypto.randomUUID();
   // Round 24 ㊞: partners.default_account_code を優先 (ユーザが取引先ごとに
   // 決めた既定科目があればそれを使う)。なければ既存のキーワード抽出にフォール
-  // バック。Claude OCR が suggested_account_* を返してた場合はさらに優先する。
+  // バック。AI OCR が suggested_account_* を返してた場合はさらに優先する。
   const suggested = await suggestAccountForVendor(
     ocr.vendor_name,
     ocr.raw_text || "",
@@ -386,7 +386,7 @@ export async function autoJournalizeOne(
     tax_amount: 0,
   });
 
-  // photo_inbox を imported に更新 + Claude OCR 結果を完全保存 + エラー履歴クリア
+  // photo_inbox を imported に更新 + AI OCR 結果を完全保存 + エラー履歴クリア
   // claude_result_json は再仕訳・監査用。雑費自動付与のロジック復元元になる。
   await db
     .from("photo_inbox")
@@ -1013,7 +1013,7 @@ export async function undoLastReverse(): Promise<
 /**
  * receipt_failed 状態の写真を「もう一度試す」。state を 'receipt' に戻すだけ。
  * 直後に autoJournalizeAllReceipts を呼ぶか、UI の「領収書をすべて自動仕訳」を
- * 押すと、再度 Claude OCR にかかる。
+ * 押すと、再度 AI OCR にかかる。
  */
 export async function resetFailedToReceipt(inboxId: string): Promise<void> {
   await db

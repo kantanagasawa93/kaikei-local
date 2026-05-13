@@ -1021,7 +1021,7 @@ pub fn run() {
                     "  --start-route=<route>    GUI 起動時に直接そのルートに飛ぶ\n",
                     "                           (例: --start-route=/inbox)\n",
                     "  --simulate-action=<name> 起動中アプリで allowlist された action を発火\n",
-                    "                           (scan-now / journalize-all-receipts / open-help)\n",
+                    "                           (scan-now / journalize-all-receipts / open-help / demo-bulk-delete-undo)\n",
                     "  --test-ocr=<path>        画像を Vision OCR にかけて結果を表示\n",
                     "  --test-doc=<path>        画像に文書矩形が検出されるか表示\n",
                     "  --launchd-status         LaunchAgent の状態を JSON 表示\n",

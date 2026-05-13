@@ -21,11 +21,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, GitMerge } from "lucide-react";
+import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, GitMerge, RotateCcw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
 import {
   detectPartnerVariants,
+  mergePartnerVariant,
+  undoPartnerMerge,
+  getPartnerMergeUndoCount,
   type PartnerVariantPair,
 } from "@/lib/partner-cleanup";
 import type { Partner } from "@/types";
@@ -74,10 +77,13 @@ export default function PartnersPage() {
   const [usageMap, setUsageMap] = useState<Record<string, number>>({});
   // Round 27 ⓐ: 表記ゆれ候補ペア
   const [variantPairs, setVariantPairs] = useState<PartnerVariantPair[]>([]);
+  // Round 28 ⓑ: partner 統合の Undo 可能件数
+  const [mergeUndoCount, setMergeUndoCount] = useState(0);
 
   useEffect(() => {
     load();
     void loadUsage();
+    void getPartnerMergeUndoCount().then(setMergeUndoCount);
   }, []);
 
   async function loadUsage() {
@@ -131,37 +137,39 @@ export default function PartnersPage() {
     );
     if (!ok) return;
     try {
-      // receipts.partner_id を base に
-      const { data: rec } = await supabase
-        .from("receipts")
-        .select("id")
-        .eq("partner_id", pair.variant.id);
-      for (const r of (rec as { id: string }[] | null) ?? []) {
-        await supabase
-          .from("receipts")
-          .update({ partner_id: pair.base.id })
-          .eq("id", r.id);
-      }
-      // journal_lines.partner_id を base に
-      const { data: jl } = await supabase
-        .from("journal_lines")
-        .select("id")
-        .eq("partner_id", pair.variant.id);
-      for (const ln of (jl as { id: string }[] | null) ?? []) {
-        await supabase
-          .from("journal_lines")
-          .update({ partner_id: pair.base.id })
-          .eq("id", ln.id);
-      }
-      // variant 自体を削除
-      await supabase.from("partners").delete().eq("id", pair.variant.id);
+      await mergePartnerVariant({
+        variantId: pair.variant.id,
+        baseId: pair.base.id,
+        variantName: pair.variant.name,
+        baseName: pair.base.name,
+      });
       toast.success(
-        `「${pair.variant.name}」→「${pair.base.name}」に統合しました`,
+        `「${pair.variant.name}」→「${pair.base.name}」に統合しました（取り消し可）`,
       );
       load();
       void loadUsage();
+      setMergeUndoCount(await getPartnerMergeUndoCount());
     } catch (e) {
       toast.error(`統合に失敗: ${(e as Error).message}`);
+    }
+  }
+
+  // Round 28 ⓑ: 直近の partner 統合を取り消す
+  async function handleUndoMerge() {
+    try {
+      const r = await undoPartnerMerge();
+      if (!r.restored) {
+        toast.info("取り消せる統合がありません");
+      } else {
+        toast.success(
+          `「${r.restored.variantName}」を「${r.restored.baseName}」から分離して復元しました`,
+        );
+        load();
+        void loadUsage();
+      }
+      setMergeUndoCount(await getPartnerMergeUndoCount());
+    } catch (e) {
+      toast.error(`取り消しに失敗: ${(e as Error).message}`);
     }
   }
 
@@ -295,6 +303,20 @@ export default function PartnersPage() {
             <Badge variant="secondary" className="ml-2 text-[10px]">
               {autoLearnedCount}
             </Badge>
+          </Button>
+        )}
+        {/* Round 28 ⓑ: 直近の統合を取り消す */}
+        {mergeUndoCount > 0 && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void handleUndoMerge()}
+            title="直近の取引先統合を取り消して分離する"
+          >
+            <RotateCcw className="h-3 w-3 mr-1" />
+            統合を取り消す
+            <Badge variant="secondary" className="ml-2 text-[10px]">{mergeUndoCount}</Badge>
           </Button>
         )}
       </div>

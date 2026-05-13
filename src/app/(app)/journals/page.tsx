@@ -24,7 +24,15 @@ import {
   undoBulkDelete,
   getBulkDeleteUndoCount,
 } from "@/lib/auto-journal";
-import { buildJournalsCsv, downloadCsv, buildFiscalYearSummary } from "@/lib/journal-export";
+import {
+  buildJournalsCsv,
+  downloadCsv,
+  buildFiscalYearSummary,
+  buildFreeeJournalsCsv,
+  buildMoneyForwardJournalsCsv,
+  summarizeByDateRange,
+  shiftYear,
+} from "@/lib/journal-export";
 import { exportFiscalYearSummaryPdf, downloadBlob } from "@/lib/pdf-export";
 import {
   parseTags,
@@ -52,6 +60,11 @@ export default function JournalsPage() {
   // Round 25 ⓒ: from/to レンジを URL クエリで受ける (dashboard ドリルダウン用)
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // Round 28 ⓐ: from/to レンジ時に「当期 vs 前年同期」の売上/経費を上部に表示
+  const [rangeCompare, setRangeCompare] = useState<{
+    cur: { income: number; expense: number };
+    prev: { income: number; expense: number };
+  } | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -70,6 +83,25 @@ export default function JournalsPage() {
     if (f && /^\d{4}-\d{2}-\d{2}$/.test(f)) setDateFrom(f);
     if (t && /^\d{4}-\d{2}-\d{2}$/.test(t)) setDateTo(t);
   }, []);
+
+  // Round 28 ⓐ: from/to レンジ時に当期 + 前年同期の売上/経費を集計
+  useEffect(() => {
+    if (!dateFrom || !dateTo) {
+      setRangeCompare(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const [cur, prev] = await Promise.all([
+        summarizeByDateRange(dateFrom, dateTo),
+        summarizeByDateRange(shiftYear(dateFrom, -1), shiftYear(dateTo, -1)),
+      ]);
+      if (!cancelled) setRangeCompare({ cur, prev });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dateFrom, dateTo]);
   const [tagFilter, setTagFilter] = useState("");
   // Round 23 ⓒ: 摘要検索 + 金額レンジ
   const [descSearch, setDescSearch] = useState("");
@@ -176,6 +208,35 @@ export default function JournalsPage() {
     void getBulkDeleteUndoCount().then(setBulkUndoCount);
   }, []);
 
+  // Round 28 ⓔ: verify-app.sh demo-scenario から "demo-bulk-delete-undo" を受けたら
+  // 先頭 1 件の仕訳を一括削除 → 即 Undo して、両方の動線を E2E で踏む。
+  // 1 行だけ + 必ず Undo するので blast radius は最小。
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const action = (e as CustomEvent<string>).detail;
+      if (action !== "demo-bulk-delete-undo") return;
+      const target = journals[0];
+      if (!target) {
+        toast.info("[demo] 削除対象の仕訳がありません");
+        return;
+      }
+      try {
+        const deleted = await bulkDeleteJournals([target.id]);
+        setBulkUndoCount(await getBulkDeleteUndoCount());
+        toast.info(`[demo] ${deleted} 件削除 — 取り消します`);
+        const r = await undoBulkDelete();
+        setBulkUndoCount(await getBulkDeleteUndoCount());
+        await loadJournals();
+        toast.success(`[demo] bulk delete + Undo OK (復元 ${r.restored} 件)`);
+      } catch (err) {
+        toast.error(`[demo] bulk delete/undo に失敗: ${(err as Error).message}`);
+      }
+    };
+    window.addEventListener("kaikei:demo-action", handler as EventListener);
+    return () => window.removeEventListener("kaikei:demo-action", handler as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [journals]);
+
   async function loadJournals() {
     const { data } = await supabase
       .from("journals")
@@ -206,6 +267,32 @@ export default function JournalsPage() {
       const fname = `kaikei_journals${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
       downloadCsv(csv, fname);
       toast.success(`CSV を書き出しました (${fname})`);
+    } catch (e) {
+      toast.error(`CSV 書き出しに失敗: ${(e as Error).message}`);
+    }
+  }
+
+  // Round 28 ㊧: 他社会計ソフト形式 (freee / マネーフォワード) でエクスポート
+  async function handleExportVendorCsv(vendor: "freee" | "mf") {
+    try {
+      let from: string | null = null;
+      let to: string | null = null;
+      let suffix = "";
+      if (monthFilter) {
+        from = `${monthFilter}-01`;
+        const [y, m] = monthFilter.split("-").map(Number);
+        const last = new Date(y, m, 0).getDate();
+        to = `${monthFilter}-${String(last).padStart(2, "0")}`;
+        suffix = `_${monthFilter}`;
+      }
+      const csv =
+        vendor === "freee"
+          ? await buildFreeeJournalsCsv({ fromDate: from, toDate: to })
+          : await buildMoneyForwardJournalsCsv({ fromDate: from, toDate: to });
+      const label = vendor === "freee" ? "freee" : "moneyforward";
+      const fname = `kaikei_journals_${label}${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
+      downloadCsv(csv, fname);
+      toast.success(`${vendor === "freee" ? "freee" : "マネーフォワード"} 形式で書き出しました (${fname})`);
     } catch (e) {
       toast.error(`CSV 書き出しに失敗: ${(e as Error).message}`);
     }
@@ -435,6 +522,25 @@ export default function JournalsPage() {
               ))}
             </select>
           )}
+          {/* Round 28 ㊧: 他社会計ソフト形式でエクスポート (移行検討者向け) */}
+          <select
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "freee" || v === "mf") {
+                void handleExportVendorCsv(v);
+                e.target.value = "";
+              }
+            }}
+            defaultValue=""
+            className="border rounded px-2 py-1 text-sm h-9"
+            title="freee / マネーフォワード クラウド の仕訳インポート用 CSV (月フィルタ適用)"
+          >
+            <option value="" disabled>
+              他社形式 CSV
+            </option>
+            <option value="freee">freee 振替形式</option>
+            <option value="mf">マネーフォワード形式</option>
+          </select>
           {/* Round 22 ⓔ: 年度サマリ PDF (確定申告期のレビュー用) */}
           {availableYears.length > 0 && (
             <select
@@ -505,6 +611,40 @@ export default function JournalsPage() {
           >
             解除
           </Button>
+        </div>
+      )}
+
+      {/* Round 28 ⓐ: from/to レンジ時の「当期 vs 前年同期」比較 */}
+      {rangeCompare && (dateFrom && dateTo) && (
+        <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+          {(() => {
+            const fmt = (n: number) => new Intl.NumberFormat("ja-JP").format(n);
+            const delta = (cur: number, prev: number) => {
+              const d = cur - prev;
+              const pct = prev !== 0 ? Math.round((d / Math.abs(prev)) * 100) : null;
+              const sign = d > 0 ? "+" : "";
+              return (
+                <span className={d > 0 ? "text-emerald-700" : d < 0 ? "text-red-600" : "text-muted-foreground"}>
+                  {sign}¥{fmt(d)}{pct !== null ? ` (${sign}${pct}%)` : ""}
+                </span>
+              );
+            };
+            return (
+              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                <span className="font-medium text-foreground">前年同期比較:</span>
+                <span>
+                  売上 ¥{fmt(rangeCompare.cur.income)}{" "}
+                  <span className="text-muted-foreground">(前年 ¥{fmt(rangeCompare.prev.income)})</span>{" "}
+                  {delta(rangeCompare.cur.income, rangeCompare.prev.income)}
+                </span>
+                <span>
+                  経費 ¥{fmt(rangeCompare.cur.expense)}{" "}
+                  <span className="text-muted-foreground">(前年 ¥{fmt(rangeCompare.prev.expense)})</span>{" "}
+                  {delta(rangeCompare.cur.expense, rangeCompare.prev.expense)}
+                </span>
+              </div>
+            );
+          })()}
         </div>
       )}
 
