@@ -1,6 +1,42 @@
 import { Redis } from "@upstash/redis";
 
-const redis = Redis.fromEnv();
+// Upstash の環境変数が未設定の環境 (= オーナー専用バイパスだけで運用するケース)
+// でもモジュールロード時にクラッシュしないよう、Redis 接続は遅延生成にする。
+let _redis: Redis | null = null;
+function getRedis(): Redis {
+  if (!_redis) _redis = Redis.fromEnv();
+  return _redis;
+}
+
+// ────────────────────────────────────────────────────────────
+// オーナー専用ライセンスキー (開発者本人が自分で使う用)
+//
+// 環境変数 OWNER_LICENSE_KEY に好きな秘密文字列を入れておくと、その値を
+// ライセンスキーとして渡したリクエストは Redis を一切見ずに「常に有効・
+// 高い月次枠」として通る。Stripe や Upstash の設定なしで AI OCR を使える。
+//
+// 一般ユーザ向けのライセンス (Stripe 連携) はこれまで通り Redis ベース。
+// ────────────────────────────────────────────────────────────
+const OWNER_LICENSE_KEY = process.env.OWNER_LICENSE_KEY || "";
+const OWNER_MONTHLY_LIMIT = 100000; // 実質無制限
+
+function isOwnerKey(key: string): boolean {
+  return Boolean(OWNER_LICENSE_KEY) && key === OWNER_LICENSE_KEY;
+}
+
+function ownerLicenseRecord(key: string): LicenseRecord {
+  return {
+    license_key: key,
+    customer_email: "owner@kaikei-local.com",
+    stripe_subscription_id: null,
+    stripe_customer_id: null,
+    plan: "yearly",
+    status: "active",
+    created_at: "2024-01-01T00:00:00.000Z",
+    expires_at: "2099-12-31T23:59:59.000Z",
+    monthly_limit: OWNER_MONTHLY_LIMIT,
+  };
+}
 
 export type LicenseRecord = {
   license_key: string;
@@ -44,15 +80,17 @@ export async function createLicense(params: {
     expires_at: params.expires_at,
     monthly_limit: MONTHLY_LIMIT,
   };
-  await redis.set(`license:${key}`, record);
+  await getRedis().set(`license:${key}`, record);
   if (params.stripe_customer_id) {
-    await redis.set(`customer:${params.stripe_customer_id}`, key);
+    await getRedis().set(`customer:${params.stripe_customer_id}`, key);
   }
   return record;
 }
 
 export async function getLicense(key: string): Promise<LicenseRecord | null> {
-  const record = await redis.get<LicenseRecord>(`license:${key}`);
+  // オーナー専用キーは Redis を見ずに固定レコードを返す
+  if (isOwnerKey(key)) return ownerLicenseRecord(key);
+  const record = await getRedis().get<LicenseRecord>(`license:${key}`);
   return record;
 }
 
@@ -61,42 +99,48 @@ export async function updateLicenseStatus(
   status: LicenseRecord["status"],
   expires_at?: string
 ): Promise<void> {
+  if (isOwnerKey(key)) return; // オーナーキーは常時 active、状態変更不要
   const existing = await getLicense(key);
   if (!existing) return;
   existing.status = status;
   if (expires_at) existing.expires_at = expires_at;
-  await redis.set(`license:${key}`, existing);
+  await getRedis().set(`license:${key}`, existing);
 }
 
 export async function getLicenseByCustomer(
   customerId: string
 ): Promise<LicenseRecord | null> {
-  const key = await redis.get<string>(`customer:${customerId}`);
+  const key = await getRedis().get<string>(`customer:${customerId}`);
   if (!key) return null;
   return getLicense(key);
 }
 
 /**
  * 月の使用量を記録する。1ヶ月で MONTHLY_LIMIT を超えるとエラー。
+ * オーナー専用キーは Redis を使わず常に ok を返す。
  */
 export async function incrementUsage(
   key: string
 ): Promise<{ used: number; limit: number; ok: boolean }> {
+  if (isOwnerKey(key)) {
+    return { used: 1, limit: OWNER_MONTHLY_LIMIT, ok: true };
+  }
   const license = await getLicense(key);
   if (!license) return { used: 0, limit: 0, ok: false };
 
   const yyyyMm = new Date().toISOString().slice(0, 7);
   const usageKey = `usage:${key}:${yyyyMm}`;
-  const used = (await redis.incr(usageKey)) as number;
+  const used = (await getRedis().incr(usageKey)) as number;
   // 月末まで保持（32日で自動削除）
-  await redis.expire(usageKey, 32 * 24 * 60 * 60);
+  await getRedis().expire(usageKey, 32 * 24 * 60 * 60);
   return { used, limit: license.monthly_limit, ok: used <= license.monthly_limit };
 }
 
 export async function getCurrentUsage(key: string): Promise<number> {
+  if (isOwnerKey(key)) return 0;
   const yyyyMm = new Date().toISOString().slice(0, 7);
   const usageKey = `usage:${key}:${yyyyMm}`;
-  const used = (await redis.get<number>(usageKey)) ?? 0;
+  const used = (await getRedis().get<number>(usageKey)) ?? 0;
   return used;
 }
 
