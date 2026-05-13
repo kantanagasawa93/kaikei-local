@@ -3,12 +3,14 @@ import {
   getLicense,
   incrementUsage,
   isLicenseValid,
-  getCurrentUsage,
 } from "@/lib/license";
 
 // 約30秒タイムアウト
 export const maxDuration = 30;
 export const runtime = "nodejs";
+
+// Gemini モデル (multimodal, 安価, OCR には十分)
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の領収書・レシートの読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -26,11 +28,9 @@ const SYSTEM_PROMPT = `あなたは日本の領収書・レシートの読み取
 
 注意:
 - 金額が読み取れない場合は null
-- 日付が読み取れない場合は null
-- 品目は主要なもののみ（最大8つ）。レシートで明細単位に金額が読めるなら必ず price も埋める
-- 旧フォーマット ["品目1", "品目2"] でも構わないが、新フォーマット
-  [{"name":"品目","price":数値}] を優先すること
-- 全品目の price 合計が amount と一致することが理想 (端数で 1〜2 円ずれても可)
+- 日付が読み取れない場合は null（和暦は西暦に変換）
+- 品目は主要なもののみ（最大8つ）。明細単位に金額が読めるなら必ず price も埋める
+- 全品目の price 合計が amount と一致することが理想（端数で1〜2円ずれても可）
 - JSONのみ出力。説明文は不要`;
 
 function corsHeaders() {
@@ -45,6 +45,73 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders() });
 }
 
+/** Gemini API 呼び出しが上流エラーになった時に投げる (HTTP 502 にマップ) */
+class GeminiUpstreamError extends Error {}
+
+/**
+ * Gemini generateContent を呼んで JSON テキストを返す共通ヘルパ.
+ * responseMimeType: application/json を指定して JSON だけ返させる。
+ * 上流エラー時は GeminiUpstreamError を throw する。
+ */
+async function callGemini(
+  apiKey: string,
+  systemPrompt: string,
+  userText: string,
+  imageBase64: string,
+  mediaType: string,
+  maxTokens: number,
+): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
+    apiKey,
+  )}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: userText },
+            { inline_data: { mime_type: mediaType, data: imageBase64 } },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: maxTokens,
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Gemini API error:", res.status, errText);
+    throw new GeminiUpstreamError("AI 読み取りに失敗しました");
+  }
+  const data = await res.json();
+  const text: string =
+    data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || "").join("") || "";
+  return text;
+}
+
+function parseJsonLoose(text: string): Record<string, unknown> {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        return JSON.parse(m[0]);
+      } catch {
+        /* fall through */
+      }
+    }
+    return {};
+  }
+}
+
 export async function POST(req: NextRequest) {
   const licenseKey = req.headers.get("x-license-key");
   if (!licenseKey) {
@@ -54,7 +121,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ライセンスキー検証
   const license = await getLicense(licenseKey);
   if (!license) {
     return NextResponse.json(
@@ -69,7 +135,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 使用量制限
   const usage = await incrementUsage(licenseKey);
   if (!usage.ok) {
     return NextResponse.json(
@@ -80,7 +145,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // リクエストボディ読み込み
   let body: { image?: string; media_type?: string };
   try {
     body = await req.json();
@@ -97,8 +161,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Claude API 呼び出し
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
       { error: "サーバ設定エラー（APIキー未設定）" },
@@ -106,151 +169,59 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ストリーミングモードは ?stream=1 で有効化。クライアントが部分的に
-  // フィールドを表示できるよう、Claude の text_delta を SSE で再エミットする。
+  // ?stream=1 が来てもサーバは非ストリーミングで Gemini を叩き、結果を
+  // SSE 風に 1 chunk + done でエミットする (クライアント互換のため)。
   const isStream = req.nextUrl.searchParams.get("stream") === "1";
 
-  const claudeBody = {
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 1024,
-    system: SYSTEM_PROMPT,
-    stream: isStream,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: body.media_type,
-              data: body.image,
-            },
-          },
-          { type: "text", text: "この領収書の内容を読み取ってください。" },
-        ],
-      },
-    ],
-  };
-
   try {
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(claudeBody),
-    });
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error("Claude API error:", errText);
-      return NextResponse.json(
-        { error: "AI 読み取りに失敗しました" },
-        { status: 502, headers: corsHeaders() }
-      );
-    }
+    const text = await callGemini(
+      apiKey,
+      SYSTEM_PROMPT,
+      "この領収書の内容を読み取ってください。",
+      body.image,
+      body.media_type,
+      1024,
+    );
+    const parsed = parseJsonLoose(text);
 
     if (!isStream) {
-      // 既存の非ストリーミング経路 (後方互換)
-      const data = await anthropicRes.json();
-      const text = data.content?.[0]?.text || "";
-      let parsed: Record<string, unknown> = {};
-      try {
-        const match = text.match(/\{[\s\S]*\}/);
-        parsed = match ? JSON.parse(match[0]) : {};
-      } catch {}
       return NextResponse.json(
-        {
-          ...parsed,
-          usage: { used: usage.used, limit: usage.limit },
-        },
+        { ...parsed, usage: { used: usage.used, limit: usage.limit } },
         { headers: corsHeaders() }
       );
     }
 
-    // SSE ストリーミング経路。Anthropic からの text_delta を抜き出して
-    // クライアントに `event: chunk` として再送、最後に `event: done` で usage を流す。
-    if (!anthropicRes.body) {
-      return NextResponse.json(
-        { error: "ストリーム取得に失敗しました" },
-        { status: 502, headers: corsHeaders() }
-      );
-    }
-
-    const upstream = anthropicRes.body;
+    // SSE 互換: chunk(全文) → done(usage)
     const usageSnapshot = { used: usage.used, limit: usage.limit };
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      start(controller) {
         const encoder = new TextEncoder();
-        const decoder = new TextDecoder();
-        const reader = upstream.getReader();
-        let buf = "";
-
         const send = (event: string, data: unknown) => {
           controller.enqueue(
             encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
           );
         };
-
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-
-            // SSE は \n\n でイベント区切り
-            const events = buf.split("\n\n");
-            buf = events.pop() || "";
-
-            for (const evt of events) {
-              const lines = evt.split("\n");
-              const eventType = lines
-                .find((l) => l.startsWith("event:"))
-                ?.slice(6)
-                .trim();
-              const dataLine = lines
-                .find((l) => l.startsWith("data:"))
-                ?.slice(5)
-                .trim();
-              if (!eventType || !dataLine) continue;
-
-              if (eventType === "content_block_delta") {
-                try {
-                  const parsed = JSON.parse(dataLine);
-                  if (parsed.delta?.type === "text_delta") {
-                    send("chunk", { text: parsed.delta.text as string });
-                  }
-                } catch {
-                  /* ignore malformed delta */
-                }
-              } else if (eventType === "error") {
-                send("error", { error: "AI 読み取りに失敗しました" });
-              }
-            }
-          }
-          send("done", { usage: usageSnapshot });
-        } catch (e) {
-          console.error("stream error:", e);
-          send("error", { error: "ストリーム中にエラーが発生しました" });
-        } finally {
-          controller.close();
-        }
+        send("chunk", { text });
+        send("done", { usage: usageSnapshot });
+        controller.close();
       },
     });
-
     return new Response(stream, {
       headers: {
         ...corsHeaders(),
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
-        "X-Accel-Buffering": "no", // Vercel/Nginx でのバッファ抑制
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (e) {
+    if (e instanceof GeminiUpstreamError) {
+      return NextResponse.json(
+        { error: e.message },
+        { status: 502, headers: corsHeaders() }
+      );
+    }
     console.error("OCR error:", e);
     return NextResponse.json(
       { error: "サーバエラー" },
