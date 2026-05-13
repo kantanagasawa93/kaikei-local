@@ -164,7 +164,8 @@ export async function createInvoiceFromPo(
     }
   }
 
-  // 取引先 (発注元 = 請求先) を find-or-create で partners マスタに反映。
+  // 取引先 (発注書を出してきた相手 = 自分が請求書を出す相手) を find-or-create で
+  // partners マスタに反映。
   // 既存があれば id 取得、無ければ新規 INSERT ([auto-learned] notes + is_customer=1)。
   // address も Gemini が読み取れていれば一緒に登録する。
   const partnerId = await findOrCreatePartner({

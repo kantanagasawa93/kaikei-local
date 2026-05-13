@@ -398,7 +398,7 @@ export default function FromPoPage() {
           <CardContent className="space-y-3">
             <div className="grid gap-3 md:grid-cols-2">
               <div>
-                <Label>請求先 (発注元)</Label>
+                <Label>請求先 (発注書を出してきた取引先)</Label>
                 <Input
                   value={result.partner_name ?? ""}
                   onChange={(e) =>
@@ -407,7 +407,8 @@ export default function FromPoPage() {
                   placeholder="例: 株式会社サンプル"
                 />
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  ※ 「請求書を作成」を押すと、この取引先 (住所も含む) は
+                  ※ あなた (受注者) が請求書を出す相手 = 発注書の差出人です。
+                  「請求書を作成」を押すと、この取引先 (住所も含む) は
                   <b>取引先マスタにも自動登録</b> されます (既存なら ID 紐付けのみ)
                 </p>
               </div>
