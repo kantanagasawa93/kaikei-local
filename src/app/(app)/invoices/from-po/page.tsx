@@ -46,6 +46,7 @@ export default function FromPoPage() {
   const [ocrBusy, setOcrBusy] = useState(false);
   const [result, setResult] = useState<PurchaseOrderResult | null>(null);
   const [creating, setCreating] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -59,20 +60,44 @@ export default function FromPoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
+  // ファイルを受け取って即 OCR 開始 (D&D / クリック選択どちらからも)
+  const acceptFile = (f: File) => {
     if (!f) return;
+    // 画像 or PDF のみ
+    if (!f.type.startsWith("image/") && f.type !== "application/pdf") {
+      toast.error("画像 (JPG/PNG/HEIC) または PDF を選択してください");
+      return;
+    }
     setFile(f);
     setResult(null);
     if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(URL.createObjectURL(f));
+    // 自動で OCR 起動
+    void runOcr(f);
   };
 
-  const runOcr = async () => {
-    if (!file) return;
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) acceptFile(f);
+    // 同じファイルを連続で選んだ時にも change を発火させる
+    e.target.value = "";
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) acceptFile(f);
+  };
+
+  // runOcr は引数で渡された file (or state) を使う。
+  // acceptFile から呼ぶ時は state 更新待ち不要にするため引数渡しを優先。
+  const runOcr = async (targetFile?: File) => {
+    const f = targetFile ?? file;
+    if (!f) return;
     setOcrBusy(true);
     try {
-      let { base64, mediaType } = await fileToBase64(file);
+      let { base64, mediaType } = await fileToBase64(f);
       // PDF は Tauri 側 (sips) で PNG にラスタライズしてから送る。
       // 一部の日本語 PDF はテキストレイヤが文字化けしていて Gemini が
       // PDF 直読みだと「中身が空っぽ」になるため、画像化して回避する。
@@ -250,60 +275,114 @@ export default function FromPoPage() {
         </div>
       </div>
 
-      {/* 1) ファイル選択 */}
+      {/* 1) ファイルをドロップ → 自動 OCR */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Upload className="h-4 w-4" />1. 発注書ファイルを選択
+            <Upload className="h-4 w-4" />1. 発注書をドロップ
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Input
+          {/* D&D ゾーン: ドロップ or クリックでファイル選択 → 自動 OCR */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!ocrBusy && !creating) setDragActive(true);
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={(e) => {
+              if (ocrBusy || creating) {
+                e.preventDefault();
+                return;
+              }
+              onDrop(e);
+            }}
+            onClick={() => {
+              if (!ocrBusy && !creating) {
+                document.getElementById("po-file-input")?.click();
+              }
+            }}
+            className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors select-none ${
+              ocrBusy || creating ? "cursor-not-allowed opacity-80" : "cursor-pointer"
+            } ${
+              dragActive
+                ? "border-primary bg-primary/5"
+                : "border-muted-foreground/25 hover:border-primary/50"
+            }`}
+          >
+            {ocrBusy ? (
+              <div className="flex flex-col items-center gap-2 py-4">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm font-medium">AI で読み取り中…</p>
+                <p className="text-xs text-muted-foreground">
+                  Gemini で発注書を解析しています (10〜20 秒)
+                </p>
+              </div>
+            ) : previewUrl && file ? (
+              <div className="flex items-start gap-3 text-left">
+                <div className="w-32 h-32 border rounded overflow-hidden bg-muted flex items-center justify-center flex-shrink-0">
+                  {file.type.startsWith("image/") ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={previewUrl}
+                      alt="preview"
+                      className="w-full h-full object-contain"
+                    />
+                  ) : (
+                    <FileText className="h-10 w-10 text-muted-foreground" />
+                  )}
+                </div>
+                <div className="flex-1 text-sm">
+                  <p className="font-medium truncate">{file.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {Math.round(file.size / 1024)} KB · {file.type || "不明な形式"}
+                  </p>
+                  {result ? (
+                    <p className="text-xs text-green-700 mt-2 inline-flex items-center gap-1">
+                      <Sparkles className="h-3 w-3" />
+                      読み取り完了 — 下の結果を確認してください
+                    </p>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="mt-2 h-7"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void runOcr(file);
+                      }}
+                    >
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      もう一度読み取る
+                    </Button>
+                  )}
+                  <p className="text-[11px] text-muted-foreground mt-2">
+                    別のファイルに差し替えるにはここをクリックまたは新しいファイルをドロップ
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 py-4">
+                <Upload className="h-10 w-10 text-muted-foreground" />
+                <p className="text-sm font-medium">
+                  発注書をここにドラッグ&ドロップ
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  またはクリックしてファイルを選択 (画像 / PDF) — ドロップ即 AI 解析が走ります
+                </p>
+              </div>
+            )}
+          </div>
+          {/* 隠し input — D&D ゾーンクリック時に発火 */}
+          <input
+            id="po-file-input"
             type="file"
             accept="image/*,application/pdf"
+            className="hidden"
             onChange={onFileChange}
             disabled={ocrBusy || creating}
           />
-          {previewUrl && file && (
-            <div className="flex items-start gap-3">
-              <div className="w-40 h-40 border rounded overflow-hidden bg-muted flex items-center justify-center flex-shrink-0">
-                {file.type.startsWith("image/") ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={previewUrl}
-                    alt="preview"
-                    className="w-full h-full object-contain"
-                  />
-                ) : (
-                  <FileText className="h-12 w-12 text-muted-foreground" />
-                )}
-              </div>
-              <div className="flex-1 text-sm">
-                <p className="font-medium truncate">{file.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {Math.round(file.size / 1024)} KB · {file.type || "不明な形式"}
-                </p>
-                <Button
-                  className="mt-3"
-                  size="sm"
-                  onClick={() => void runOcr()}
-                  disabled={ocrBusy || creating}
-                >
-                  {ocrBusy ? (
-                    <>
-                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      読み取り中…
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-3 w-3 mr-1" />
-                      AI で読み取る
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -504,9 +583,8 @@ export default function FromPoPage() {
           <CardContent className="py-4 text-xs text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">使い方</p>
             <ol className="list-decimal pl-5 space-y-0.5">
-              <li>受け取った発注書 (PDF or 画像) を「ファイルを選択」</li>
-              <li>「AI で読み取る」で AI OCR を起動 (~10 秒)</li>
-              <li>抽出された請求先 / 品目 / 金額を確認、必要なら微修正</li>
+              <li>発注書 (PDF or 画像) をドロップ — 自動で AI 解析が走ります (~10 秒)</li>
+              <li>抽出された請求先 / 品目 / 金額・源泉徴収を確認、必要なら微修正</li>
               <li>「請求書を作成」で <Badge variant="outline" className="text-[10px]">draft</Badge> 状態の請求書ができる</li>
               <li>編集画面で発行 → 送付 (PDF ダウンロード)</li>
             </ol>
