@@ -309,7 +309,15 @@ export const saveApiKey = saveLicenseKey;
  * 未デプロイだと AI OCR/ライセンス系機能が全滅するので、UI で
  * 「有料プラン準備中」と表示するために使う。
  *
- * 判定: HEAD or OPTIONS で 2xx/3xx が返れば生存。TypeError/timeout なら死亡。
+ * 判定:
+ *   - 保存済みライセンスキーがあれば /api/license/verify をそのキーで叩く
+ *     → valid なら生存、status < 500 でも (4xx = キー無効だがサーバーは生きている) 生存
+ *   - キー未保存なら /api/ocr に空ボディ POST → 401 (= 認証必須だがサーバー稼働中) が返れば生存
+ *   - fetch が throw (DNS 失敗 / timeout / 接続拒否) した時だけ「死亡」
+ *
+ * 注意: 旧実装は /api/license/verify に "__probe__" を投げていたが、
+ * ライセンス基盤 (Upstash) 未整備の現状ではオーナーキー以外は 503 を返すため
+ * 「準備中」と誤判定していた。生存判定はオーナーキー or /api/ocr の 401 で行う。
  * 結果は 5分キャッシュ (頻繁に叩かない)。
  */
 let _probeCache: { ok: boolean; at: number } | null = null;
@@ -319,18 +327,31 @@ export async function probeApiServer(): Promise<boolean> {
   const now = Date.now();
   if (_probeCache && now - _probeCache.at < PROBE_TTL_MS) return _probeCache.ok;
   const base = await getApiBase();
+  let key = "";
+  try {
+    key = ((await getLicenseKey()) ?? "").trim();
+  } catch {
+    /* キー取得失敗は無視 → /api/ocr 経路で判定 */
+  }
   try {
     // 3秒 timeout
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`${base}/api/license/verify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ license_key: "__probe__" }),
-      signal: controller.signal,
-    });
+    const res = key
+      ? await fetch(`${base}/api/license/verify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ license_key: key }),
+          signal: controller.signal,
+        })
+      : await fetch(`${base}/api/ocr`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+          signal: controller.signal,
+        });
     clearTimeout(t);
-    // 401 でもサーバー生存なので OK
+    // 401/403/400 等 4xx でもサーバー生存。5xx (= function クラッシュ / gateway 不調) のみ「死亡」
     const ok = res.status < 500;
     _probeCache = { ok, at: now };
     return ok;
@@ -344,7 +365,7 @@ export async function probeApiServer(): Promise<boolean> {
 // AI OCR データ送信同意フラグ
 // ──────────────────────────────────────────────────────────
 //
-// 領収書画像を外部サーバー (api.kaikei-local.com 経由 Gemini) に送信するため、
+// 領収書画像を外部サーバー (kaikei の AI OCR API 経由 Gemini Vision) に送信するため、
 // 初回に明示同意を取得する。app_settings.id="ai_ocr_consent" に "1" / "0" で保持。
 
 const CONSENT_KEY = "ai_ocr_consent";

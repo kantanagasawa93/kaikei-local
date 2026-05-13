@@ -547,11 +547,10 @@ export default function SettingsPage() {
 
           {apiAlive === false && (
             <div className="rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-900">
-              <b>⚠️ AI 読み取りサービスは現在準備中です。</b>
+              <b>⚠️ AI 読み取りサーバーに接続できませんでした。</b>
               <br />
-              サーバー (<code>api.kaikei-local.com</code>) が未稼働です。
-              当面はオフラインの Tesseract OCR のみご利用いただけます。
-              正式公開までお待ちください。
+              ネットワークを確認してアプリを再起動してください。復旧するまではオフラインの
+              Tesseract OCR のみご利用いただけます。
             </div>
           )}
 
