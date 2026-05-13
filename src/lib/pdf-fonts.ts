@@ -47,7 +47,13 @@ export async function getBoldFont(): Promise<Uint8Array> {
 }
 
 /**
- * PDFDocument に日本語フォントを登録して返す
+ * PDFDocument に日本語フォントを登録して返す.
+ *
+ * 注意: subset: true は pdf-lib + fontkit + Noto Sans JP の組合せで
+ * グリフを取りこぼし、英字 lowercase や一部漢字が「ところどころ消える」
+ * 壊れた PDF になる事案あり (請求書 PDF #001 で実際に発生)。
+ * 安全側に倒して subset: false (フォント丸ごと埋込) にする。
+ * 結果: 1 PDF あたり ~10MB 増えるが、確実に読めることを優先。
  */
 export async function embedJapaneseFonts(
   pdf: PDFDocument
@@ -57,7 +63,7 @@ export async function embedJapaneseFonts(
     getRegularFont(),
     getBoldFont(),
   ]);
-  const regular = await pdf.embedFont(regularBytes, { subset: true });
-  const bold = await pdf.embedFont(boldBytes, { subset: true });
+  const regular = await pdf.embedFont(regularBytes, { subset: false });
+  const bold = await pdf.embedFont(boldBytes, { subset: false });
   return { regular, bold };
 }

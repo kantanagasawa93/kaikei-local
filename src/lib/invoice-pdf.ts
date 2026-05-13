@@ -34,11 +34,7 @@ export async function exportInvoicePdf(
     });
   };
 
-  // 注意: 日本語フォントを埋め込んでいないため、pdf-lib の標準フォントでは
-  // 日本語文字を描画できません。日本語文字列はASCIIにそのまま落ちるので
-  // "?" などが並びます。実運用前に Noto Sans JP を embedFont で追加してください。
-  // ここでは配置・構成の検証用の簡易版。
-
+  // Noto Sans JP を pdf-fonts.ts 経由で埋め込み済み (subset: false で安定描画)
   let y = height - 50;
   draw("INVOICE", 40, y, { size: 22, bold: true });
   draw(`No. ${invoice.invoice_number}`, width - 180, y, { size: 11 });
@@ -61,22 +57,28 @@ export async function exportInvoicePdf(
   y -= 24;
 
   // 発行者
-  if (issuer) {
-    draw("From:", width - 220, y + 50, { bold: true });
+  draw("From:", width - 220, y + 50, { bold: true });
+  {
     let iy = y + 36;
-    if (issuer.business_name) {
+    if (issuer?.business_name) {
       draw(issuer.business_name, width - 220, iy, { size: 11, bold: true });
       iy -= 11;
+    } else {
+      draw("(屋号未登録 — 発行者情報を登録してください)", width - 220, iy, {
+        size: 9,
+        color: [0.75, 0.2, 0.2],
+      });
+      iy -= 11;
     }
-    if (issuer.address) {
+    if (issuer?.address) {
       draw(issuer.address, width - 220, iy, { size: 8 });
       iy -= 10;
     }
-    if (issuer.phone) {
+    if (issuer?.phone) {
       draw(`TEL ${issuer.phone}`, width - 220, iy, { size: 8 });
       iy -= 10;
     }
-    if (issuer.registered_number) {
+    if (issuer?.registered_number) {
       draw(`Registered #: ${issuer.registered_number}`, width - 220, iy, { size: 8 });
     }
   }
@@ -169,15 +171,21 @@ export async function exportInvoicePdf(
   draw("TOTAL", 380, y, { size: 13, bold: true });
   draw(`${invoice.total_amount.toLocaleString()} JPY`, 480, y, { size: 13, bold: true });
 
-  // 振込先
+  // 振込先 (未登録時は警告プレースホルダ — PDF 受け取り側にも未設定が伝わる)
+  y -= 40;
+  draw("振込先:", 40, y, { bold: true });
+  y -= 12;
   if (issuer?.bank_info) {
-    y -= 40;
-    draw("Bank info:", 40, y, { bold: true });
-    y -= 12;
     for (const line of issuer.bank_info.split("\n").slice(0, 5)) {
       draw(line, 60, y, { size: 9 });
       y -= 10;
     }
+  } else {
+    draw("(未登録 — 「発行者情報」で銀行口座を登録してください)", 60, y, {
+      size: 9,
+      color: [0.75, 0.2, 0.2],
+    });
+    y -= 10;
   }
 
   // 備考
