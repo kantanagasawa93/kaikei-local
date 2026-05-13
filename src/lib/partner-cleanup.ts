@@ -1,3 +1,105 @@
+// ────────────────────────────────────────────────────────────
+// Round 28: AI OCR で抜き出した取引先を partners マスタに自動登録する.
+//
+// 既存と同名 (前後空白を除いた一致) の partner があればその ID を返し、
+// 役割フラグ (is_customer / is_vendor) や address が未設定なら追記する。
+// 無ければ新規 INSERT して [auto-learned] notes を付ける。
+//
+// - 領収書 OCR → vendor (買い手から見た売り手) → is_vendor=1
+// - 発注書 OCR → customer (請求先) → is_customer=1
+// 同じ会社が両方の役割を持つこともあるので、フラグは OR で立てる。
+// ────────────────────────────────────────────────────────────
+
+export interface FindOrCreatePartnerArgs {
+  name: string | null;
+  address?: string | null;
+  isCustomer?: boolean;
+  isVendor?: boolean;
+  /** OCR 学習の出所 (notes に追記) — "OCR 領収書" / "OCR 発注書" 等 */
+  source?: string;
+  /** receipts.account_code 相当。partners.default_account_code に入れる */
+  defaultAccountCode?: string | null;
+}
+
+const NAME_NOISE_RE = /^(不明|nil|null|none|n\/a|-+|\?+)$/i;
+const AUTO_LEARNED_NOTE = "[auto-learned]";
+
+export async function findOrCreatePartner(
+  args: FindOrCreatePartnerArgs,
+): Promise<string | null> {
+  const rawName = (args.name ?? "").trim();
+  if (rawName.length < 2 || rawName.length > 80) return null;
+  if (NAME_NOISE_RE.test(rawName)) return null;
+
+  const isCustomer = args.isCustomer ? 1 : 0;
+  const isVendor = args.isVendor ? 1 : 0;
+
+  // 既存検索 (完全一致)
+  try {
+    const { data } = await db
+      .from("partners")
+      .select("id, address, is_customer, is_vendor, notes")
+      .eq("name", rawName)
+      .single();
+    const row = data as
+      | {
+          id: string;
+          address: string | null;
+          is_customer: number | null;
+          is_vendor: number | null;
+          notes: string | null;
+        }
+      | null;
+    if (row?.id) {
+      // 既存 partner: 役割フラグ / address を埋め足す (上書きはしない)
+      const patch: Record<string, unknown> = {};
+      if (isCustomer && !row.is_customer) patch.is_customer = 1;
+      if (isVendor && !row.is_vendor) patch.is_vendor = 1;
+      if (args.address && !row.address) patch.address = args.address;
+      if (Object.keys(patch).length > 0) {
+        try {
+          await db.from("partners").update(patch).eq("id", row.id);
+        } catch (e) {
+          console.warn("findOrCreatePartner: update failed", e);
+        }
+      }
+      return row.id;
+    }
+  } catch {
+    // single() は 0 件で error — 下の INSERT に進む
+  }
+
+  // 新規 INSERT
+  const id = crypto.randomUUID();
+  const note = `${AUTO_LEARNED_NOTE} ${args.source ?? "OCR"} で初出 — レビューしてください`;
+  try {
+    await db.from("partners").insert({
+      id,
+      name: rawName,
+      address: args.address ?? null,
+      is_customer: isCustomer,
+      is_vendor: isVendor,
+      default_account_code: args.defaultAccountCode ?? null,
+      notes: note,
+    });
+    return id;
+  } catch (e) {
+    // UNIQUE 違反など競合時は再 SELECT
+    console.warn("findOrCreatePartner: insert failed:", e);
+    try {
+      const { data } = await db
+        .from("partners")
+        .select("id")
+        .eq("name", rawName)
+        .single();
+      const row = data as { id: string } | null;
+      return row?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
 /**
  * Round 26 ㊣: 取引先 (partners) の自動掃除候補を検出する.
  *

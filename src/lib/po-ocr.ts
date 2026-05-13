@@ -7,6 +7,7 @@
 
 import { getApiKey } from "@/lib/ai-ocr";
 import { db } from "@/lib/localDb";
+import { findOrCreatePartner } from "@/lib/partner-cleanup";
 
 export interface PurchaseOrderItem {
   description: string;
@@ -163,21 +164,16 @@ export async function createInvoiceFromPo(
     }
   }
 
-  // partner_id 解決
-  let partnerId: string | null = null;
-  if (po.partner_name && po.partner_name.trim().length >= 2) {
-    try {
-      const { data } = await db
-        .from("partners")
-        .select("id")
-        .eq("name", po.partner_name.trim())
-        .single();
-      const row = data as { id: string } | null;
-      if (row) partnerId = row.id;
-    } catch {
-      /* 未登録 — UI で 「取引先として登録」を提案できる */
-    }
-  }
+  // 取引先 (発注元 = 請求先) を find-or-create で partners マスタに反映。
+  // 既存があれば id 取得、無ければ新規 INSERT ([auto-learned] notes + is_customer=1)。
+  // address も Gemini が読み取れていれば一緒に登録する。
+  const partnerId = await findOrCreatePartner({
+    name: po.partner_name,
+    address: po.partner_address,
+    isCustomer: true,
+    isVendor: false,
+    source: "OCR 発注書",
+  });
 
   // 請求書番号: po_number があれば使う、なければ INV-YYYYMMDD-XXX
   const fallback = `INV-${todayIso.replace(/-/g, "")}-${invoiceId.slice(0, 4).toUpperCase()}`;

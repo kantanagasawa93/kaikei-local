@@ -206,14 +206,11 @@ async function logAiOcr(opts: {
 }
 
 /**
- * Round 21 ⓕ: vendor_name から取引先を自動学習する。
+ * Round 21 ⓕ → Round 28 で findOrCreatePartner に統一.
  *
- * 既に同名 (前後空白を除いた一致) の partner があればその ID を返す。
- * 無ければ新規 INSERT して [auto-learned] notes を付ける。
- * notes に印を残すことで、取引先一覧画面で「どれが OCR 学習で勝手に増えたか」
- * をユーザが目視で識別 / 整理できる。
- *
- * 渡された vendor が空・短すぎ・無効文字列の時は null を返す (= partner_id 未設定)。
+ * 領収書 OCR 経路の vendor_name (= 自分が買った相手 = 仕入先) を partners に
+ * 自動学習する薄いラッパ。実体は partner-cleanup.ts の findOrCreatePartner で、
+ * 発注書 OCR 経路 (customer 役割) と共通のロジックを使う。
  *
  * @param defaultAccountCode receipts.account_code と同じ値を使うと、次回以降の
  *   仕訳でこの partner を選んだ時にデフォルト科目を引きやすい。
@@ -222,52 +219,14 @@ export async function learnVendorAsPartner(
   vendorName: string | null,
   defaultAccountCode: string | null,
 ): Promise<string | null> {
-  if (!vendorName) return null;
-  const name = vendorName.trim();
-  if (name.length < 2 || name.length > 80) return null;
-  // 「不明」「nil」「null」「-」みたいなノイズを除外
-  if (/^(不明|nil|null|none|n\/a|-+|\?+)$/i.test(name)) return null;
-
-  // 既存検索 (完全一致)
-  try {
-    const { data } = await db
-      .from("partners")
-      .select("id")
-      .eq("name", name)
-      .single();
-    const row = data as { id: string } | null;
-    if (row?.id) return row.id;
-  } catch {
-    // single() は 0 件で error を投げ得る。下の insert に進む。
-  }
-
-  // 新規 INSERT
-  const id = crypto.randomUUID();
-  try {
-    await db.from("partners").insert({
-      id,
-      name,
-      is_customer: 0,
-      is_vendor: 1,
-      default_account_code: defaultAccountCode,
-      notes: "[auto-learned] OCR で初出 — レビューしてください",
-    });
-    return id;
-  } catch (e) {
-    // 競合 (UNIQUE 違反) で失敗した場合は再 SELECT で id を取り直す
-    console.warn("learnVendorAsPartner: insert failed:", e);
-    try {
-      const { data } = await db
-        .from("partners")
-        .select("id")
-        .eq("name", name)
-        .single();
-      const row = data as { id: string } | null;
-      return row?.id ?? null;
-    } catch {
-      return null;
-    }
-  }
+  const { findOrCreatePartner } = await import("@/lib/partner-cleanup");
+  return findOrCreatePartner({
+    name: vendorName,
+    isVendor: true,
+    isCustomer: false,
+    defaultAccountCode,
+    source: "OCR 領収書",
+  });
 }
 
 /**

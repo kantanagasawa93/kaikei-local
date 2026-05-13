@@ -406,6 +406,10 @@ export default function FromPoPage() {
                   }
                   placeholder="例: 株式会社サンプル"
                 />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  ※ 「請求書を作成」を押すと、この取引先 (住所も含む) は
+                  <b>取引先マスタにも自動登録</b> されます (既存なら ID 紐付けのみ)
+                </p>
               </div>
               <div>
                 <Label>件名・案件名</Label>
