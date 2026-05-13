@@ -222,6 +222,24 @@ function EditInner() {
   };
 
   const handleDownloadPdf = async () => {
+    // 発行者情報 (屋号・振込先など) が未登録の状態で PDF を出すと
+    // 「INVOICE 番号と取引先しか書いてない」紙が出来上がるので、警告
+    const missing: string[] = [];
+    if (!issuer || !issuer.business_name) missing.push("屋号・氏名");
+    if (!issuer?.bank_info) missing.push("振込先 (口座情報)");
+    if (!issuer?.address) missing.push("住所");
+    if (missing.length > 0) {
+      const ok = confirm(
+        `次の項目が「発行者情報」に未登録です:\n  ・ ${missing.join("\n  ・ ")}\n\n` +
+          `このまま PDF を出すと、振込先などが空欄のままになります。\n` +
+          `先に「発行者情報」を登録しますか?\n\n` +
+          `[OK] 設定画面へ移動\n[Cancel] このまま PDF を出す`,
+      );
+      if (ok) {
+        router.push("/invoices/settings/");
+        return;
+      }
+    }
     const invoice: Invoice = {
       id: id || "tmp",
       invoice_number: invoiceNumber,
@@ -296,6 +314,24 @@ function EditInner() {
           </Button>
         </div>
       </div>
+
+      {/* 発行者情報未登録の警告 (PDF に屋号・振込先が出ない) */}
+      {(!issuer || !issuer.business_name || !issuer.bank_info) && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+          <p className="font-medium text-amber-900">
+            ⚠️ 発行者情報が未登録です
+          </p>
+          <p className="text-xs text-amber-800 mt-1">
+            このまま PDF を出すと、屋号・住所・<b>振込先</b> が空欄のまま出てしまいます。
+            「発行者情報」で屋号・住所・振込口座・インボイス登録番号を登録してください。
+          </p>
+          <Link href="/invoices/settings/" className="inline-block mt-2">
+            <Button size="sm" variant="outline" className="h-7 text-xs">
+              発行者情報を登録する
+            </Button>
+          </Link>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
