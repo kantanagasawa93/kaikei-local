@@ -12,7 +12,7 @@
 import { PDFDocument, rgb } from "pdf-lib";
 import type { Invoice, InvoiceItem, IssuerSettings } from "@/types";
 import { TAX_CLASSES } from "@/lib/tax-classes";
-import { embedJapaneseFonts } from "@/lib/pdf-fonts";
+import { embedJapaneseFonts, containsNonAscii } from "@/lib/pdf-fonts";
 
 export async function exportInvoicePdf(
   invoice: Invoice,
@@ -20,16 +20,23 @@ export async function exportInvoicePdf(
   issuer: IssuerSettings | null
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
-  const { regular: font, bold } = await embedJapaneseFonts(pdf);
+  const { regular: jpFont, bold: jpBold, asciiRegular, asciiBold } =
+    await embedJapaneseFonts(pdf);
   const page = pdf.addPage([595, 842]); // A4
   const { width, height } = page.getSize();
 
+  // 文字列に日本語が混じっていれば Noto Sans JP、純 ASCII なら Helvetica。
+  // (Noto Sans JP は数字も全角幅 advance なので、ASCII 全角化 = 間延び を避けるため)
   const draw = (text: string, x: number, y: number, opts: { size?: number; bold?: boolean; color?: [number, number, number] } = {}) => {
+    const useJp = containsNonAscii(text);
+    const font = opts.bold
+      ? (useJp ? jpBold : asciiBold)
+      : (useJp ? jpFont : asciiRegular);
     page.drawText(text, {
       x,
       y,
       size: opts.size ?? 10,
-      font: opts.bold ? bold : font,
+      font,
       color: rgb(...(opts.color ?? [0, 0, 0])),
     });
   };
