@@ -43,8 +43,10 @@ function itemsToCombinedText(items: OcrItem[]): string {
   return items.map((it) => (typeof it === "string" ? it : it.name)).join(" ");
 }
 
-// デフォルトのAPIベース（独自ドメインが紐付くまでは Vercel のURL）
-const DEFAULT_API_BASE = "https://api.kaikei-local.com";
+// デフォルトのAPIベース。
+// カスタムドメイン api.kaikei-local.com は未登録のため、Vercel の自動 alias を使う。
+// 将来カスタムドメインを取った時は app_settings.api_base_override で個別に切替可能。
+const DEFAULT_API_BASE = "https://api-server-lac.vercel.app";
 
 async function getApiBase(): Promise<string> {
   try {

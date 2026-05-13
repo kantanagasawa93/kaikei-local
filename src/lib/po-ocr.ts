@@ -31,7 +31,7 @@ export interface PurchaseOrderResult {
   usage?: { used: number; limit: number };
 }
 
-const DEFAULT_API_BASE = "https://api.kaikei-local.com";
+const DEFAULT_API_BASE = "https://api-server-lac.vercel.app";
 
 async function getApiBase(): Promise<string> {
   try {
