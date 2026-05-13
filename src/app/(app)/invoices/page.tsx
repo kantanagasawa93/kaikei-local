@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, FileText, Settings } from "lucide-react";
+import { Plus, Search, FileText, Settings, Sparkles } from "lucide-react";
 import type { Invoice } from "@/types";
 
 const statusLabels: Record<Invoice["status"], { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
@@ -70,6 +70,13 @@ export default function InvoicesPage() {
             <Button variant="outline">
               <Settings className="h-4 w-4 mr-1" />
               発行者情報
+            </Button>
+          </Link>
+          {/* Round 28: 発注書 (PO) を AI OCR で読んで請求書を自動生成 */}
+          <Link href="/invoices/from-po">
+            <Button variant="outline" title="受け取った発注書 (画像 / PDF) を AI で読み取って請求書のたたき台を作成">
+              <Sparkles className="h-4 w-4 mr-1" />
+              発注書から作成
             </Button>
           </Link>
           <Link href="/invoices/edit/">
