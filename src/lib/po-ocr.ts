@@ -26,6 +26,9 @@ export interface PurchaseOrderResult {
   items: PurchaseOrderItem[];
   subtotal: number | null;
   tax_amount: number | null;
+  /** 源泉徴収税 (個人事業主の報酬で発注書に記載されていれば正の値) */
+  withholding_tax: number | null;
+  /** 請求金額 = 小計 + 消費税 − 源泉徴収 */
   total: number | null;
   raw_text: string;
   usage?: { used: number; limit: number };
@@ -111,6 +114,10 @@ export async function ocrPurchaseOrder(
       json.tax_amount != null && Number.isFinite(json.tax_amount)
         ? Number(json.tax_amount)
         : null,
+    withholding_tax:
+      json.withholding_tax != null && Number.isFinite(json.withholding_tax)
+        ? Math.abs(Number(json.withholding_tax))
+        : null,
     total:
       json.total != null && Number.isFinite(json.total) ? Number(json.total) : null,
     raw_text: typeof json.raw_text === "string" ? json.raw_text : "",
@@ -178,7 +185,12 @@ export async function createInvoiceFromPo(
 
   const subtotal = po.subtotal ?? 0;
   const taxAmount = po.tax_amount ?? 0;
-  const totalAmount = po.total ?? subtotal + taxAmount;
+  const withholdingTax = po.withholding_tax ?? 0;
+  // total = 小計 + 消費税 − 源泉徴収 (源泉が読めなかった時のみ OCR の total を採用)
+  const totalAmount =
+    po.total != null
+      ? po.total
+      : subtotal + taxAmount - withholdingTax;
 
   await db.from("invoices").insert({
     id: invoiceId,
@@ -191,6 +203,7 @@ export async function createInvoiceFromPo(
     subject: po.subject,
     subtotal,
     tax_amount: taxAmount,
+    withholding_tax: withholdingTax,
     total_amount: totalAmount,
     status: "draft",
     notes: po.po_number ? `発注書番号: ${po.po_number}` : null,

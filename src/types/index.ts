@@ -155,6 +155,9 @@ export interface Invoice {
   subject: string | null;
   subtotal: number;
   tax_amount: number;
+  /** Round 28: 源泉徴収税 (個人事業主の報酬 10.21% 等)。total_amount から差し引かれる。 */
+  withholding_tax: number;
+  /** 請求金額 = subtotal + tax_amount − withholding_tax (実際にクライアントが振込む額) */
   total_amount: number;
   status: "draft" | "sent" | "paid" | "cancelled";
   sent_at: string | null;
