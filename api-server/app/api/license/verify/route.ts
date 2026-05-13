@@ -24,26 +24,40 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "license_key is required" }, { status: 400, headers: corsHeaders() });
   }
 
-  const license = await getLicense(body.license_key);
-  if (!license) {
+  try {
+    const license = await getLicense(body.license_key);
+    if (!license) {
+      return NextResponse.json(
+        { valid: false, reason: "not_found" },
+        { headers: corsHeaders() }
+      );
+    }
+
+    const valid = isLicenseValid(license);
+    const used = await getCurrentUsage(body.license_key);
+
     return NextResponse.json(
-      { valid: false, reason: "not_found" },
+      {
+        valid,
+        status: license.status,
+        plan: license.plan,
+        expires_at: license.expires_at,
+        monthly_limit: license.monthly_limit,
+        used_this_month: used,
+      },
       { headers: corsHeaders() }
     );
+  } catch (e) {
+    // Upstash Redis 等の外部サービスが未設定の場合に到達。
+    // オーナー専用キー以外の検証は環境が整うまで使えない旨を明示。
+    console.error("license verify error:", e);
+    return NextResponse.json(
+      {
+        valid: false,
+        reason: "server_not_configured",
+        detail: (e as Error).message,
+      },
+      { status: 503, headers: corsHeaders() }
+    );
   }
-
-  const valid = isLicenseValid(license);
-  const used = await getCurrentUsage(body.license_key);
-
-  return NextResponse.json(
-    {
-      valid,
-      status: license.status,
-      plan: license.plan,
-      expires_at: license.expires_at,
-      monthly_limit: license.monthly_limit,
-      used_this_month: used,
-    },
-    { headers: corsHeaders() }
-  );
 }

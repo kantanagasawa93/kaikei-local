@@ -17,11 +17,12 @@ function getRedis(): Redis {
 //
 // 一般ユーザ向けのライセンス (Stripe 連携) はこれまで通り Redis ベース。
 // ────────────────────────────────────────────────────────────
-const OWNER_LICENSE_KEY = process.env.OWNER_LICENSE_KEY || "";
+// env 設定時に末尾改行が混入することがあるので trim しておく
+const OWNER_LICENSE_KEY = (process.env.OWNER_LICENSE_KEY || "").trim();
 const OWNER_MONTHLY_LIMIT = 100000; // 実質無制限
 
 function isOwnerKey(key: string): boolean {
-  return Boolean(OWNER_LICENSE_KEY) && key === OWNER_LICENSE_KEY;
+  return Boolean(OWNER_LICENSE_KEY) && key.trim() === OWNER_LICENSE_KEY;
 }
 
 function ownerLicenseRecord(key: string): LicenseRecord {
