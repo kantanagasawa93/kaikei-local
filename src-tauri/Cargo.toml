@@ -40,6 +40,8 @@ rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 subtle = "2"
 dirs = "5"
+# Round 28: 発注書 PDF → PNG 変換 (sips に渡す前後の base64 デコード/エンコード)
+base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

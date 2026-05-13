@@ -72,7 +72,25 @@ export default function FromPoPage() {
     if (!file) return;
     setOcrBusy(true);
     try {
-      const { base64, mediaType } = await fileToBase64(file);
+      let { base64, mediaType } = await fileToBase64(file);
+      // PDF は Tauri 側 (sips) で PNG にラスタライズしてから送る。
+      // 一部の日本語 PDF はテキストレイヤが文字化けしていて Gemini が
+      // PDF 直読みだと「中身が空っぽ」になるため、画像化して回避する。
+      if (mediaType === "application/pdf") {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const png = (await invoke("pdf_to_png_base64", {
+            pdfBase64: base64,
+          })) as string;
+          base64 = png;
+          mediaType = "image/png";
+        } catch (e) {
+          throw new Error(
+            `PDF の変換に失敗しました: ${e instanceof Error ? e.message : String(e)}。` +
+              `プレビュー等で PNG / JPEG に書き出してから再アップロードしてみてください。`,
+          );
+        }
+      }
       const r = await ocrPurchaseOrder(base64, mediaType);
       setResult(r);
       toast.success("発注書を読み取りました — 内容を確認してください");
