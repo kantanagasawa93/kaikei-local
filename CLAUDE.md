@@ -75,50 +75,69 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 28) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 29) 候補 — ユーザは「全部やって」希望 (10 個)
 
-推し優先順は ㊗ → ㊦ → ㊧ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
+推し優先順は ㊗ → ㊊ → ㊋ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (7 ラウンド持ち越し中)
+### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (8 ラウンド持ち越し中)
+- 要・ユーザ操作: `scripts/release-setup-credentials.sh` を 1 回叩いて
+  xcrun notarytool store-credentials (app-specific password 入力) + ~/.kaikei-release.env 生成
+  → その後 `source ~/.kaikei-release.env && scripts/release.sh v0.3.0` で Claude 単独でも打てる
+- Developer ID Application 証明書は keychain にある。AC_PASSWORD profile が未作成なのが唯一の壁
 
-### ㊦ 定期取引候補をワンクリックで auto_rules に登録 ★★★★
-- Round 27 ㊤ で検出は OK。次は「ルール化」ボタンで auto_rules テーブルへ INSERT
-- 対象: src/app/(app)/dashboard/page.tsx + src/lib/auto-journal.ts
+### ㊊ auto_rules を「使われなくなったルール」自動掃除候補に ★★★★
+- Round 28 ㊦ でルールが増える。applied_count>0 だが accepted_count/applied_count が低い
+  (正答率<30%) or 90 日以上一度も applied されてないルールを「見直し候補」として
+  /auto-rules 上部に提示 (partner-cleanup と同じパターン)
+- 対象: src/lib/auto-rules.ts (新規 detectStaleRules) + src/app/(app)/auto-rules/page.tsx
 
-### ㊧ 仕訳エクスポートに freee / マネーフォワード形式 ★★★
-- 現状は kaikei 標準 CSV のみ。会計ソフト移行を考えてる人向けに別形式 export
-- 対象: src/lib/journal-export.ts
+### ㊋ freee/MF エクスポートの税区分マッピング表 ★★★
+- Round 28 ㊧ では tax_code をそのまま出している。kaikei tax_classes.code →
+  freee/MF の税区分名 への変換表を持たせて、インポート時の手読み替えを不要に
+- 対象: src/lib/journal-export.ts (TAX_CODE_TO_FREEE / _TO_MF マップ)
 
-### ⓐ 月次グラフのドリルダウン先で前年比較も維持 ★★★
-- /journals?from=...&to=... 遷移時に前年同月の合計も上部に表示
-- 対象: src/app/(app)/journals/page.tsx
+### ⓐ 定期取引候補 → ルール化を「複数まとめて」 ★★★
+- Round 28 ㊦ は 1 件ずつ。「上位 N 件を一括ルール化」ボタン + 確認モーダル
+- 対象: src/app/(app)/dashboard/page.tsx
 
-### ⓑ partner 統合の Undo ★★★
-- Round 27 ⓐ で merge を実装したが取り消せない。snapshot stack で undo
+### ⓑ partner 統合 Undo に「複数段戻し」UI ★★★
+- Round 28 ⓑ で stack(max 5) は持ったが UI は直近 1 件のみ。stack 一覧を出して
+  任意の 1 件を選んで戻せるように (dropdown)
+- 対象: src/app/(app)/partners/page.tsx
 
-### ⓒ 受信箱「失敗」タブで failure bucket 別件数 ★★★
-- Round 23 で classifyOcrError は実装済。バケット別 (license/network/server/...)
-  件数を破棄タブと同じパターンで表示
+### ⓒ 受信箱「失敗」タブで bucket 別「まとめて再 OCR / まとめて再試行」 ★★★
+- Round 28 ⓒ で bucket フィルタは入れた。フィルタ中の N 件を一括 reocr or resetFailedToReceipt
 - 対象: src/app/(app)/inbox/page.tsx
 
-### ⓓ readiness カードを「期間外でも開ける」 ★★★
-- 現状 1/1〜3/15 のみ表示。設定画面に「e-Tax 準備状況を見る」ボタンを置いて
-  通年で開けるように
-- 対象: src/app/(app)/settings/page.tsx
+### ⓓ readiness カードの各 check に「解決済みにする」スヌーズ ★★
+- 「これは把握済み」のチェックを app_settings に覚えさせて warning を畳む
+- 対象: src/lib/etax/readiness.ts + dashboard/settings の ReadinessCard
 
-### ⓔ verify-app.sh demo-scenario に bulk delete + Undo 操作 ★★
-- 既存 demo-scenario は scan-now → スクショ。仕訳の bulk select → delete →
-  Undo もシナリオに組込
-- 対象: scripts/verify-app.sh cmd_demo_scenario
+### ⓔ verify-app.sh に「Round 28 機能の回帰チェック」サブコマンド ★★
+- demo-bulk-delete-undo に加えて、auto_rules 件数の前後比較 / partner 統合 Undo の
+  往復を db-dump で検証する regression サブコマンド
+- 対象: scripts/verify-app.sh
 
-### ⓕ updater 失敗時の最終フォールバックを GitHub Release URL に固定 ★★
-- 現状 LP の install.html へ。直接 GitHub Release のほうが確実なケースもある
-- 対象: src/components/update-banner.tsx FALLBACK_URL
+### ⓕ updater フォールバック先を OS/アーキ別に出し分け ★★
+- Round 28 ⓕ で releases/latest に固定。arm64/x64 の DMG 直リンクを判定して出す
+- 対象: src/components/update-banner.tsx
 
-### ⓖ inbox の「再 OCR」進捗 progress バー ★★
-- Round 27 ⓓ で bulk reocr を実装した。50 件処理だと数十秒かかるので
-  進捗ライブ表示を入れる
+### ⓖ inbox 再 OCR 進捗バーに「中断」ボタン ★★
+- Round 28 ⓖ で進捗は出した。途中で止めたい時用に AbortController で打ち切り
 - 対象: src/app/(app)/inbox/page.tsx bulkReocr
+
+### ✓ Round 28 で完了した項目 (履歴)
+- 軽い積み残し: AI OCR 文言を Gemini ベースに統一 ("Claude OCR" → "AI OCR" 一括置換)
+- ㊦ 定期取引候補をワンクリックで auto_rules に登録 (recurring.ts createAutoRuleFromCandidate + dashboard ボタン)
+- ㊧ 仕訳エクスポートに freee 振替形式 / マネーフォワード仕訳帳形式 (journal-export.ts)
+- ⓐ /journals?from=&to= で前年同期比較 (summarizeByDateRange + shiftYear)
+- ⓑ partner 統合の Undo (partner-cleanup.ts mergePartnerVariant/undoPartnerMerge + snapshot stack)
+- ⓒ 受信箱「失敗」タブで failure bucket 別件数 + クリックフィルタ (classifyOcrError ベース)
+- ⓓ readiness カードを設定画面から通年表示 (ReadinessCard in settings)
+- ⓔ verify-app.sh demo-scenario に bulk delete + Undo (新 demo action demo-bulk-delete-undo)
+- ⓕ updater 失敗フォールバックを GitHub Releases /latest に固定
+- ⓖ inbox bulk 再 OCR に進捗バー (done/total/ok/fail + 上部固定 progress)
+- ㊗ v0.3.0 公証付きリリース: 持ち越し (要・対話的 credential セットアップ)
 
 ### ✓ Round 27 で完了した項目 (履歴)
 - ㊤ 定期取引候補の自動検出 (lib/recurring.ts + dashboard widget)
