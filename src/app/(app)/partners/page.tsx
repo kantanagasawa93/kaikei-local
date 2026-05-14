@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, GitMerge, RotateCcw } from "lucide-react";
+import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, GitMerge, RotateCcw, Pencil } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
 import {
@@ -48,6 +48,7 @@ type PartnerForm = {
   is_vendor: boolean;
   email: string;
   phone: string;
+  postal_code: string;
   address: string;
   notes: string;
 };
@@ -60,6 +61,7 @@ const empty: PartnerForm = {
   is_vendor: true,
   email: "",
   phone: "",
+  postal_code: "",
   address: "",
   notes: "",
 };
@@ -69,6 +71,8 @@ export default function PartnersPage() {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<PartnerForm>(empty);
+  // Round 28: 編集対象の partner id (null なら新規登録)
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Round 22 ⓑ: auto-learned のみ表示するフィルタ + bulk select
   const [autoOnly, setAutoOnly] = useState(false);
@@ -224,18 +228,40 @@ export default function PartnersPage() {
     if (data) setPartners(data);
   }
 
+  // Round 28: 行クリックで既存 partner を編集モードで開く
+  function openEdit(p: Partner) {
+    setEditingId(p.id);
+    setForm({
+      name: p.name,
+      name_kana: p.name_kana ?? "",
+      registered_number: p.registered_number ?? "",
+      is_customer: Boolean(p.is_customer),
+      is_vendor: Boolean(p.is_vendor),
+      email: p.email ?? "",
+      phone: p.phone ?? "",
+      postal_code: p.postal_code ?? "",
+      address: p.address ?? "",
+      notes: p.notes ?? "",
+    });
+    setOpen(true);
+  }
+
+  function openNew() {
+    setEditingId(null);
+    setForm(empty);
+    setOpen(true);
+  }
+
+  function closeDialog() {
+    setOpen(false);
+    setEditingId(null);
+    setForm(empty);
+  }
+
   async function handleSave() {
     if (!form.name) return;
     setSaving(true);
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setSaving(false);
-      return;
-    }
-    await supabase.from("partners").insert({
-      user_id: user.id,
+    const payload = {
       name: form.name,
       name_kana: form.name_kana || null,
       registered_number: form.registered_number || null,
@@ -243,12 +269,29 @@ export default function PartnersPage() {
       is_vendor: form.is_vendor,
       email: form.email || null,
       phone: form.phone || null,
+      postal_code: form.postal_code || null,
       address: form.address || null,
       notes: form.notes || null,
-    });
-    setForm(empty);
-    setOpen(false);
+    };
+    try {
+      if (editingId) {
+        // 編集モード: UPDATE
+        await supabase.from("partners").update(payload).eq("id", editingId);
+        toast.success(`「${form.name}」を更新しました`);
+      } else {
+        // 新規登録モード: INSERT
+        await supabase.from("partners").insert(payload);
+        toast.success(`「${form.name}」を登録しました`);
+      }
+    } catch (e) {
+      toast.error(
+        `保存に失敗: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      setSaving(false);
+      return;
+    }
     setSaving(false);
+    closeDialog();
     load();
   }
 
@@ -276,7 +319,7 @@ export default function PartnersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">取引先マスタ</h1>
-        <Button onClick={() => setOpen(true)}>
+        <Button onClick={openNew}>
           <Plus className="h-4 w-4 mr-1" />
           新規登録
         </Button>
@@ -553,13 +596,24 @@ export default function PartnersPage() {
                         {p.email || p.phone || "-"}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleDelete(p.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(p)}
+                            title="この取引先を編集"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDelete(p.id)}
+                            title="削除"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -570,10 +624,12 @@ export default function PartnersPage() {
         </Card>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : closeDialog())}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>取引先を登録</DialogTitle>
+            <DialogTitle>
+              {editingId ? "取引先を編集" : "取引先を登録"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div>
@@ -638,20 +694,41 @@ export default function PartnersPage() {
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
               />
             </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-1">
+                <Label>郵便番号</Label>
+                <Input
+                  value={form.postal_code}
+                  onChange={(e) =>
+                    setForm({ ...form, postal_code: e.target.value })
+                  }
+                  placeholder="例: 100-0001"
+                />
+              </div>
+              <div className="col-span-2">
+                <Label>住所</Label>
+                <Input
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  placeholder="例: 東京都千代田区..."
+                />
+              </div>
+            </div>
             <div>
-              <Label>住所</Label>
+              <Label>備考</Label>
               <Input
-                value={form.address}
-                onChange={(e) => setForm({ ...form, address: e.target.value })}
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                placeholder="(任意)"
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button variant="outline" onClick={closeDialog}>
               キャンセル
             </Button>
             <Button onClick={handleSave} disabled={!form.name || saving}>
-              {saving ? "保存中..." : "登録"}
+              {saving ? "保存中..." : editingId ? "更新" : "登録"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -538,6 +538,12 @@ pub const SCHEMA_V10_SQL: &str = r#"
 ALTER TABLE invoices ADD COLUMN withholding_tax INTEGER DEFAULT 0;
 "#;
 
+/// v11: partners に郵便番号カラムを追加 (Round 28).
+/// 取引先マスタの編集画面で郵便番号を保存できるように。
+pub const SCHEMA_V11_SQL: &str = r#"
+ALTER TABLE partners ADD COLUMN postal_code TEXT;
+"#;
+
 /// v5: v4 二重実行で残るゴミテーブルの掃除。
 ///
 /// 経緯:
