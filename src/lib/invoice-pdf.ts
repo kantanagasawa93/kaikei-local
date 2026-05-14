@@ -42,63 +42,71 @@ export async function exportInvoicePdf(
   };
 
   let y = height - 50;
-  // タイトル
+  // ─── 1段目: タイトル「請求書」 (左) + 請求書番号 / 発行日 / 支払期限 (右上 3 行) ───
   draw("請求書", 40, y, { size: 24, bold: true });
-  // 右上に請求書番号 / 発行日 / 支払期限
-  draw(`請求書番号: ${invoice.invoice_number}`, width - 200, y + 6, { size: 10 });
-  draw(`発行日: ${invoice.issue_date}`, width - 200, y - 8, { size: 10 });
-  if (invoice.due_date) {
-    draw(`支払期限: ${invoice.due_date}`, width - 200, y - 22, { size: 10 });
+  {
+    const rx = 380;
+    let ry = y + 2;
+    draw(`請求書番号: ${invoice.invoice_number}`, rx, ry, { size: 10 });
+    ry -= 14;
+    draw(`発行日: ${invoice.issue_date}`, rx, ry, { size: 10 });
+    if (invoice.due_date) {
+      ry -= 14;
+      draw(`支払期限: ${invoice.due_date}`, rx, ry, { size: 10 });
+    }
   }
-  y -= 50;
+  // 右上ブロックの最下端より十分下 (= 56pt 下) に次行を置いて重なり防止
+  y -= 70;
 
+  // ─── 2段目: 取引先 (左) + 発行者 (右) を並列に ───
+  const headerY = y;
   // 取引先 (請求先) — 「{社名} 御中」形式
   if (invoice.partner_name) {
-    draw(`${invoice.partner_name}  御中`, 40, y, { size: 14, bold: true });
-    // 社名直下に下線を引いて取引先を強調
+    draw(`${invoice.partner_name}  御中`, 40, headerY, { size: 14, bold: true });
     const nameWidth = invoice.partner_name.length * 14 + 60;
     page.drawLine({
-      start: { x: 40, y: y - 3 },
-      end: { x: 40 + Math.min(nameWidth, 280), y: y - 3 },
+      start: { x: 40, y: headerY - 3 },
+      end: { x: 40 + Math.min(nameWidth, 280), y: headerY - 3 },
       thickness: 0.6,
       color: rgb(0.2, 0.2, 0.2),
     });
   } else {
-    draw("(請求先未設定)", 40, y, { size: 12, color: [0.75, 0.2, 0.2] });
+    draw("(請求先未設定)", 40, headerY, { size: 12, color: [0.75, 0.2, 0.2] });
   }
   if (invoice.partner_address) {
-    y -= 16;
-    draw(invoice.partner_address, 40, y, { size: 9 });
+    draw(invoice.partner_address, 40, headerY - 18, { size: 9 });
   }
-  y -= 28;
 
-  // 発行者 (右側)
+  // 発行者 (右) — 取引先と同じ headerY から下に積む
   {
-    let iy = y + 60;
-    draw("発行者", width - 220, iy, { size: 9, bold: true, color: [0.4, 0.4, 0.4] });
-    iy -= 14;
+    const rx = 360;
+    let ry = headerY;
+    draw("発行者", rx, ry, { size: 9, bold: true, color: [0.4, 0.4, 0.4] });
+    ry -= 14;
     if (issuer?.business_name) {
-      draw(issuer.business_name, width - 220, iy, { size: 12, bold: true });
-      iy -= 12;
+      draw(issuer.business_name, rx, ry, { size: 12, bold: true });
+      ry -= 12;
     } else {
-      draw("(屋号未登録 — 発行者情報を登録してください)", width - 220, iy, {
+      draw("(屋号未登録 — 発行者情報を登録してください)", rx, ry, {
         size: 9,
         color: [0.75, 0.2, 0.2],
       });
-      iy -= 12;
+      ry -= 12;
     }
     if (issuer?.address) {
-      draw(issuer.address, width - 220, iy, { size: 8 });
-      iy -= 10;
+      draw(issuer.address, rx, ry, { size: 8 });
+      ry -= 10;
     }
     if (issuer?.phone) {
-      draw(`TEL ${issuer.phone}`, width - 220, iy, { size: 8 });
-      iy -= 10;
+      draw(`TEL ${issuer.phone}`, rx, ry, { size: 8 });
+      ry -= 10;
     }
     if (issuer?.registered_number) {
-      draw(`登録番号: ${issuer.registered_number}`, width - 220, iy, { size: 8 });
+      draw(`登録番号: ${issuer.registered_number}`, rx, ry, { size: 8 });
     }
   }
+  // 2段目ブロックの高さを確保 (発行者ブロックの方が高いので、それに合わせて余白)
+  y = headerY - 70;
 
   // 件名
   if (invoice.subject) {
