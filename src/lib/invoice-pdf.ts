@@ -177,10 +177,26 @@ export async function exportInvoicePdf(
 
   for (const [code, t] of byTax.entries()) {
     if (y < 100) break;
-    const label = `${code} (${t.rate}%)`;
+    // インボイス制度の標準表記に変換:
+    //   S10  → "10%対象"
+    //   S08R → "8%対象（軽減税率）"
+    //   S08  → "8%対象"
+    //   EXP  → "輸出免税"
+    //   それ以外 (NT / EXM / OUT 等) は tax_classes の name (非課税 / 対象外 など)
+    const tc = TAX_CLASSES.find((c) => c.code === code);
+    let label: string;
+    if (tc?.kind === "taxable_sales") {
+      label = `${t.rate}%対象${tc.reduced ? "(軽減税率)" : ""}`;
+    } else if (tc?.kind === "export") {
+      label = "輸出免税";
+    } else if (tc) {
+      label = tc.name;
+    } else {
+      label = `${code} (${t.rate}%)`;
+    }
     draw(label, 340, y, { size: 9 });
-    draw(`${t.subtotal.toLocaleString()}`, 410, y, { size: 9 });
-    draw(`消費税: ${t.tax.toLocaleString()}`, 480, y, { size: 9 });
+    draw(`${t.subtotal.toLocaleString()} 円`, 410, y, { size: 9 });
+    draw(`消費税: ${t.tax.toLocaleString()} 円`, 480, y, { size: 9 });
     y -= 12;
   }
 
