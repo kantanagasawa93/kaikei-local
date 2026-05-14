@@ -41,41 +41,51 @@ export async function exportInvoicePdf(
     });
   };
 
-  // Noto Sans JP を pdf-fonts.ts 経由で埋め込み済み (subset: false で安定描画)
   let y = height - 50;
-  draw("INVOICE", 40, y, { size: 22, bold: true });
-  draw(`No. ${invoice.invoice_number}`, width - 180, y, { size: 11 });
-  y -= 30;
-  draw(`Issue: ${invoice.issue_date}`, width - 180, y);
-  y -= 14;
+  // タイトル
+  draw("請求書", 40, y, { size: 24, bold: true });
+  // 右上に請求書番号 / 発行日 / 支払期限
+  draw(`請求書番号: ${invoice.invoice_number}`, width - 200, y + 6, { size: 10 });
+  draw(`発行日: ${invoice.issue_date}`, width - 200, y - 8, { size: 10 });
   if (invoice.due_date) {
-    draw(`Due: ${invoice.due_date}`, width - 180, y);
+    draw(`支払期限: ${invoice.due_date}`, width - 200, y - 22, { size: 10 });
   }
-  y -= 24;
+  y -= 50;
 
-  // 取引先
-  draw("Bill to:", 40, y, { bold: true });
-  y -= 14;
-  draw(invoice.partner_name, 40, y, { size: 12, bold: true });
+  // 取引先 (請求先) — 「{社名} 御中」形式
+  if (invoice.partner_name) {
+    draw(`${invoice.partner_name}  御中`, 40, y, { size: 14, bold: true });
+    // 社名直下に下線を引いて取引先を強調
+    const nameWidth = invoice.partner_name.length * 14 + 60;
+    page.drawLine({
+      start: { x: 40, y: y - 3 },
+      end: { x: 40 + Math.min(nameWidth, 280), y: y - 3 },
+      thickness: 0.6,
+      color: rgb(0.2, 0.2, 0.2),
+    });
+  } else {
+    draw("(請求先未設定)", 40, y, { size: 12, color: [0.75, 0.2, 0.2] });
+  }
   if (invoice.partner_address) {
-    y -= 12;
+    y -= 16;
     draw(invoice.partner_address, 40, y, { size: 9 });
   }
-  y -= 24;
+  y -= 28;
 
-  // 発行者
-  draw("From:", width - 220, y + 50, { bold: true });
+  // 発行者 (右側)
   {
-    let iy = y + 36;
+    let iy = y + 60;
+    draw("発行者", width - 220, iy, { size: 9, bold: true, color: [0.4, 0.4, 0.4] });
+    iy -= 14;
     if (issuer?.business_name) {
-      draw(issuer.business_name, width - 220, iy, { size: 11, bold: true });
-      iy -= 11;
+      draw(issuer.business_name, width - 220, iy, { size: 12, bold: true });
+      iy -= 12;
     } else {
       draw("(屋号未登録 — 発行者情報を登録してください)", width - 220, iy, {
         size: 9,
         color: [0.75, 0.2, 0.2],
       });
-      iy -= 11;
+      iy -= 12;
     }
     if (issuer?.address) {
       draw(issuer.address, width - 220, iy, { size: 8 });
@@ -86,18 +96,22 @@ export async function exportInvoicePdf(
       iy -= 10;
     }
     if (issuer?.registered_number) {
-      draw(`Registered #: ${issuer.registered_number}`, width - 220, iy, { size: 8 });
+      draw(`登録番号: ${issuer.registered_number}`, width - 220, iy, { size: 8 });
     }
   }
 
   // 件名
   if (invoice.subject) {
-    draw(`Subject: ${invoice.subject}`, 40, y, { size: 11 });
+    draw(`件名: ${invoice.subject}`, 40, y, { size: 11 });
     y -= 20;
   }
 
+  // 「下記の通り、ご請求申し上げます」案内文
+  y -= 4;
+  draw("下記の通り、ご請求申し上げます。", 40, y, { size: 10 });
+  y -= 20;
+
   // 明細テーブル
-  y -= 10;
   page.drawLine({
     start: { x: 40, y },
     end: { x: width - 40, y },
@@ -106,11 +120,11 @@ export async function exportInvoicePdf(
   });
   y -= 14;
   draw("#", 42, y, { bold: true });
-  draw("Description", 70, y, { bold: true });
-  draw("Qty", 320, y, { bold: true });
-  draw("Unit", 360, y, { bold: true });
-  draw("Price", 410, y, { bold: true });
-  draw("Amount", 490, y, { bold: true });
+  draw("内容", 70, y, { bold: true });
+  draw("数量", 320, y, { bold: true });
+  draw("単位", 360, y, { bold: true });
+  draw("単価", 410, y, { bold: true });
+  draw("金額", 490, y, { bold: true });
   y -= 6;
   page.drawLine({
     start: { x: 40, y },
@@ -122,7 +136,7 @@ export async function exportInvoicePdf(
 
   let idx = 1;
   for (const item of items) {
-    if (y < 120) break;
+    if (y < 140) break;
     draw(`${idx++}`, 42, y);
     draw(item.description.slice(0, 40), 70, y);
     draw(`${item.quantity}`, 320, y);
@@ -154,55 +168,95 @@ export async function exportInvoicePdf(
   }
 
   for (const [code, t] of byTax.entries()) {
-    if (y < 80) break;
+    if (y < 100) break;
     const label = `${code} (${t.rate}%)`;
     draw(label, 340, y, { size: 9 });
     draw(`${t.subtotal.toLocaleString()}`, 410, y, { size: 9 });
-    draw(`tax: ${t.tax.toLocaleString()}`, 490, y, { size: 9 });
+    draw(`消費税: ${t.tax.toLocaleString()}`, 480, y, { size: 9 });
     y -= 12;
   }
 
   y -= 8;
-  draw("Subtotal", 380, y, { bold: true });
-  draw(`${invoice.subtotal.toLocaleString()} JPY`, 490, y);
+  draw("小計", 380, y, { bold: true });
+  draw(`${invoice.subtotal.toLocaleString()} 円`, 490, y);
   y -= 14;
-  draw("Tax", 380, y, { bold: true });
-  draw(`${invoice.tax_amount.toLocaleString()} JPY`, 490, y);
-  // Round 28: 源泉徴収税 (Withholding) — 0 の時は表示省略
+  draw("消費税", 380, y, { bold: true });
+  draw(`${invoice.tax_amount.toLocaleString()} 円`, 490, y);
+  // Round 28: 源泉徴収税 — 0 の時は表示省略
   if ((invoice.withholding_tax ?? 0) > 0) {
     y -= 14;
-    draw("Withholding", 380, y, { bold: true });
-    draw(`- ${(invoice.withholding_tax ?? 0).toLocaleString()} JPY`, 480, y);
+    draw("源泉徴収", 380, y, { bold: true });
+    draw(`- ${(invoice.withholding_tax ?? 0).toLocaleString()} 円`, 480, y);
   }
-  y -= 14;
-  draw("TOTAL", 380, y, { size: 13, bold: true });
-  draw(`${invoice.total_amount.toLocaleString()} JPY`, 480, y, { size: 13, bold: true });
+  y -= 18;
+  // ご請求金額のハイライト枠
+  page.drawRectangle({
+    x: 370,
+    y: y - 4,
+    width: width - 40 - 370,
+    height: 22,
+    color: rgb(0.95, 0.95, 0.95),
+  });
+  draw("ご請求金額", 380, y, { size: 12, bold: true });
+  draw(`${invoice.total_amount.toLocaleString()} 円`, 470, y, {
+    size: 14,
+    bold: true,
+  });
+  y -= 30;
 
-  // 振込先 (未登録時は警告プレースホルダ — PDF 受け取り側にも未設定が伝わる)
-  y -= 40;
-  draw("振込先:", 40, y, { bold: true });
-  y -= 12;
-  if (issuer?.bank_info) {
-    for (const line of issuer.bank_info.split("\n").slice(0, 5)) {
-      draw(line, 60, y, { size: 9 });
-      y -= 10;
-    }
-  } else {
-    draw("(未登録 — 「発行者情報」で銀行口座を登録してください)", 60, y, {
-      size: 9,
-      color: [0.75, 0.2, 0.2],
+  // 振込先ブロック (見やすい枠 + ラベル付き整列)
+  y -= 16;
+  {
+    // 全体を薄い枠で囲む
+    const boxTop = y + 14;
+    const boxLeft = 40;
+    const boxWidth = 320;
+    // 中身の高さは bank_info の行数で動的決定
+    const rawLines = issuer?.bank_info?.split("\n").map((l) => l.trim()).filter(Boolean) ?? [];
+    const lineCount = Math.max(1, Math.min(rawLines.length, 6));
+    const contentHeight = 22 + lineCount * 14;
+    page.drawRectangle({
+      x: boxLeft,
+      y: boxTop - contentHeight,
+      width: boxWidth,
+      height: contentHeight,
+      borderColor: rgb(0.6, 0.6, 0.6),
+      borderWidth: 0.5,
     });
-    y -= 10;
+    // ヘッダ帯
+    page.drawRectangle({
+      x: boxLeft,
+      y: boxTop - 18,
+      width: boxWidth,
+      height: 18,
+      color: rgb(0.93, 0.93, 0.93),
+    });
+    draw("お振込先", boxLeft + 8, boxTop - 13, { size: 11, bold: true });
+
+    let by = boxTop - 30;
+    if (rawLines.length > 0) {
+      for (const line of rawLines.slice(0, 6)) {
+        draw(line, boxLeft + 12, by, { size: 10 });
+        by -= 14;
+      }
+    } else {
+      draw("(未登録 — 「発行者情報」で銀行口座を登録してください)", boxLeft + 12, by, {
+        size: 9,
+        color: [0.75, 0.2, 0.2],
+      });
+      by -= 14;
+    }
+    y = boxTop - contentHeight - 8;
   }
 
   // 備考
   if (invoice.notes) {
-    y -= 16;
-    draw("Notes:", 40, y, { bold: true });
-    y -= 12;
+    y -= 8;
+    draw("備考", 40, y, { bold: true });
+    y -= 14;
     for (const line of invoice.notes.split("\n").slice(0, 5)) {
       draw(line, 60, y, { size: 9 });
-      y -= 10;
+      y -= 12;
     }
   }
 
