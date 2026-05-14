@@ -58,6 +58,8 @@ export interface Partner {
   is_vendor: boolean;
   email: string | null;
   phone: string | null;
+  /** Round 28: 郵便番号 (migration v11 で追加) */
+  postal_code: string | null;
   address: string | null;
   default_account_code: string | null;
   notes: string | null;

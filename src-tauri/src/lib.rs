@@ -1234,6 +1234,12 @@ pub fn run() {
             sql: migrations::SCHEMA_V10_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "partners_postal_code",
+            sql: migrations::SCHEMA_V11_SQL,
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
