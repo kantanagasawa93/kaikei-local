@@ -27,11 +27,13 @@ export async function exportInvoicePdf(
 
   // 文字列に日本語が混じっていれば Noto Sans JP、純 ASCII なら Helvetica。
   // (Noto Sans JP は数字も全角幅 advance なので、ASCII 全角化 = 間延び を避けるため)
-  const draw = (text: string, x: number, y: number, opts: { size?: number; bold?: boolean; color?: [number, number, number] } = {}) => {
+  const pickFont = (text: string, bold: boolean) => {
     const useJp = containsNonAscii(text);
-    const font = opts.bold
-      ? (useJp ? jpBold : asciiBold)
-      : (useJp ? jpFont : asciiRegular);
+    if (bold) return useJp ? jpBold : asciiBold;
+    return useJp ? jpFont : asciiRegular;
+  };
+  const draw = (text: string, x: number, y: number, opts: { size?: number; bold?: boolean; color?: [number, number, number] } = {}) => {
+    const font = pickFont(text, !!opts.bold);
     page.drawText(text, {
       x,
       y,
@@ -39,6 +41,33 @@ export async function exportInvoicePdf(
       font,
       color: rgb(...(opts.color ?? [0, 0, 0])),
     });
+  };
+  // 右側 x = rightX に揃えて描く (数字カラムの整列に使う).
+  const drawRight = (text: string, rightX: number, y: number, opts: { size?: number; bold?: boolean; color?: [number, number, number] } = {}) => {
+    const size = opts.size ?? 10;
+    const font = pickFont(text, !!opts.bold);
+    const w = font.widthOfTextAtSize(text, size);
+    draw(text, rightX - w, y, opts);
+  };
+  // 日本語混じりの文字列を「だいたい n 文字」で折り返す (簡易).
+  // Japanese は ~1em / ASCII は ~0.5em として、行ごとに収まる文字数を概算する。
+  const wrapJp = (text: string, maxWidthPt: number, size = 10): string[] => {
+    const lines: string[] = [];
+    let cur = "";
+    let curW = 0;
+    for (const ch of text) {
+      const w = /[\x00-\x7F]/.test(ch) ? size * 0.55 : size * 1.0;
+      if (curW + w > maxWidthPt && cur.length > 0) {
+        lines.push(cur);
+        cur = ch;
+        curW = w;
+      } else {
+        cur += ch;
+        curW += w;
+      }
+    }
+    if (cur) lines.push(cur);
+    return lines.length ? lines : [""];
   };
 
   let y = height - 50;
@@ -119,7 +148,18 @@ export async function exportInvoicePdf(
   draw("下記の通り、ご請求申し上げます。", 40, y, { size: 10 });
   y -= 20;
 
-  // 明細テーブル
+  // 明細テーブル — カラムの x 位置 (右端ベース)
+  //   # | 内容 | 数量 | 単位 | 単価 | 金額
+  // 内容カラムは Description が長くて Japanese 含み 25-40 字あるので幅広めに確保。
+  // 数値カラム (数量 / 単価 / 金額) はすべて右揃え (drawRight) で 1の位を縦に揃える。
+  const colNoX = 42;            // # (左揃え)
+  const colDescX = 64;          // 内容 (左揃え)
+  const colDescMaxW = 230;      // 内容の許容幅 (これを超えたら折り返し)
+  const colQtyRight = 320;      // 数量 (右揃え)
+  const colUnitX = 332;         // 単位 (左揃え、数量の右)
+  const colPriceRight = 450;    // 単価 (右揃え)
+  const colAmountRight = width - 44; // 金額 (右揃え、右マージン)
+
   page.drawLine({
     start: { x: 40, y },
     end: { x: width - 40, y },
@@ -127,12 +167,12 @@ export async function exportInvoicePdf(
     color: rgb(0, 0, 0),
   });
   y -= 14;
-  draw("#", 42, y, { bold: true });
-  draw("内容", 70, y, { bold: true });
-  draw("数量", 320, y, { bold: true });
-  draw("単位", 360, y, { bold: true });
-  draw("単価", 410, y, { bold: true });
-  draw("金額", 490, y, { bold: true });
+  draw("#", colNoX, y, { bold: true });
+  draw("内容", colDescX, y, { bold: true });
+  drawRight("数量", colQtyRight, y, { bold: true });
+  draw("単位", colUnitX, y, { bold: true });
+  drawRight("単価", colPriceRight, y, { bold: true });
+  drawRight("金額", colAmountRight, y, { bold: true });
   y -= 6;
   page.drawLine({
     start: { x: 40, y },
@@ -142,20 +182,27 @@ export async function exportInvoicePdf(
   });
   y -= 14;
 
+  // 明細行 — 内容が長い場合は折り返し、行高さを伸ばす
   let idx = 1;
   for (const item of items) {
-    if (y < 140) break;
-    draw(`${idx++}`, 42, y);
-    draw(item.description.slice(0, 40), 70, y);
-    draw(`${item.quantity}`, 320, y);
-    draw(item.unit || "", 360, y);
-    draw(`${item.unit_price.toLocaleString()}`, 410, y);
-    draw(`${item.amount.toLocaleString()}`, 490, y);
-    y -= 14;
+    if (y < 160) break;
+    const descLines = wrapJp(item.description, colDescMaxW, 10);
+    const rowHeight = Math.max(14, descLines.length * 12 + 2);
+    // 1 行目に index / 数量 / 単位 / 単価 / 金額 を描く
+    draw(`${idx++}`, colNoX, y);
+    // 内容は複数行に展開 (左揃え)
+    for (let li = 0; li < descLines.length; li++) {
+      draw(descLines[li], colDescX, y - li * 12);
+    }
+    drawRight(`${item.quantity}`, colQtyRight, y);
+    draw(item.unit || "", colUnitX, y);
+    drawRight(`¥${item.unit_price.toLocaleString()}`, colPriceRight, y);
+    drawRight(`¥${item.amount.toLocaleString()}`, colAmountRight, y);
+    y -= rowHeight;
   }
 
   // 税区分ごとの小計
-  y -= 10;
+  y -= 6;
   page.drawLine({
     start: { x: 40, y },
     end: { x: width - 40, y },
@@ -176,7 +223,7 @@ export async function exportInvoicePdf(
   }
 
   for (const [code, t] of byTax.entries()) {
-    if (y < 100) break;
+    if (y < 120) break;
     // インボイス制度の標準表記に変換:
     //   S10  → "10%対象"
     //   S08R → "8%対象（軽減税率）"
@@ -195,38 +242,45 @@ export async function exportInvoicePdf(
       label = `${code} (${t.rate}%)`;
     }
     draw(label, 340, y, { size: 9 });
-    draw(`${t.subtotal.toLocaleString()} 円`, 410, y, { size: 9 });
-    draw(`消費税: ${t.tax.toLocaleString()} 円`, 480, y, { size: 9 });
+    drawRight(`${t.subtotal.toLocaleString()} 円`, colAmountRight - 80, y, { size: 9 });
+    drawRight(`消費税: ${t.tax.toLocaleString()} 円`, colAmountRight, y, { size: 9 });
     y -= 12;
   }
 
+  // 合計ブロック — ラベル右揃え + 金額右揃え (1の位がきっちり揃う)
+  const totalLabelRight = 440;   // ラベル列の右端
+  const totalAmountRight = colAmountRight; // 金額列の右端 (明細表と同じ)
   y -= 8;
-  draw("小計", 380, y, { bold: true });
-  draw(`${invoice.subtotal.toLocaleString()} 円`, 490, y);
+  drawRight("小計", totalLabelRight, y, { bold: true });
+  drawRight(`¥${invoice.subtotal.toLocaleString()}`, totalAmountRight, y);
   y -= 14;
-  draw("消費税", 380, y, { bold: true });
-  draw(`${invoice.tax_amount.toLocaleString()} 円`, 490, y);
+  drawRight("消費税", totalLabelRight, y, { bold: true });
+  drawRight(`¥${invoice.tax_amount.toLocaleString()}`, totalAmountRight, y);
   // Round 28: 源泉徴収税 — 0 の時は表示省略
   if ((invoice.withholding_tax ?? 0) > 0) {
     y -= 14;
-    draw("源泉徴収", 380, y, { bold: true });
-    draw(`- ${(invoice.withholding_tax ?? 0).toLocaleString()} 円`, 480, y);
+    drawRight("源泉徴収", totalLabelRight, y, { bold: true, color: [0.6, 0.1, 0.1] });
+    drawRight(`-¥${(invoice.withholding_tax ?? 0).toLocaleString()}`, totalAmountRight, y, {
+      color: [0.6, 0.1, 0.1],
+    });
   }
-  y -= 18;
-  // ご請求金額のハイライト枠
+  y -= 22;
+  // ご請求金額のハイライト枠 (右に寄せて整列)
+  const totalBoxLeft = 320;
+  const totalBoxRight = colAmountRight + 4;
   page.drawRectangle({
-    x: 370,
-    y: y - 4,
-    width: width - 40 - 370,
-    height: 22,
+    x: totalBoxLeft,
+    y: y - 6,
+    width: totalBoxRight - totalBoxLeft,
+    height: 26,
     color: rgb(0.95, 0.95, 0.95),
   });
-  draw("ご請求金額", 380, y, { size: 12, bold: true });
-  draw(`${invoice.total_amount.toLocaleString()} 円`, 470, y, {
-    size: 14,
+  drawRight("ご請求金額", totalLabelRight, y + 3, { size: 12, bold: true });
+  drawRight(`¥${invoice.total_amount.toLocaleString()}`, totalAmountRight, y + 1, {
+    size: 15,
     bold: true,
   });
-  y -= 30;
+  y -= 34;
 
   // 振込先ブロック (見やすい枠 + ラベル付き整列)
   y -= 16;
