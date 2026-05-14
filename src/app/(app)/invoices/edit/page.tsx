@@ -277,7 +277,14 @@ function EditInner() {
       };
     });
     const bytes = await exportInvoicePdf(invoice, itemRows, issuer);
-    downloadBlob(bytes, `${invoiceNumber}.pdf`);
+    // ファイル名は件名を主体に、無ければ請求書番号にフォールバック。
+    // / \ : * ? " < > | の禁則文字は _ に置換。長すぎる時は 60 文字で切る。
+    const sanitize = (s: string) =>
+      s.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 60);
+    const fname = subject.trim()
+      ? `${sanitize(subject)}.pdf`
+      : `${invoiceNumber}.pdf`;
+    downloadBlob(bytes, fname);
   };
 
   if (loading) {
