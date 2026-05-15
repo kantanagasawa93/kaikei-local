@@ -1886,11 +1886,12 @@ function ScoreSignalsBadge({
       </button>
       {visible && signals.length > 0 && (
         <div
-          className="absolute top-full right-0 mt-1 z-30 w-72 p-3
+          className={`absolute top-full right-0 mt-1 z-30 w-64 p-3
                      bg-popover text-popover-foreground rounded-md shadow-xl
-                     border text-xs leading-snug"
-          // popover はホバー対象から少し離れているとマウス移動で消えがち。
-          // pointer-events: auto + 自分自身も hover 領域として扱う。
+                     border text-xs leading-snug
+                     ${stickyOpen ? "" : "pointer-events-none"}`}
+          // hover 中は pointer-events: none で「下の操作ボタンに対するクリックを邪魔しない」
+          // (tooltip 同等の挙動)。クリックで sticky にした時だけ interactive。
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
         >
