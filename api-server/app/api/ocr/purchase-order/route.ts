@@ -20,7 +20,9 @@ import {
 export const maxDuration = 30;
 export const runtime = "nodejs";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
+// gemini-2.0-flash は Free Tier 200 req/日 (2.5-flash は 20 req/日)。
+// 発注書の構造化抽出は 2.0 でも十分なため切替えて quota を緩める。
+const GEMINI_MODEL = "gemini-2.0-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の発注書 (Purchase Order) の読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -156,10 +158,8 @@ export async function POST(req: NextRequest) {
         ],
         generationConfig: {
           temperature: 0,
-          // gemini-2.5-flash は既定で "thinking" に出力トークンを消費するため、
-          // 構造化抽出では thinkingBudget=0 で無効化 (空レスポンス防止 + 高速 + 低コスト)。
-          // それでも品目が多い発注書のために maxOutputTokens は余裕を持たせる。
-          thinkingConfig: { thinkingBudget: 0 },
+          // gemini-2.0-flash は thinking が既定で無効。品目が多い発注書のため
+          // maxOutputTokens は余裕を持たせる。
           maxOutputTokens: 4096,
           responseMimeType: "application/json",
         },
@@ -169,6 +169,15 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       const errText = await res.text();
       console.error("Gemini API error (PO):", res.status, errText);
+      if (res.status === 429) {
+        return NextResponse.json(
+          {
+            error:
+              "AI OCR の本日利用枠を超えました。明日以降に再試行してください (api-server の Gemini 課金を有効にすると恒久的に解決します)",
+          },
+          { status: 429, headers: corsHeaders() }
+        );
+      }
       return NextResponse.json(
         { error: "AI 読み取りに失敗しました" },
         { status: 502, headers: corsHeaders() }
