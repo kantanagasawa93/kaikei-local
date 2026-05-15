@@ -118,8 +118,16 @@ export default function InboxPage() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // ㊌ hover preview ハンドラ: enter で 250ms 後に表示、leave で 100ms 後に消す
-  const handleHoverEnter = (row: InboxRow) => {
+  // Round 28: ホバー対象カードが画面右半分にある時はプレビューを左に出して
+  // 該当カードの操作ボタンに被らないようにする (event を受け取って判定)
+  const handleHoverEnter = (row: InboxRow, e?: React.MouseEvent) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    if (e && typeof window !== "undefined") {
+      const target = e.currentTarget as HTMLElement | null;
+      const rect = target?.getBoundingClientRect();
+      const cardCenter = rect ? rect.left + rect.width / 2 : e.clientX;
+      setPreviewSide(cardCenter > window.innerWidth / 2 ? "left" : "right");
+    }
     hoverTimer.current = setTimeout(() => setHovered(row), 250);
   };
   const handleHoverLeave = () => {
@@ -255,6 +263,8 @@ export default function InboxPage() {
   const [failureStats, setFailureStats] = useState<FailureStats | null>(null);
   // ㊌ Round 6: hover プレビュー対象 (右側 pane に拡大画像 + OCR を表示)
   const [hovered, setHovered] = useState<InboxRow | null>(null);
+  // Round 28: プレビューの出る側 (ホバー対象カードの位置で左右自動切替)
+  const [previewSide, setPreviewSide] = useState<"left" | "right">("right");
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // ㉜ Round 9: マルチ選択 (Cmd/Shift+クリックでチェック → 一括判定)
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -789,6 +799,7 @@ export default function InboxPage() {
       {hovered && (
         <HoverPreview
           row={hovered}
+          side={previewSide}
           onMouseEnter={() => {
             if (hoverTimer.current) clearTimeout(hoverTimer.current);
           }}
@@ -1365,8 +1376,8 @@ export default function InboxPage() {
               isSelected={selected.has(it.id)}
               isFocused={focusIdx === idx}
               onToggleSelected={() => toggleSelected(it.id)}
-              onHoverEnter={() => {
-                handleHoverEnter(it);
+              onHoverEnter={(e) => {
+                handleHoverEnter(it, e);
                 // Round 21 ⓑ: hover で last_viewed_at を更新 (未確認バッジを消す)
                 if (!it.last_viewed_at) {
                   void markInboxViewed(it.id);
@@ -1447,7 +1458,7 @@ function InboxCard({
   isSelected: boolean;
   isFocused: boolean;
   onToggleSelected: () => void;
-  onHoverEnter: () => void;
+  onHoverEnter: (e: React.MouseEvent) => void;
   onHoverLeave: () => void;
   onMarkReceipt: () => void;
   onMarkNotReceipt: () => void;
@@ -2007,10 +2018,12 @@ function AutoDismissReasonView({ reasonJson }: { reasonJson: string }) {
  */
 function HoverPreview({
   row,
+  side = "right",
   onMouseEnter,
   onMouseLeave,
 }: {
   row: InboxRow;
+  side?: "left" | "right";
   onMouseEnter: () => void;
   onMouseLeave: () => void;
 }) {
@@ -2039,11 +2052,16 @@ function HoverPreview({
     };
   }, [row.file_path]);
 
+  // Round 28: side="right" → 画面右上 / side="left" → 画面左上 (sidebar の右隣)
+  // ホバーしてるカードが画面右半分にある時は left に出して、該当カードの
+  // 操作ボタンに被らないようにする。
+  const positionCls =
+    side === "left" ? "left-[240px]" : "right-6";
   return (
     <div
-      className="fixed top-20 right-6 w-[28rem] max-h-[80vh] overflow-y-auto z-50
-                 bg-card border-2 border-primary/30 rounded-lg shadow-2xl p-3
-                 pointer-events-auto"
+      className={`fixed top-20 ${positionCls} w-[28rem] max-h-[80vh] overflow-y-auto z-50
+                  bg-card border-2 border-primary/30 rounded-lg shadow-2xl p-3
+                  pointer-events-auto`}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
