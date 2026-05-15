@@ -85,7 +85,24 @@ export async function ocrWithClaude(
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({ error: "unknown" }));
+    // Round 28: 429 = Gemini Free Tier 上限超過 → app_settings に記録してバナー表示
+    if (response.status === 429) {
+      try {
+        const { markQuotaExhausted } = await import("./ai-ocr-quota");
+        await markQuotaExhausted();
+      } catch {
+        /* silent */
+      }
+    }
     throw new Error(err.error || `API error (${response.status})`);
+  }
+
+  // 成功 = 枠が復活した証拠なのでバナーをクリア
+  try {
+    const { clearQuotaExhausted } = await import("./ai-ocr-quota");
+    await clearQuotaExhausted();
+  } catch {
+    /* silent */
   }
 
   const json = await response.json();

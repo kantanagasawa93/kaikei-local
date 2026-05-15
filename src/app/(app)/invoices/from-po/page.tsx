@@ -30,6 +30,7 @@ import {
   getLicenseKey,
 } from "@/lib/ai-ocr";
 import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
+import { AiOcrQuotaBanner } from "@/components/ai-ocr-quota-banner";
 import {
   ocrPurchaseOrder,
   createInvoiceFromPo,
@@ -257,6 +258,8 @@ export default function FromPoPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
+      {/* Round 28: Gemini Free Tier 上限超過バナー */}
+      <AiOcrQuotaBanner />
       <div className="flex items-center gap-4">
         <Link href="/invoices">
           <Button variant="ghost" size="sm">

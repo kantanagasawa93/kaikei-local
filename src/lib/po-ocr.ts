@@ -77,8 +77,26 @@ export async function ocrPurchaseOrder(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    // Round 28: 429 = Gemini Free Tier 上限超過 → app_settings に記録してバナー表示
+    if (res.status === 429) {
+      try {
+        const { markQuotaExhausted } = await import("./ai-ocr-quota");
+        await markQuotaExhausted();
+      } catch {
+        /* silent */
+      }
+    }
     throw new Error(err.error || `API error (${res.status})`);
   }
+
+  // 成功 = 枠が復活した証拠なのでバナーをクリア
+  try {
+    const { clearQuotaExhausted } = await import("./ai-ocr-quota");
+    await clearQuotaExhausted();
+  } catch {
+    /* silent */
+  }
+
   const json = (await res.json()) as Partial<PurchaseOrderResult>;
   // normalize
   const items: PurchaseOrderItem[] = Array.isArray(json.items)
