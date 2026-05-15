@@ -37,6 +37,7 @@ import { db } from "@/lib/localDb";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { AiOcrQuotaBanner } from "@/components/ai-ocr-quota-banner";
 import {
   scanNow,
   listInbox,
@@ -678,6 +679,8 @@ export default function InboxPage() {
 
   return (
     <div className="space-y-6">
+      {/* Round 28: Gemini Free Tier 上限超過バナー (該当時のみ表示) */}
+      <AiOcrQuotaBanner />
       {/* ㉺ Round 15: 再 OCR モード選択モーダル */}
       {reocrModalFor && (
         <div
@@ -1131,6 +1134,7 @@ export default function InboxPage() {
       {/* Round 28 ⓒ: 失敗タブで failure bucket 別件数 (破棄タブの reason 別と同パターン) */}
       {filter === "receipt_failed" && (() => {
         const BUCKET_LABEL: Record<FailureBucket, string> = {
+          quota: "本日枠超過",
           license: "ライセンス",
           consent: "未同意",
           network: "ネットワーク",
@@ -1139,12 +1143,12 @@ export default function InboxPage() {
           unknown: "原因不明",
         };
         const byBucket: Record<FailureBucket, number> = {
-          license: 0, consent: 0, network: 0, image: 0, server: 0, unknown: 0,
+          quota: 0, license: 0, consent: 0, network: 0, image: 0, server: 0, unknown: 0,
         };
         for (const it of items) {
           byBucket[classifyOcrError(it.last_error).bucket]++;
         }
-        const order: FailureBucket[] = ["license", "consent", "network", "server", "image", "unknown"];
+        const order: FailureBucket[] = ["quota", "license", "consent", "network", "server", "image", "unknown"];
         const hasAny = order.some((b) => byBucket[b] > 0);
         if (!hasAny) return null;
         return (

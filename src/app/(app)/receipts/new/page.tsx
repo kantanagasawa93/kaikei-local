@@ -20,6 +20,7 @@ import {
 } from "@/lib/ai-ocr";
 import { compressImageForOcr } from "@/lib/image-compression";
 import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
+import { AiOcrQuotaBanner } from "@/components/ai-ocr-quota-banner";
 import { supabase } from "@/lib/supabase";
 import { db } from "@/lib/localDb";
 import { prefillFromOcr } from "@/lib/receipt-classifier";
@@ -422,6 +423,8 @@ function NewReceiptPageInner() {
 
   return (
     <div className="space-y-6 max-w-2xl">
+      {/* Round 28: Gemini Free Tier 上限超過バナー */}
+      <AiOcrQuotaBanner />
       <AiOcrConsentDialog
         open={consentOpen}
         onAgree={async () => {

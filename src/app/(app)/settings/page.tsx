@@ -40,6 +40,7 @@ import {
   type AutoUpdaterStatus,
 } from "@/lib/auto-updater";
 import { checkReadiness, type ReadinessReport } from "@/lib/etax/readiness";
+import { AiOcrQuotaBanner } from "@/components/ai-ocr-quota-banner";
 import Link from "next/link";
 
 type Stats = {
@@ -563,6 +564,9 @@ export default function SettingsPage() {
             領収書の写真から店名・金額・日付・勘定科目を AI が自動で読み取ります。
             領収書のドロップ時に「AI 解析＋仕訳化」トグルが ON であれば取り込んだ瞬間に処理が走ります。
           </p>
+
+          {/* Round 28: Gemini Free Tier 上限超過バナー */}
+          <AiOcrQuotaBanner />
 
           {apiAlive === false && (
             <div className="rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-900">

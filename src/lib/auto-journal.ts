@@ -398,7 +398,8 @@ export async function autoJournalizeOne(
 // ────────────────────────────────────────────────────────────
 
 export type FailureBucket =
-  | "license" // ライセンスキー / 月次上限
+  | "quota" // AI OCR (Gemini Free Tier) の本日利用枠超過 (= 待てば直る)
+  | "license" // ユーザのライセンスキー / 月次上限 (= 設定で直す)
   | "consent" // AI OCR への同意
   | "network" // ネットワーク (timeout / DNS / 5xx)
   | "image" // 画像読み込み / file_path / Tauri API
@@ -421,6 +422,19 @@ export function classifyOcrError(msg: string | null | undefined): FailureClass {
   const m = (msg ?? "").toLowerCase();
   if (!m) {
     return { bucket: "unknown", actionable: false, hint: "原因不明 — 再試行してみてください" };
+  }
+  // Round 28: Gemini Free Tier 上限 (=待てば直る) と ユーザライセンス上限を区別
+  // 上流の Gemini quota は HTTP 429 + 「本日利用枠」など独自メッセージで識別
+  if (
+    /本日利用枠|本日.*超え|free.?tier|gemini.*quota|resource.?exhausted|429/i.test(
+      msg ?? "",
+    )
+  ) {
+    return {
+      bucket: "quota",
+      actionable: false,
+      hint: "AI OCR (Gemini) の本日利用枠を超過 — JST 16:00 に自動リセット。または課金有効化で恒久解決",
+    };
   }
   if (
     /license|ライセンス|monthly_limit|quota|limit|exceeded|超過|上限/.test(m)
@@ -485,6 +499,7 @@ export async function getFailureStats(): Promise<FailureStats> {
   const rows = (data as { last_error: string | null }[] | null) ?? [];
 
   const byBucket: Record<FailureBucket, number> = {
+    quota: 0,
     license: 0,
     consent: 0,
     network: 0,
@@ -498,6 +513,7 @@ export async function getFailureStats(): Promise<FailureStats> {
 
   // バケット → hint の固定テーブル (classifyOcrError と整合させる)
   const HINT: Record<FailureBucket, string> = {
+    quota: "AI OCR (Gemini) の本日利用枠超過 — JST 16:00 にリセット (または課金有効化)",
     license: "ライセンスキーの月次上限に到達したか未設定です — 設定→AI OCR で確認",
     consent: "AI OCR の同意がまだです — 設定→AI OCR で同意してください",
     network: "ネットワーク不調 — 接続を確認してから再試行",
