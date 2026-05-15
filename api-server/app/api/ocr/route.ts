@@ -9,8 +9,10 @@ import {
 export const maxDuration = 30;
 export const runtime = "nodejs";
 
-// Gemini モデル (multimodal, 安価, OCR には十分)
-const GEMINI_MODEL = "gemini-2.5-flash";
+// Gemini モデル (multimodal, 安価, OCR には十分).
+// gemini-2.0-flash は Free Tier 200 req/日 (2.5-flash は 20 req/日)。
+// 個人事業主向けの実用レベルでは 2.0 でも十分高精度。
+const GEMINI_MODEL = "gemini-2.0-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の領収書・レシートの読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -46,7 +48,11 @@ export async function OPTIONS() {
 }
 
 /** Gemini API 呼び出しが上流エラーになった時に投げる (HTTP 502 にマップ) */
-class GeminiUpstreamError extends Error {}
+class GeminiUpstreamError extends Error {
+  constructor(message: string, public readonly httpStatus = 502) {
+    super(message);
+  }
+}
 
 /**
  * Gemini generateContent を呼んで JSON テキストを返す共通ヘルパ.
@@ -80,9 +86,7 @@ async function callGemini(
       ],
       generationConfig: {
         temperature: 0,
-        // gemini-2.5-flash の "thinking" を無効化 — 構造化抽出では不要で、
-        // 有効だと出力トークンを食って JSON が途中で切れる (空レスポンスの原因)。
-        thinkingConfig: { thinkingBudget: 0 },
+        // gemini-2.0-flash は thinking が既定で無効なので thinkingConfig 不要
         maxOutputTokens: maxTokens,
         responseMimeType: "application/json",
       },
@@ -91,6 +95,13 @@ async function callGemini(
   if (!res.ok) {
     const errText = await res.text();
     console.error("Gemini API error:", res.status, errText);
+    // 429 RESOURCE_EXHAUSTED は Free Tier 上限超過。ユーザに正確に伝える。
+    if (res.status === 429) {
+      throw new GeminiUpstreamError(
+        "AI OCR の本日利用枠を超えました。明日以降に再試行してください (api-server の Gemini 課金を有効にすると恒久的に解決します)",
+        429,
+      );
+    }
     throw new GeminiUpstreamError("AI 読み取りに失敗しました");
   }
   const data = await res.json();
@@ -222,7 +233,7 @@ export async function POST(req: NextRequest) {
     if (e instanceof GeminiUpstreamError) {
       return NextResponse.json(
         { error: e.message },
-        { status: 502, headers: corsHeaders() }
+        { status: e.httpStatus, headers: corsHeaders() }
       );
     }
     console.error("OCR error:", e);
