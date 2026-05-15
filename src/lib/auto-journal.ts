@@ -171,18 +171,38 @@ async function readFileAsBase64(path: string): Promise<{ base64: string; mediaTy
     }
   }
 
+  // Round 28: iPhone 撮影の原寸 (3024x4032 = 3-5MB JPEG) は Vercel の 4.5MB
+  // request body 上限を超えて "Load failed" になるため、長辺 1600px + JPEG
+  // quality 0.85 に圧縮してから送る。HEIC も WKWebView (macOS) で decode 可能
+  // なので JPEG に再エンコードできる。
+  // 既に小さいファイルや圧縮失敗 (Canvas decode 不可) は無圧縮で送出。
+  let outU8 = u8;
+  let outMime = mediaType;
+  try {
+    const { compressImageForOcr } = await import("@/lib/image-compression");
+    const blob = new Blob([new Uint8Array(u8)], { type: mediaType });
+    const file = new File([blob], "inbox-image", { type: mediaType });
+    const result = await compressImageForOcr(file);
+    if (result.compressed) {
+      outU8 = new Uint8Array(await result.file.arrayBuffer());
+      outMime = result.file.type || "image/jpeg";
+    }
+  } catch (e) {
+    console.warn("[auto-journal] compressImageForOcr failed, fallback to raw:", e);
+  }
+
   // Uint8Array → base64
   let binary = "";
   const chunk = 0x8000;
-  for (let i = 0; i < u8.length; i += chunk) {
+  for (let i = 0; i < outU8.length; i += chunk) {
     binary += String.fromCharCode.apply(
       null,
       // @ts-expect-error fromCharCode array
-      u8.subarray(i, i + chunk)
+      outU8.subarray(i, i + chunk)
     );
   }
   const base64 = btoa(binary);
-  return { base64, mediaType };
+  return { base64, mediaType: outMime };
 }
 
 async function logAiOcr(opts: {
@@ -975,9 +995,11 @@ export async function undoLastReverse(): Promise<
  * 押すと、再度 AI OCR にかかる。
  */
 export async function resetFailedToReceipt(inboxId: string): Promise<void> {
+  // Round 28: attempts も 0 に戻して、auto-retry (network/server bucket) を
+  // 再度発火できるようにする
   await db
     .from("photo_inbox")
-    .update({ state: "receipt", last_error: null })
+    .update({ state: "receipt", last_error: null, attempts: 0 })
     .eq("id", inboxId);
 }
 
@@ -993,7 +1015,7 @@ export async function resetAllFailedToReceipt(): Promise<number> {
   if (rows.length === 0) return 0;
   await db
     .from("photo_inbox")
-    .update({ state: "receipt", last_error: null })
+    .update({ state: "receipt", last_error: null, attempts: 0 })
     .eq("state", "receipt_failed");
   return rows.length;
 }
