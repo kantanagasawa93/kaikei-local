@@ -365,14 +365,25 @@ class QueryBuilder<T = Row> implements PromiseLike<Result<T>> {
       return { data: null, error: null, count: rows[0]?.count ?? 0 };
     }
 
-    // Supabase風のネスト select: "*, children_table(*)" をサポート
-    // 例: "*, journal_lines(*)" → journals をselect後、各行の id で journal_lines を再取得
-    const nestedMatch = this.state.columns.match(/^\*\s*,\s*(\w+)\s*\((.+)\)\s*$/);
+    // Supabase風のネスト select をサポート。
+    // 形式:
+    //   "*, journal_lines(*)"
+    //   "id, date, description, journal_lines(partner_id, debit_amount)"
+    //   "*, journal_lines(partner_id, account_code)"
+    // 末尾の "<word>(...)" を子テーブルとして抽出、それ以前を親カラムとして扱う。
+    const nestedMatch = this.state.columns.match(
+      /^(.+?)\s*,\s*(\w+)\s*\(([^()]+)\)\s*$/,
+    );
     if (nestedMatch) {
-      const childTable = nestedMatch[1];
-      const childCols = nestedMatch[2];
-      // 親側
-      let parentSql = `SELECT * FROM ${this.state.table} ${clause}`;
+      let parentCols = nestedMatch[1].trim() || "*";
+      const childTable = nestedMatch[2];
+      let childCols = nestedMatch[3].trim();
+      const fkCol = this.state.table.replace(/s$/, "") + "_id";
+      // 親側: マッピングに id が必要なので、明示列リストの時は id を必ず含める
+      if (parentCols !== "*" && !/(^|,)\s*id\s*(,|$)/i.test(parentCols)) {
+        parentCols = `id, ${parentCols}`;
+      }
+      let parentSql = `SELECT ${parentCols} FROM ${this.state.table} ${clause}`;
       if (this.state.order) {
         parentSql += ` ORDER BY ${this.state.order.col} ${this.state.order.ascending ? "ASC" : "DESC"}`;
       }
@@ -381,7 +392,13 @@ class QueryBuilder<T = Row> implements PromiseLike<Result<T>> {
       if (parents.length === 0) return { data: [], error: null };
 
       // 子側: FK は親テーブル名の単数形 "_id" と推定（例: journals → journal_id）
-      const fkCol = this.state.table.replace(/s$/, "") + "_id";
+      // 明示列リストの時はマッピング用に FK カラムを必ず含める
+      if (
+        childCols !== "*" &&
+        !new RegExp(`(^|,)\\s*${fkCol}\\s*(,|$)`, "i").test(childCols)
+      ) {
+        childCols = `${fkCol}, ${childCols}`;
+      }
       const parentIds = parents.map((p) => p.id);
       const placeholders = parentIds.map((_, i) => `$${i + 1}`).join(",");
       const childSql = `SELECT ${childCols} FROM ${childTable} WHERE ${fkCol} IN (${placeholders})`;
