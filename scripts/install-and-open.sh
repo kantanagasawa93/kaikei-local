@@ -7,7 +7,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="KAIKEI LOCAL"
-DMG="src-tauri/target/release/bundle/dmg/${APP_NAME}_0.1.0_aarch64.dmg"
+# tauri.conf.json から動的にバージョン取得 (旧 0.1.0 ハードコードは古い遺物)
+APP_VERSION=$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' src-tauri/tauri.conf.json)
+DMG="src-tauri/target/release/bundle/dmg/${APP_NAME}_${APP_VERSION}_aarch64.dmg"
 APP_IN_APPLICATIONS="/Applications/${APP_NAME}.app"
 # 新 make-dmg.sh はアンダースコアの volname を使う（旧 tauri 版は空白）
 VOLUME_NEW="/Volumes/KAIKEI_LOCAL"
