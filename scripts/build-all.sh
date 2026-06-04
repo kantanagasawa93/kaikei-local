@@ -128,6 +128,11 @@ echo "=========================================="
 cat /tmp/kaikei-built-dmgs.txt
 
 # 毎回、手元の KAIKEI LOCAL を最新版に差し替えて起動する
+# (リリース時の付加価値で、ここが失敗してもビルド自体は成功扱いにする
+#  — DMG は既に作成・公証・staple 完了済みなので、リリースを止める理由は無い)
 echo ""
 echo "==> ローカルアプリを置き換えて起動"
-"$(dirname "$0")/install-and-open.sh"
+"$(dirname "$0")/install-and-open.sh" || {
+  echo "  ! install-and-open.sh が失敗しましたが DMG は既に生成済みなので継続します"
+  echo "  ! 後で手動で hdiutil attach <dmg> で確認してください"
+}
