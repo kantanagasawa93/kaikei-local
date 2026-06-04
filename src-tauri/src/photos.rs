@@ -26,6 +26,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cocoa::base::{id, nil, BOOL, YES};
+
+/// Objective-C BOOL → Rust bool 変換 (arch 不問).
+/// aarch64 では BOOL=bool、x86_64 では BOOL=i8 と ABI が違うため、
+/// `if some_bool` で直接判定すると x86_64 でビルドエラー (E0308) になる。
+/// 一旦 i8 にキャストして 0/非0 で bool に戻すと両 arch で動く。
+#[inline]
+fn bool_from_objc(b: BOOL) -> bool {
+    (b as i8) != 0
+}
 use cocoa::foundation::NSString;
 use std::os::raw::c_void;
 use objc::runtime::Class;
@@ -255,7 +264,7 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
             // Apple Photos の "Hidden" album に入れた写真は明確にプライベート扱い。
             // 領収書としてもアプリで見えない方が良いし、誤検出を減らす効果も大きい。
             let is_hidden: BOOL = msg_send![asset, isHidden];
-            if is_hidden {
+            if bool_from_objc(is_hidden) {
                 continue;
             }
 
@@ -272,7 +281,7 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
             // するケースは稀だが、念のため代表 1 枚は通して候補化する。
             if (subtypes & PH_SUBTYPE_PHOTO_BURST) != 0 {
                 let represents_burst: BOOL = msg_send![asset, representsBurst];
-                if !represents_burst {
+                if !bool_from_objc(represents_burst) {
                     continue;
                 }
             }
@@ -291,8 +300,9 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
             };
             let width: u64 = msg_send![asset, pixelWidth];
             let height: u64 = msg_send![asset, pixelHeight];
-            // Round 21 ⓐ: isFavorite は BOOL (cocoa 0.26 では Rust の bool 型エイリアス)
-            let is_favorite: BOOL = msg_send![asset, isFavorite];
+            // Round 21 ⓐ: isFavorite は BOOL (cocoa 0.26 の BOOL は arm64=bool / x86_64=i8 ABI)
+            let is_favorite_raw: BOOL = msg_send![asset, isFavorite];
+            let is_favorite: bool = bool_from_objc(is_favorite_raw);
 
             // ── Stage 1.2: アスペクト比 + 最小画素数フィルタ ──
             // 領収書の現実的な範囲:
