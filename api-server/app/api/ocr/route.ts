@@ -9,10 +9,9 @@ import {
 export const maxDuration = 30;
 export const runtime = "nodejs";
 
-// Gemini モデル (multimodal, 安価, OCR には十分).
-// gemini-2.0-flash は Free Tier 200 req/日 (2.5-flash は 20 req/日)。
-// 個人事業主向けの実用レベルでは 2.0 でも十分高精度。
-const GEMINI_MODEL = "gemini-2.0-flash";
+// Gemini モデル. Tier 1 (有料) 課金されていれば 2.5-flash の方が高精度。
+// thinking は構造化抽出には不要なので thinkingBudget=0 で OFF にする。
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の領収書・レシートの読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -86,7 +85,8 @@ async function callGemini(
       ],
       generationConfig: {
         temperature: 0,
-        // gemini-2.0-flash は thinking が既定で無効なので thinkingConfig 不要
+        // 2.5-flash は既定で thinking を行うが、構造化抽出には不要なので OFF
+        thinkingConfig: { thinkingBudget: 0 },
         maxOutputTokens: maxTokens,
         responseMimeType: "application/json",
       },

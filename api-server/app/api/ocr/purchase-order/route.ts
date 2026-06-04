@@ -20,9 +20,8 @@ import {
 export const maxDuration = 30;
 export const runtime = "nodejs";
 
-// gemini-2.0-flash は Free Tier 200 req/日 (2.5-flash は 20 req/日)。
-// 発注書の構造化抽出は 2.0 でも十分なため切替えて quota を緩める。
-const GEMINI_MODEL = "gemini-2.0-flash";
+// Tier 1 課金前提なら 2.5-flash の方が高精度.
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の発注書 (Purchase Order) の読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -158,8 +157,8 @@ export async function POST(req: NextRequest) {
         ],
         generationConfig: {
           temperature: 0,
-          // gemini-2.0-flash は thinking が既定で無効。品目が多い発注書のため
-          // maxOutputTokens は余裕を持たせる。
+          // 2.5-flash の thinking を無効化 — 構造化抽出には不要
+          thinkingConfig: { thinkingBudget: 0 },
           maxOutputTokens: 4096,
           responseMimeType: "application/json",
         },
