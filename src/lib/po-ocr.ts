@@ -97,6 +97,14 @@ export async function ocrPurchaseOrder(
     /* silent */
   }
 
+  // 使用量モニタにカウント
+  try {
+    const { recordOcrCall } = await import("./ai-ocr-usage");
+    await recordOcrCall();
+  } catch {
+    /* silent */
+  }
+
   const json = (await res.json()) as Partial<PurchaseOrderResult>;
   // normalize
   const items: PurchaseOrderItem[] = Array.isArray(json.items)

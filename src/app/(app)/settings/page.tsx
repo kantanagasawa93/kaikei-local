@@ -568,6 +568,9 @@ export default function SettingsPage() {
           {/* Round 28: Gemini Free Tier 上限超過バナー */}
           <AiOcrQuotaBanner />
 
+          {/* Round 29: 今月の AI OCR 使用量 + 推定コスト */}
+          <UsageStatsRow />
+
           {apiAlive === false && (
             <div className="rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-900">
               <b>⚠️ AI 読み取りサーバーに接続できませんでした。</b>
@@ -907,6 +910,54 @@ function Stat({ label, value }: { label: string; value: number }) {
  * Round 28: 発行者情報 (屋号・住所・電話・インボイス登録番号・振込先) を
  * 設定画面でもサマリ表示する。詳細編集は /invoices/settings/ にリンク。
  */
+/**
+ * Round 29: 今月の AI OCR 使用量 + 推定コスト を 1 行で見せる.
+ * AI 読み取りカードの上部 (バナーの直下) に出すコンパクトサマリ。
+ */
+function UsageStatsRow() {
+  const [stats, setStats] = useState<{
+    count: number;
+    yen: number;
+    monthKey: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { getThisMonthUsage } = await import("@/lib/ai-ocr-usage");
+        const s = await getThisMonthUsage();
+        if (!cancelled) {
+          setStats({ count: s.count, yen: s.estimatedYen, monthKey: s.monthKey });
+        }
+      } catch {
+        /* silent */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!stats) return null;
+
+  return (
+    <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs flex items-center gap-3 flex-wrap">
+      <span className="text-muted-foreground">今月の使用量 ({stats.monthKey}):</span>
+      <span className="font-medium">
+        <b className="font-mono">{stats.count}</b> 件
+      </span>
+      <span className="text-muted-foreground">推定コスト:</span>
+      <span className="font-medium">
+        <b className="font-mono">¥{stats.yen.toFixed(1)}</b>
+      </span>
+      <span className="text-[10px] text-muted-foreground ml-auto">
+        ※ gemini-2.5-flash 換算 (~0.02 円/回)
+      </span>
+    </div>
+  );
+}
+
 function IssuerInfoCard() {
   type IssuerLite = {
     business_name: string | null;
