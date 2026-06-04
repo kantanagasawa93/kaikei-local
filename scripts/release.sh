@@ -227,6 +227,24 @@ else
   fi
 fi
 
+# 0.7. CHANGELOG.md からリリースノートを抽出 (NOTES_FILE を先に作る)
+# latest.json 生成と gh release create の両方で参照するので、ここで初期化。
+NOTES_FILE=$(mktemp)
+trap 'rm -f "$NOTES_FILE"' EXIT
+if [ -f CHANGELOG.md ]; then
+  awk -v ver="$VERSION" '
+    BEGIN { capturing = 0 }
+    /^## v[0-9]/ {
+      if (capturing) { exit }
+      if ($0 ~ "^## v" ver "([^0-9]|$)") { capturing = 1; next }
+    }
+    capturing == 1 { print }
+  ' CHANGELOG.md > "$NOTES_FILE"
+fi
+if [ ! -s "$NOTES_FILE" ]; then
+  echo "KAIKEI LOCAL $VERSION" > "$NOTES_FILE"
+fi
+
 # ─────────────────────────────────────────────────────────────
 # Round 21 ㊙: tauri-plugin-updater 用 latest.json + .app.tar.gz + .sig 生成
 #
@@ -358,8 +376,9 @@ done
 # 1.5. CHANGELOG.md の対応バージョンセクションを抜き出して release notes に。
 #       Round 8 ㊔ で導入: ハードコード → CHANGELOG 連動 にして「リリースノートが
 #       存在しないバージョンを誤公開する」事故を防ぐ。
-NOTES_FILE=$(mktemp)
-trap 'rm -f "$NOTES_FILE"' EXIT
+# 注: NOTES_FILE は updater section (latest.json 生成) でも使うので
+# 上の "0.7." セクションで先に初期化済み。ここではより精密な再抽出を行う。
+: > "$NOTES_FILE"  # 既存内容を切り詰めて再抽出
 if [ -f CHANGELOG.md ]; then
   # `## v0.3.0` から次の `## v` までを抽出 (awk で 1pass)
   awk -v ver="$VERSION" '
