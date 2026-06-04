@@ -82,11 +82,20 @@ build_arch() {
     echo "==> notarize skipped (NOTARIZE_SKIP=1) — DMG is signed but not notarized"
   else
     echo "==> Submit to Apple notary ($arch_name)"
-    xcrun notarytool submit "$dmg_file" \
-      --apple-id "$APPLE_ID" \
-      --password "$APPLE_PASSWORD" \
-      --team-id "$APPLE_TEAM_ID" \
-      --wait
+    # APPLE_PASSWORD が "@keychain:PROFILE" 参照なら --keychain-profile を使う
+    # (notarytool は --password に literal しか受け付けないため)
+    if [[ "$APPLE_PASSWORD" == "@keychain:"* ]]; then
+      PROFILE="${APPLE_PASSWORD#@keychain:}"
+      xcrun notarytool submit "$dmg_file" \
+        --keychain-profile "$PROFILE" \
+        --wait
+    else
+      xcrun notarytool submit "$dmg_file" \
+        --apple-id "$APPLE_ID" \
+        --password "$APPLE_PASSWORD" \
+        --team-id "$APPLE_TEAM_ID" \
+        --wait
+    fi
 
     echo "==> staple ($arch_name)"
     xcrun stapler staple "$dmg_file"

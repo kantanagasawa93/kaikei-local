@@ -65,11 +65,20 @@ fi
 
 # 3. 公証 submit
 echo "==> Submit to Apple notary (この工程は数分かかることがあります)"
-xcrun notarytool submit "$DMG_FILE" \
-  --apple-id "$APPLE_ID" \
-  --password "$APPLE_PASSWORD" \
-  --team-id "$APPLE_TEAM_ID" \
-  --wait
+# APPLE_PASSWORD が "@keychain:PROFILE" 参照なら --keychain-profile を使う
+# (notarytool は --password に literal しか受け付けないため)
+if [[ "$APPLE_PASSWORD" == "@keychain:"* ]]; then
+  PROFILE="${APPLE_PASSWORD#@keychain:}"
+  xcrun notarytool submit "$DMG_FILE" \
+    --keychain-profile "$PROFILE" \
+    --wait
+else
+  xcrun notarytool submit "$DMG_FILE" \
+    --apple-id "$APPLE_ID" \
+    --password "$APPLE_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" \
+    --wait
+fi
 
 # 4. staple (公証チケットを dmg に貼り付け)
 echo "==> staple"
