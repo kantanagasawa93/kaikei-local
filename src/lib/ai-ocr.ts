@@ -105,6 +105,18 @@ export async function ocrWithClaude(
     /* silent */
   }
 
+  // 使用量モニタにカウント (1 時間 100 件超なら warning フラグ)
+  try {
+    const { recordOcrCall } = await import("./ai-ocr-usage");
+    const { overRate, rateCount } = await recordOcrCall();
+    if (overRate) {
+      const { toast } = await import("./toast");
+      toast.info(`AI OCR 使用ペースが速い: 直近 1 時間で ${rateCount} 回`);
+    }
+  } catch {
+    /* silent */
+  }
+
   const json = await response.json();
 
   // 勘定科目を推測

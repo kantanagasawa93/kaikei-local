@@ -233,6 +233,11 @@ export interface OcrResult {
    *         (Round 8 ㊕ — 価格按分による正確な仕訳分割が可能に)
    */
   items?: OcrItem[];
+  /**
+   * Round 29: 通常 AI OCR が失敗した時に Vision OCR テキストから簡易抽出した
+   * フォールバック結果なら "vision" がセットされる。確度低、要ユーザ確認の印。
+   */
+  fallback?: "vision";
 }
 
 // Phase 2: 口座・クレカ連携

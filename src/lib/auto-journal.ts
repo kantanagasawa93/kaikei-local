@@ -274,7 +274,7 @@ export async function autoJournalizeOne(
   const { base64, mediaType } = await readFileAsBase64(inboxRow.file_path);
   const bytesSent = Math.floor((base64.length * 3) / 4);
 
-  let ocr: OcrResult & { usage?: { used: number; limit: number } };
+  let ocr: OcrResult & { usage?: { used: number; limit: number }; fallback?: "vision" };
   try {
     ocr = await ocrWithClaude(base64, mediaType, apiKey);
   } catch (e) {
@@ -284,7 +284,16 @@ export async function autoJournalizeOne(
       bytesSent,
       error: (e as Error).message,
     });
-    throw e;
+    // Round 29: Gemini quota 超過なら Vision OCR テキストから簡易抽出してフォールバック.
+    // 確度は低いが「全件失敗 → 手入力」より「叩き台が入る」方が遥かにマシ。
+    const { isQuotaError, buildFallbackOcrResult } = await import("./vision-ocr-fallback");
+    if (isQuotaError(e) && inboxRow.ocr_text) {
+      const fb = buildFallbackOcrResult(inboxRow.ocr_text);
+      // notes 等で「Vision フォールバックで作成」と判別できるよう fallback フラグを付ける
+      ocr = { ...fb, fallback: "vision" };
+    } else {
+      throw e;
+    }
   }
 
   // receipts 行
@@ -317,7 +326,9 @@ export async function autoJournalizeOne(
     date: ocr.date || null,
     account_code: accountCode,
     account_name: accountName,
-    status: "confirmed",
+    // Vision フォールバック経由なら "confirmed" ではなく "pending" にして
+    // 領収書一覧で「要確認」として目立たせる
+    status: ocr.fallback === "vision" ? "pending" : "confirmed",
     doc_type: "receipt",
     partner_id: partnerId,
   });
@@ -332,7 +343,9 @@ export async function autoJournalizeOne(
   await db.from("journals").insert({
     id: journalId,
     date: journalDate,
-    description: `${ocr.vendor_name || "不明"} - ${accountName}`,
+    description:
+      `${ocr.vendor_name || "不明"} - ${accountName}` +
+      (ocr.fallback === "vision" ? " [Vision 仮]" : ""),
     receipt_id: receiptId,
   });
 
