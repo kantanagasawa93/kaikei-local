@@ -2,6 +2,17 @@
 
 KAIKEI LOCAL のリリースノート (PDCA ラウンド単位)。
 
+## v0.3.1 (配信パイプライン検証 + Intel Mac 実配布)
+
+アプリ機能の変更はありません。配布まわりの整備リリースです。
+
+### 配布
+- **Intel (x86_64) Mac 向け DMG を実配布**: v0.3.0 の公開アセットは Apple Silicon 版のみで、Intel ユーザがアップデートできませんでした。本リリースで `KAIKEI_LOCAL_x64.dmg` を同梱し、両アーキを揃えました
+- **アップデータの Intel 対応**: `latest.json` に `darwin-x86_64` を追加。Intel 版 (v0.2.0) からの自動アップデート経路が開通します
+- **リリースパイプラインの完走検証**: `scripts/release.sh` を「両アーキビルド → 署名 → 公証 → updater 配信 → GitHub Release 作成」まで end-to-end で通せる状態に整備 (v0.3.0 は手動工程を含んでいました)
+
+---
+
 ## v0.3.0 (Round 2 + Round 3 成果)
 
 ### 受信箱・自動仕訳
