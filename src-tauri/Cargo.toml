@@ -1,6 +1,6 @@
 [package]
 name = "kaikei"
-version = "0.3.0"
+version = "0.3.1"
 description = "kaikei - 個人事業主向けオフライン会計アプリ"
 authors = ["kaikei"]
 license = "MIT"
