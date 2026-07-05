@@ -48,31 +48,38 @@ export function buildMonthlyMatrix(
     const lineYear = d.getFullYear();
     const month = d.getMonth() + 1; // 1..12
 
-    const row = getRow(line.account_code);
+    const account = DEFAULT_ACCOUNTS.find((a) => a.code === line.account_code);
+    const category = account?.category || "expense";
+
+    // 集計対象外の行は row 自体を作らない
+    // (旧実装は先に row を作っていたため、PL 表に BS 科目のゼロ行が混ざっていた)
+    if (mode === "pl") {
+      // PLは収益・費用のみ、対象年のみ
+      if (category !== "revenue" && category !== "expense") continue;
+      if (lineYear !== year) continue;
+    } else {
+      // BSは資産・負債・資本、対象年以前のみ
+      if (category === "revenue" || category === "expense") continue;
+      if (lineYear > year) continue;
+    }
 
     // 増減計算：資産/費用は借方プラス、負債/資本/収益は貸方プラス
     const normalSide: "debit" | "credit" =
-      row.category === "asset" || row.category === "expense" ? "debit" : "credit";
+      category === "asset" || category === "expense" ? "debit" : "credit";
     const delta =
       normalSide === "debit"
         ? line.debit_amount - line.credit_amount
         : line.credit_amount - line.debit_amount;
 
+    const row = getRow(line.account_code);
     if (mode === "pl") {
-      // PLは収益・費用のみ
-      if (row.category !== "revenue" && row.category !== "expense") continue;
-      if (lineYear !== year) continue;
       row.months[month] += delta;
       row.total += delta;
+    } else if (lineYear < year) {
+      // 期首残高に積む
+      row.months[0] += delta;
     } else {
-      // BSは資産・負債・資本
-      if (row.category === "revenue" || row.category === "expense") continue;
-      if (lineYear < year) {
-        // 期首残高に積む
-        row.months[0] += delta;
-      } else if (lineYear === year) {
-        row.months[month] += delta;
-      }
+      row.months[month] += delta;
     }
   }
 

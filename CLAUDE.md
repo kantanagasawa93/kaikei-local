@@ -39,7 +39,7 @@ R<N>-B <要約>:
   - .app bundle: ✓ / ✗
   - 実機: <あれば>
 
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 ```
 
 ## 守りどころ
@@ -75,56 +75,64 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 29) 候補 — ユーザは「全部やって」希望 (10 個)
+## 次ラウンド (Round 31) 候補
 
-推し優先順は ㊗ → ㊊ → ㊋ → ⓐ → ⓑ → ⓒ → ⓓ → ⓔ → ⓕ → ⓖ。
+推し優先順は ㊗ → ㊰ → ㊱ → ㊋ → ㊊。
 
-### ㊗ v0.3.0 公証付きリリース実発火 ★★★★★ (8 ラウンド持ち越し中)
-- 要・ユーザ操作: `scripts/release-setup-credentials.sh` を 1 回叩いて
-  xcrun notarytool store-credentials (app-specific password 入力) + ~/.kaikei-release.env 生成
-  → その後 `source ~/.kaikei-release.env && scripts/release.sh v0.3.0` で Claude 単独でも打てる
-- Developer ID Application 証明書は keychain にある。AC_PASSWORD profile が未作成なのが唯一の壁
+### ㊗ v0.3.1 リリース実発火 ★★★★★ (prep 済み・creds 待ち)
+- version bump + CHANGELOG + DRY_RUN 検証は Round 29.5/30 で完了済み (`ea22c7b` +本ラウンド)
+- 要・ユーザ操作 (5 分): ①Apple ID の App 用パスワード `kaikei-release` を削除 (旧パスワードは
+  チャットログに平文で残っていて keychain 上まだ有効 = セキュリティ課題) → ②新パスワード生成
+  → ③`scripts/release-setup-credentials.sh` で AC_PASSWORD profile 再作成
+- その後 `source ~/.kaikei-release.env && scripts/release.sh v0.3.1` で Claude 単独で発火可能
+- これが通ると release.sh 初の end-to-end 完走 + Intel x64 実配布 + updater の x86_64 経路開通
 
-### ㊊ auto_rules を「使われなくなったルール」自動掃除候補に ★★★★
-- Round 28 ㊦ でルールが増える。applied_count>0 だが accepted_count/applied_count が低い
-  (正答率<30%) or 90 日以上一度も applied されてないルールを「見直し候補」として
-  /auto-rules 上部に提示 (partner-cleanup と同じパターン)
-- 対象: src/lib/auto-rules.ts (新規 detectStaleRules) + src/app/(app)/auto-rules/page.tsx
+### ㊰ 家事按分と減価償却仕訳の整合検証 ★★★★
+- Round 30 で固定資産→償却仕訳 (611 事業分 + 190 家事分) を作れるようになった。
+  家事按分ページの「再計算」が 611 を按分対象にすると二重按分になるリスクを検証し、
+  按分対象科目から 611 を除外 or 警告を出す
+- 対象: src/app/(app)/allocations/page.tsx + 検証は verify-app.sh db-dump
 
-### ㊋ freee/MF エクスポートの税区分マッピング表 ★★★
-- Round 28 ㊧ では tax_code をそのまま出している。kaikei tax_classes.code →
-  freee/MF の税区分名 への変換表を持たせて、インポート時の手読み替えを不要に
-- 対象: src/lib/journal-export.ts (TAX_CODE_TO_FREEE / _TO_MF マップ)
+### ㊱ journals/page.tsx (1,269 行) の分割 ★★★
+- settings (Round 30) と同じ要領で src/components/journals/ にカード/モーダルを切り出し
+- 対象: src/app/(app)/journals/page.tsx
 
-### ⓐ 定期取引候補 → ルール化を「複数まとめて」 ★★★
-- Round 28 ㊦ は 1 件ずつ。「上位 N 件を一括ルール化」ボタン + 確認モーダル
-- 対象: src/app/(app)/dashboard/page.tsx
+### ㊋ freee/MF エクスポートの税区分マッピング表 ★★★ (Round 29 から持ち越し)
+- kaikei tax_classes.code → freee/MF の税区分名への変換表で手読み替えを不要に
+- 対象: src/lib/journal-export.ts (TAX_CODE_TO_FREEE / _TO_MF マップ) — vitest テスト付きで
 
-### ⓑ partner 統合 Undo に「複数段戻し」UI ★★★
-- Round 28 ⓑ で stack(max 5) は持ったが UI は直近 1 件のみ。stack 一覧を出して
-  任意の 1 件を選んで戻せるように (dropdown)
-- 対象: src/app/(app)/partners/page.tsx
+### ㊊ auto_rules の stale ルール掃除 ★★★ (Round 29 から持ち越し)
+- 正答率<30% or 90 日以上未適用のルールを「見直し候補」として /auto-rules 上部に提示
+- 対象: src/lib/auto-rules.ts (detectStaleRules) + src/app/(app)/auto-rules/page.tsx
 
-### ⓒ 受信箱「失敗」タブで bucket 別「まとめて再 OCR / まとめて再試行」 ★★★
-- Round 28 ⓒ で bucket フィルタは入れた。フィルタ中の N 件を一括 reocr or resetFailedToReceipt
-- 対象: src/app/(app)/inbox/page.tsx
+### 候補プール (旧 Round 29 候補の残り)
+- ⓐ 定期取引候補の一括ルール化 / ⓑ partner Undo 複数段戻し / ⓒ 失敗 bucket 一括再試行
+- ⓓ readiness スヌーズ / ⓔ verify-app.sh regression サブコマンド
+- ⓕ updater フォールバック OS/アーキ別 / ⓖ 再 OCR 中断ボタン
+- eslint 既存 19 エラーの解消 (hoisted 関数の使用前参照 / setState-in-effect — 旧ページ 17 箇所)
 
-### ⓓ readiness カードの各 check に「解決済みにする」スヌーズ ★★
-- 「これは把握済み」のチェックを app_settings に覚えさせて warning を畳む
-- 対象: src/lib/etax/readiness.ts + dashboard/settings の ReadinessCard
+### ✓ Round 30 で完了した項目 (履歴) — テーマ「申告ロジックの正しさ + 品質基盤」
+- ㊕ 固定資産「N年分を仕訳化」: 12/31 付の償却仕訳 (611 事業分 + 190 家事分 / 資産科目) 一括作成
+  + fixed_asset_depreciations 記録 + 重複ガード。これまで台帳表示のみで申告に流れていなかった
+- ㊖ 減価償却を税法整合に: 国税庁償却率表 (ceil(1000/n)/1000)・備忘価額1円・償却限度額繰越。
+  旧実装は最終年一括計上で限度額超過だった (depreciation.ts 全面書き直し)
+- ㊗ e-Tax 減価償却明細: 事業専用割合 ×100 バグ修正 + 月数月割り + 率表準拠 (etax/mapping.ts)
+- ㊘ 基礎控除の令和7年度改正対応 (2025 年分以降 58〜95 万の新テーブル、年 param 追加)
+- ㊙ vitest 導入 + 金額系ユニットテスト 49 件 (`npm run test`)。@tauri-apps/* は src/test-stubs/ で差し替え
+- ㊚ localDb ネスト select パーサを localdb-parse.ts に純関数抽出 + 回帰テスト。
+  `.single()` 0 件時に [] ではなく null を返すよう修正 (Supabase 互換)
+- ㊛ 月次推移 PL に対象外科目のゼロ行が混ざるのを修正 (reports.ts)
+- ㊜ settings/page.tsx を 8 コンポーネントに分割 (1,269 → 約 100 行、src/components/settings/)。
+  バックアップ meta.json の version "0.1.0" 固定を実バージョン取得に
+- ㊝ eslint ignore 追加 (src-tauri/target 等の偽エラー 2,500+ 件 → 実エラー 19 件に)
+- ㊞ (Round 29.5) v0.3.1 prep: version 3 ファイル + CHANGELOG + release.sh DRY_RUN 検証
 
-### ⓔ verify-app.sh に「Round 28 機能の回帰チェック」サブコマンド ★★
-- demo-bulk-delete-undo に加えて、auto_rules 件数の前後比較 / partner 統合 Undo の
-  往復を db-dump で検証する regression サブコマンド
-- 対象: scripts/verify-app.sh
-
-### ⓕ updater フォールバック先を OS/アーキ別に出し分け ★★
-- Round 28 ⓕ で releases/latest に固定。arm64/x64 の DMG 直リンクを判定して出す
-- 対象: src/components/update-banner.tsx
-
-### ⓖ inbox 再 OCR 進捗バーに「中断」ボタン ★★
-- Round 28 ⓖ で進捗は出した。途中で止めたい時用に AbortController で打ち切り
-- 対象: src/app/(app)/inbox/page.tsx bulkReocr
+### ✓ Round 29 で完了した項目 (履歴)
+- 巨大ファイル分割 (inbox/page.tsx 2,216 → 1,417 行、src/components/inbox/)
+- AI OCR 使用量モニタ (ai-ocr-usage.ts + 設定画面 UsageStatsRow)
+- Vision フォールバック (AI OCR 失敗時に Vision OCR で仮仕訳)
+- Gemini quota バナー / Tier 1 課金キー切替 / 429 明示エラー (f408b31, 517921d, 8e03798)
+- x86_64 ビルド修復 (cocoa BOOL ABI ヘルパ) + release.sh 修正 5 連発 (notarytool profile 等)
 
 ### ✓ Round 28 で完了した項目 (履歴)
 - 軽い積み残し: AI OCR 文言を Gemini ベースに統一 ("Claude OCR" → "AI OCR" 一括置換)

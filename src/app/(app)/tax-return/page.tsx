@@ -155,7 +155,7 @@ export default function TaxReturnPage() {
 
     // 税額計算
     const blueDeduction = returnType === "blue" ? 650000 : 0;
-    const basicDeduction = calculateBasicDeduction(revenueTotal - expenseTotal);
+    const basicDeduction = calculateBasicDeduction(revenueTotal - expenseTotal, year);
 
     const taxableIncome = calculateTaxableIncome(revenueTotal, expenseTotal, {
       basic: basicDeduction,
