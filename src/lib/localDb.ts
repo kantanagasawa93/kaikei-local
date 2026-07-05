@@ -11,6 +11,7 @@
  */
 
 import Database from "@tauri-apps/plugin-sql";
+import { parseNestedSelect } from "@/lib/localdb-parse";
 
 /**
  * DB 関連エラーのうち「.single() でレコードが無かった」等の想定内エラーは
@@ -366,39 +367,21 @@ class QueryBuilder<T = Row> implements PromiseLike<Result<T>> {
     }
 
     // Supabase風のネスト select をサポート。
-    // 形式:
-    //   "*, journal_lines(*)"
-    //   "id, date, description, journal_lines(partner_id, debit_amount)"
-    //   "*, journal_lines(partner_id, account_code)"
-    // 末尾の "<word>(...)" を子テーブルとして抽出、それ以前を親カラムとして扱う。
-    const nestedMatch = this.state.columns.match(
-      /^(.+?)\s*,\s*(\w+)\s*\(([^()]+)\)\s*$/,
-    );
-    if (nestedMatch) {
-      let parentCols = nestedMatch[1].trim() || "*";
-      const childTable = nestedMatch[2];
-      let childCols = nestedMatch[3].trim();
-      const fkCol = this.state.table.replace(/s$/, "") + "_id";
-      // 親側: マッピングに id が必要なので、明示列リストの時は id を必ず含める
-      if (parentCols !== "*" && !/(^|,)\s*id\s*(,|$)/i.test(parentCols)) {
-        parentCols = `id, ${parentCols}`;
-      }
+    // パーサは localdb-parse.ts に切り出し済み (回帰テスト対象)。
+    const nested = parseNestedSelect(this.state.columns, this.state.table);
+    if (nested) {
+      const { parentCols, childTable, childCols, fkCol } = nested;
       let parentSql = `SELECT ${parentCols} FROM ${this.state.table} ${clause}`;
       if (this.state.order) {
         parentSql += ` ORDER BY ${this.state.order.col} ${this.state.order.ascending ? "ASC" : "DESC"}`;
       }
       if (this.state.limitN != null) parentSql += ` LIMIT ${this.state.limitN}`;
       const parents = (await db.select(parentSql, params)) as Row[];
-      if (parents.length === 0) return { data: [], error: null };
-
-      // 子側: FK は親テーブル名の単数形 "_id" と推定（例: journals → journal_id）
-      // 明示列リストの時はマッピング用に FK カラムを必ず含める
-      if (
-        childCols !== "*" &&
-        !new RegExp(`(^|,)\\s*${fkCol}\\s*(,|$)`, "i").test(childCols)
-      ) {
-        childCols = `${fkCol}, ${childCols}`;
+      if (parents.length === 0) {
+        // .single() は「0 件なら null」が Supabase 互換 (旧実装は [] を返していた)
+        return { data: this.state.singleMode ? null : [], error: null };
       }
+
       const parentIds = parents.map((p) => p.id);
       const placeholders = parentIds.map((_, i) => `$${i + 1}`).join(",");
       const childSql = `SELECT ${childCols} FROM ${childTable} WHERE ${fkCol} IN (${placeholders})`;

@@ -27,6 +27,7 @@ import type {
   FixedAsset,
   FixedAssetDepreciation,
 } from "@/types";
+import { straightLineRate, monthsInService } from "@/lib/depreciation";
 
 // ──────────────────────────────────────────────────────────
 // 勘定科目コード → 青色決算書の経費科目 のマッピング
@@ -315,10 +316,10 @@ export function fixedAssetsToDepreciationItems(
     const d = deprByAsset.get(a.id);
     if (!d) continue; // 当年減価償却の実績なし
 
-    const months = 12; // 通年想定 (取得年月の場合は月数調整が必要、拡張余地)
+    const months = monthsInService(a, year);
     const useful = a.useful_life_years || 1;
     const rate =
-      a.depreciation_method === "straight_line" ? 1 / useful : 0;
+      a.depreciation_method === "straight_line" ? straightLineRate(useful) : 0;
 
     items.push({
       name: a.name,
@@ -327,11 +328,14 @@ export function fixedAssetsToDepreciationItems(
       depreciation_base: a.acquisition_cost - (a.residual_value || 0),
       method: a.depreciation_method === "straight_line" ? "定額" : "定率",
       useful_years: useful,
-      rate: Math.round(rate * 1000) / 1000,
+      rate,
       months,
       depreciation_year: d.depreciation_amount,
-      business_use_ratio: Math.round((a.business_ratio || 1) * 100),
-      expense_amount: d.depreciation_amount,
+      // business_ratio は 0-100 の整数。旧実装は ×100 して 10000% になっていた
+      business_use_ratio: a.business_ratio ?? 100,
+      expense_amount: Math.floor(
+        (d.depreciation_amount * (a.business_ratio ?? 100)) / 100
+      ),
       book_value_kimatsu: d.book_value_after,
     });
   }

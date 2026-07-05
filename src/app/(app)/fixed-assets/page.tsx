@@ -28,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, Package } from "lucide-react";
+import { Plus, Trash2, Package, Calculator } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { DEFAULT_ACCOUNTS, getAccountByCode } from "@/lib/accounts";
 import { straightLineYear, bookValueAtYearEnd } from "@/lib/depreciation";
@@ -63,6 +63,8 @@ export default function FixedAssetsPage() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [posting, setPosting] = useState(false);
+  const [postMsg, setPostMsg] = useState<string | null>(null);
 
   useEffect(() => {
     load();
@@ -131,6 +133,102 @@ export default function FixedAssetsPage() {
     { acquisition: 0, bookValueBefore: 0, depreciation: 0, businessDepreciation: 0 }
   );
 
+  // 年末決算整理: year 年分の減価償却費を 12/31 付で仕訳化し、
+  // fixed_asset_depreciations に記録する (e-Tax 減価償却明細の元データになる)。
+  // 仕訳: 借方 減価償却費(事業分) + 事業主貸(家事分) / 貸方 資産科目(全額) の直接法。
+  async function handlePostDepreciation() {
+    if (posting) return;
+    const targets = rows.filter((r) => r.status === "active" && r.depreciation > 0);
+    if (targets.length === 0) {
+      setPostMsg(`${year}年分の減価償却費が発生する資産はありません`);
+      return;
+    }
+    const { data: existing } = await supabase
+      .from("fixed_asset_depreciations")
+      .select("fixed_asset_id")
+      .eq("fiscal_year", year);
+    const done = new Set(
+      ((existing as { fixed_asset_id: string }[] | null) ?? []).map(
+        (e) => e.fixed_asset_id
+      )
+    );
+    const todo = targets.filter((t) => !done.has(t.id));
+    if (todo.length === 0) {
+      setPostMsg(`${year}年分は全資産が仕訳化済みです (重複作成はしません)`);
+      return;
+    }
+    const totalBiz = todo.reduce((s, t) => s + t.businessDepreciation, 0);
+    if (
+      !confirm(
+        `${year}-12-31 付で ${todo.length} 件の減価償却仕訳を作成します。\n` +
+          `経費計上額 (事業分) 合計: ¥${totalBiz.toLocaleString()}\n` +
+          `作成後は仕訳帳から通常の仕訳と同様に編集・削除できます。`
+      )
+    )
+      return;
+    setPosting(true);
+    try {
+      let ok = 0;
+      for (const t of todo) {
+        const journalId = crypto.randomUUID();
+        const assetAccountName =
+          getAccountByCode(t.asset_account_code)?.name ?? t.asset_account_code;
+        const privatePart = t.depreciation - t.businessDepreciation;
+        await supabase.from("journals").insert({
+          id: journalId,
+          date: `${year}-12-31`,
+          description: `減価償却費 ${t.name} (${year}年分)`,
+          is_adjustment: 1,
+        });
+        const lines = [
+          {
+            account_code: "611",
+            account_name: "減価償却費",
+            debit_amount: t.businessDepreciation,
+            credit_amount: 0,
+          },
+          {
+            account_code: "190",
+            account_name: "事業主貸",
+            debit_amount: privatePart,
+            credit_amount: 0,
+          },
+          {
+            account_code: t.asset_account_code,
+            account_name: assetAccountName,
+            debit_amount: 0,
+            credit_amount: t.depreciation,
+          },
+        ].filter((ln) => ln.debit_amount > 0 || ln.credit_amount > 0);
+        for (const ln of lines) {
+          await supabase.from("journal_lines").insert({
+            id: crypto.randomUUID(),
+            journal_id: journalId,
+            ...ln,
+            tax_code: null,
+            tax_amount: 0,
+          });
+        }
+        await supabase.from("fixed_asset_depreciations").insert({
+          id: crypto.randomUUID(),
+          fixed_asset_id: t.id,
+          fiscal_year: year,
+          depreciation_amount: t.depreciation,
+          book_value_after: t.bookValue,
+          posted_journal_id: journalId,
+        });
+        ok++;
+      }
+      setPostMsg(
+        `✅ ${ok} 件の減価償却仕訳を作成しました (${year}-12-31 付、経費計上 ¥${totalBiz.toLocaleString()})`
+      );
+    } catch (e) {
+      setPostMsg(`仕訳化に失敗しました: ${(e as Error).message}`);
+    } finally {
+      setPosting(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -148,12 +246,27 @@ export default function FixedAssetsPage() {
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            onClick={() => void handlePostDepreciation()}
+            disabled={posting}
+            title="対象年の減価償却費を 12/31 付の決算整理仕訳として一括作成"
+          >
+            <Calculator className="h-4 w-4 mr-1" />
+            {posting ? "仕訳化中..." : `${year}年分を仕訳化`}
+          </Button>
           <Button onClick={() => setOpen(true)}>
             <Plus className="h-4 w-4 mr-1" />
             固定資産を登録
           </Button>
         </div>
       </div>
+
+      {postMsg && (
+        <div className="rounded-md bg-blue-50 border border-blue-200 text-blue-800 px-4 py-2 text-sm whitespace-pre-wrap">
+          {postMsg}
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <Card>

@@ -25,8 +25,26 @@ export function calculateReconstructionTax(incomeTax: number): number {
   return Math.floor(incomeTax * 0.021);
 }
 
-// 基礎控除の計算
-export function calculateBasicDeduction(income: number): number {
+// 基礎控除の計算 (所得税)。
+// 令和7年度税制改正で 2025 年分以後の額が変わった:
+//   - 令和6年分まで: 48万 (合計所得 2,400万以下) / 32万 / 16万 / 0
+//   - 令和7年分以後: 58万を基本に低所得帯へ上乗せ (132万以下は 95万)。
+//     132万超〜655万以下への上乗せ (88/68/63万) は令和7・8年分限定。
+export function calculateBasicDeduction(income: number, year?: number): number {
+  const y = year ?? new Date().getFullYear();
+  if (y <= 2024) {
+    if (income <= 24000000) return 480000;
+    if (income <= 24500000) return 320000;
+    if (income <= 25000000) return 160000;
+    return 0;
+  }
+  if (income <= 1320000) return 950000;
+  if (y <= 2026) {
+    if (income <= 3360000) return 880000;
+    if (income <= 4890000) return 680000;
+    if (income <= 6550000) return 630000;
+  }
+  if (income <= 23500000) return 580000;
   if (income <= 24000000) return 480000;
   if (income <= 24500000) return 320000;
   if (income <= 25000000) return 160000;
