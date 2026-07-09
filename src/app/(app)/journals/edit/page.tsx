@@ -3,14 +3,36 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { resolveLocalImageUrl } from "@/lib/localDb";
 import { JournalForm, type JournalLineInput } from "@/components/journal-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Sparkles, Wand2 } from "lucide-react";
+import { ArrowLeft, Sparkles, Wand2, Image as ImageIcon, X, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { rejournalize } from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
+
+/** 編集画面で参照する、元領収書の軽量ビュー。 */
+type ReceiptLite = {
+  id: string;
+  image_url: string | null;
+  amount: number | null;
+  vendor_name: string | null;
+  date: string | null;
+};
+
+/** journal_lines を DB から読んだときの行の型。 */
+type JournalLineRow = {
+  account_code: string;
+  account_name: string;
+  debit_amount: number;
+  credit_amount: number;
+  tax_code: string | null;
+  tax_amount: number | null;
+  partner_id: string | null;
+  memo: string | null;
+};
 
 function EditInner() {
   const params = useSearchParams();
@@ -24,6 +46,9 @@ function EditInner() {
   } | null>(null);
   // ㉭ Round 12: 受信箱由来 (receipt_id 紐付き) の仕訳のみ「再仕訳化」を出す
   const [hasReceipt, setHasReceipt] = useState(false);
+  // 元領収書 (写真を見ながら入力・保存できるように編集画面へ表示する)
+  const [receipt, setReceipt] = useState<ReceiptLite | null>(null);
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
   const [rejournalizing, setRejournalizing] = useState(false);
 
   // 再仕訳化ボタンのハンドラ
@@ -47,18 +72,21 @@ function EditInner() {
   }
 
   useEffect(() => {
-    if (!id) {
-      setLoading(false);
-      return;
-    }
+    // 画像 Blob URL は unmount / id 変更時に revoke する
+    let cancelled = false;
+    let objectUrl: string | null = null;
     (async () => {
+      if (!id) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
       const { data: journal } = await supabase
         .from("journals")
         .select("*")
         .eq("id", id)
         .single();
       if (!journal) {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
         return;
       }
       const { data: lines } = await supabase
@@ -66,10 +94,11 @@ function EditInner() {
         .select("*")
         .eq("journal_id", id);
 
+      if (cancelled) return;
       setInitialData({
         date: journal.date,
         description: journal.description,
-        lines: (lines || []).map((l: any) => ({
+        lines: ((lines || []) as JournalLineRow[]).map((l) => ({
           account_code: l.account_code,
           account_name: l.account_name,
           debit_amount: l.debit_amount,
@@ -81,8 +110,33 @@ function EditInner() {
         })),
       });
       setHasReceipt(!!journal.receipt_id);
-      setLoading(false);
+
+      // 元領収書 (画像 + OCR 参考値) を読み込む
+      if (journal.receipt_id) {
+        const { data: r } = await supabase
+          .from("receipts")
+          .select("id, image_url, amount, vendor_name, date")
+          .eq("id", journal.receipt_id)
+          .single();
+        if (!cancelled && r) {
+          setReceipt(r as ReceiptLite);
+          if ((r as ReceiptLite).image_url) {
+            const resolved = await resolveLocalImageUrl((r as ReceiptLite).image_url);
+            if (cancelled) {
+              if (resolved) URL.revokeObjectURL(resolved);
+            } else {
+              objectUrl = resolved;
+              setImgSrc(resolved);
+            }
+          }
+        }
+      }
+      if (!cancelled) setLoading(false);
     })();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [id]);
 
   const handleSubmit = async (data: {
@@ -126,7 +180,7 @@ function EditInner() {
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       <div className="flex items-center gap-4 flex-wrap">
         <Link href="/journals">
           <Button variant="ghost" size="sm">
@@ -153,18 +207,153 @@ function EditInner() {
         )}
       </div>
 
-      {/* ㉝ Round 9: auto 分割サマリー — memo に「自動分割」を含む借方 line が
-          複数ある時、何がどの基準で分けられたか summary card で見せる */}
-      <AutoSplitSummary lines={initialData.lines} />
+      {/* 領収書があれば「フォーム | 領収書画像」の 2 カラム。写真を見ながら
+          金額・科目を確認して保存できる。無ければ従来どおり 1 カラム。 */}
+      <div
+        className={
+          hasReceipt
+            ? "grid gap-6 lg:grid-cols-[minmax(0,1fr)_400px]"
+            : "max-w-3xl"
+        }
+      >
+        <div className="space-y-6 min-w-0">
+          {/* ㉝ Round 9: auto 分割サマリー */}
+          <AutoSplitSummary lines={initialData.lines} />
 
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">仕訳の編集</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <JournalForm onSubmit={handleSubmit} initialData={initialData} />
+            </CardContent>
+          </Card>
+        </div>
+
+        {hasReceipt && <ReceiptPanel receipt={receipt} imgSrc={imgSrc} />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 元領収書パネル。写真 (クリックで全画面拡大) + OCR が読んだ店名/金額/日付を
+ * 参考表示する。スクロールしても追従するよう sticky。
+ */
+function ReceiptPanel({
+  receipt,
+  imgSrc,
+}: {
+  receipt: ReceiptLite | null;
+  imgSrc: string | null;
+}) {
+  const [zoom, setZoom] = useState(false);
+
+  return (
+    <div className="lg:sticky lg:top-4 lg:self-start">
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">仕訳の編集</CardTitle>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <ImageIcon className="h-4 w-4" />
+            元の領収書
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          <JournalForm onSubmit={handleSubmit} initialData={initialData} />
+        <CardContent className="space-y-3">
+          {imgSrc ? (
+            <button
+              type="button"
+              onClick={() => setZoom(true)}
+              className="group relative block w-full overflow-hidden rounded-lg border"
+              title="クリックで拡大"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imgSrc}
+                alt="元の領収書"
+                className="max-h-[65vh] w-full object-contain bg-muted/30"
+              />
+              <span className="absolute bottom-2 right-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                クリックで拡大
+              </span>
+            </button>
+          ) : receipt ? (
+            <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+              画像を読み込めませんでした。
+              <br />
+              （ファイルが移動・削除された可能性があります）
+            </p>
+          ) : null}
+
+          {/* OCR が読んだ参考値 (入力の答え合わせ用) */}
+          {receipt && (
+            <dl className="space-y-1 text-xs">
+              <RefRow label="店名" value={receipt.vendor_name} />
+              <RefRow
+                label="金額 (OCR)"
+                value={
+                  receipt.amount != null
+                    ? `¥${receipt.amount.toLocaleString()}`
+                    : null
+                }
+                strong
+              />
+              <RefRow label="日付" value={receipt.date} />
+            </dl>
+          )}
+
+          {receipt && (
+            <Link
+              href={`/receipts/view?id=${receipt.id}`}
+              className="inline-flex items-center gap-1 text-xs text-blue-700 hover:underline"
+            >
+              <ExternalLink className="h-3 w-3" />
+              領収書の詳細を開く
+            </Link>
+          )}
         </CardContent>
       </Card>
+
+      {/* 全画面拡大オーバーレイ */}
+      {zoom && imgSrc && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6"
+          onClick={() => setZoom(false)}
+          role="dialog"
+          aria-label="領収書の拡大表示"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imgSrc}
+            alt="元の領収書 (拡大)"
+            className="max-h-full max-w-full object-contain"
+          />
+          <button
+            type="button"
+            onClick={() => setZoom(false)}
+            className="absolute right-4 top-4 rounded-full bg-white/90 p-2 text-black shadow hover:bg-white"
+            aria-label="閉じる"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RefRow({
+  label,
+  value,
+  strong,
+}: {
+  label: string;
+  value: string | null;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <dt className="w-16 shrink-0 text-muted-foreground">{label}</dt>
+      <dd className={strong ? "font-semibold" : ""}>{value || "-"}</dd>
     </div>
   );
 }
