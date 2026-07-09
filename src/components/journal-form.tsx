@@ -109,6 +109,17 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
   const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0);
   const isBalanced = totalDebit === totalCredit && totalDebit > 0;
 
+  // なぜ保存できないかを明示する (金額 0 の領収書仕訳を科目だけ直そうとした時、
+  // 以前はボタンが無言で無効になり「押せない」状態だった)。
+  const disabledReason =
+    totalDebit === 0 && totalCredit === 0
+      ? "金額が未入力です。借方・貸方に同額を入力してください。"
+      : !isBalanced
+        ? `借方と貸方の合計が一致していません（差額 ${Math.abs(
+            totalDebit - totalCredit,
+          ).toLocaleString()}円）。`
+        : null;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isBalanced) return;
@@ -277,16 +288,18 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
             </div>
           </div>
 
-          {!isBalanced && totalDebit + totalCredit > 0 && (
-            <p className="text-sm text-destructive">
-              借方と貸方の合計が一致しません（差額:{" "}
-              {Math.abs(totalDebit - totalCredit).toLocaleString()}円）
-            </p>
+          {disabledReason && (
+            <p className="text-sm text-destructive">{disabledReason}</p>
           )}
         </div>
       </div>
 
-      <Button type="submit" disabled={saving || !isBalanced} className="w-full">
+      <Button
+        type="submit"
+        disabled={saving || !isBalanced}
+        title={disabledReason ?? undefined}
+        className="w-full"
+      >
         {saving ? "保存中..." : "仕訳を登録"}
       </Button>
     </form>

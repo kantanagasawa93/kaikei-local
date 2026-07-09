@@ -186,3 +186,92 @@ export function findAccountCodeByName(name: string | null): string | null {
   const account = DEFAULT_ACCOUNTS.find((a) => a.name === name);
   return account?.code ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// 予測変換 (freee 風タイプアヘッド) 用の読み仮名 + 検索
+// ---------------------------------------------------------------------------
+
+/** 勘定科目コード → 読み仮名 (ひらがな)。「しょうもう」で消耗品費が出るように。 */
+export const ACCOUNT_READINGS: Record<string, string> = {
+  // 資産
+  "100": "げんきん", "101": "こぐちげんきん", "110": "ふつうよきん",
+  "111": "とうざよきん", "112": "ていきよきん", "120": "うりかけきん",
+  "121": "うけとりてがた", "122": "みしゅうにゅうきん", "130": "まえばらいきん",
+  "131": "まえばらいひよう", "140": "たなおろししさん", "150": "かりばらいきん",
+  "151": "かりばらいしょうひぜい", "160": "たてもの", "161": "たてものふぞくせつび",
+  "162": "しゃりょううんぱんぐ", "163": "こうぐきぐびひん", "164": "とち",
+  "165": "そふとうぇあ", "190": "じぎょうぬしかし",
+  // 負債
+  "200": "かいかけきん", "201": "しはらいてがた", "210": "みばらいきん",
+  "211": "みばらいひよう", "212": "みばらいしょうひぜい", "220": "あずかりきん",
+  "221": "げんせんしょとくぜいあずかり", "230": "まえうけきん", "240": "たんきかりいれきん",
+  "241": "ちょうきかりいれきん", "250": "かりうけきん", "251": "かりうけしょうひぜい",
+  "290": "じぎょうぬしかり",
+  // 資本
+  "300": "もといれきん", "310": "あおいろしんこくとくべつこうじょまえしょとく",
+  // 収益
+  "400": "うりあげだか", "401": "かじしょうひとう", "410": "ざつしゅうにゅう",
+  "420": "うけとりりそく",
+  // 売上原価
+  "500": "きしゅしょうひんたなおろしだか", "501": "しいれだか",
+  "502": "きまつしょうひんたなおろしだか",
+  // 経費
+  "601": "そぜいこうか", "602": "にづくりうんちん", "603": "すいどうこうねつひ",
+  "604": "りょひこうつうひ", "605": "つうしんひ", "606": "こうこくせんでんひ",
+  "607": "せったいこうさいひ", "608": "そんがいほけんりょう", "609": "しゅうぜんひ",
+  "610": "しょうもうひんひ", "611": "げんかしょうきゃくひ", "612": "ふくりこうせいひ",
+  "613": "きゅうりょうちんぎん", "614": "がいちゅうこうちん", "615": "りしわりびきりょう",
+  "616": "ちだいやちん", "617": "かしだおれきん", "620": "しんぶんとしょひ",
+  "621": "かいぎひ", "622": "しはらいてすうりょう", "623": "しゃりょうひ",
+  "624": "けんしゅうひ", "699": "ざっぴ",
+};
+
+function kataToHira(s: string): string {
+  return s.replace(/[ァ-ヶ]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) - 0x60),
+  );
+}
+
+/** 検索用の正規化: NFKC (全角→半角) + カタカナ→ひらがな + 小文字化。 */
+export function normalizeForSearch(s: string): string {
+  return kataToHira(s.normalize("NFKC")).toLowerCase();
+}
+
+/**
+ * freee 風の予測変換。query を コード / 科目名 / 読み仮名 / 英名 で部分一致させ、
+ * 関連度 (前方一致 > 部分一致、コード・名前 > 読み > 英名) の高い順に返す。
+ * query が空なら pool をそのまま返す。
+ */
+export function searchAccounts(
+  query: string,
+  category?: Account["category"],
+): Account[] {
+  const pool = category
+    ? DEFAULT_ACCOUNTS.filter((a) => a.category === category)
+    : DEFAULT_ACCOUNTS;
+  const q = normalizeForSearch(query.trim());
+  if (!q) return pool;
+
+  const scored: { account: Account; score: number }[] = [];
+  for (const a of pool) {
+    const code = a.code.toLowerCase();
+    const name = normalizeForSearch(a.name);
+    const reading = normalizeForSearch(ACCOUNT_READINGS[a.code] ?? "");
+    const en = normalizeForSearch(a.name_en ?? "");
+    let score = 0;
+    if (code === q) score = 1000;
+    else if (code.startsWith(q)) score = 900;
+    else if (name.startsWith(q)) score = 820;
+    else if (reading.startsWith(q)) score = 780;
+    else if (name.includes(q)) score = 600;
+    else if (reading.includes(q)) score = 520;
+    else if (en.startsWith(q)) score = 400;
+    else if (en.includes(q)) score = 300;
+    else if (code.includes(q)) score = 200;
+    if (score > 0) scored.push({ account: a, score });
+  }
+  scored.sort(
+    (x, y) => y.score - x.score || x.account.code.localeCompare(y.account.code),
+  );
+  return scored.map((s) => s.account);
+}
