@@ -245,12 +245,32 @@ function commonPrefixLen(a: string, b: string): number {
 }
 
 /**
- * partner 一覧から表記ゆれ候補のペアを検出する.
+ * 取引先名を正規化する (表記ゆれ判定用).
+ * 会社形態 (株式会社 / ㈱ 等)・空白・記号・全半角/大文字小文字のゆらぎを吸収する。
+ * 例: "㈱コメリ" と "株式会社コメリ" → 同じ "コメリ"
+ *     "STARBUCKS®" → "starbucks" / "ユナイテッド・シネマ" → "ユナイテッドシネマ"
+ */
+export function normalizePartnerName(s: string): string {
+  return s
+    .normalize("NFKC")
+    .replace(/株式会社|有限会社|合同会社|合資会社|合名会社|（株）|（有）|\(株\)|\(有\)|㈱|㈲/g, "")
+    .replace(/[\s・･·.,、。／/®™©＆&()（）「」『』【】[\]\-–—~〜|]/g, "")
+    .toLowerCase();
+}
+
+/**
+ * partner 一覧から「表記ゆれ」候補のペアを検出する.
  *
- * 条件 (誤統合を最小化するため):
- *   - 共通 prefix が 4 文字以上 (= 「タリーズ」レベル)
- *   - 短い方の長さの 60% 以上を共通 prefix が占める
- *   - 短い方が 2 文字以下なら除外 ("AB" + "ABC" のような誤検知防止)
+ * 方針 (Round 31 で刷新):
+ *   旧実装は「名前の先頭が一致」だけで判定していたため、"REC COFFEE 薬院駅前店"
+ *   と "REC COFFEE 博多ロースタリー" のような **同ブランド別店舗** まで統合候補に
+ *   していた (別物なのに)。
+ *
+ *   真の表記ゆれ = 「一方の (正規化) 名がもう一方の前方一致になっている」ケースだけ。
+ *     ✓ "タリーズ" ⊆ "タリーズコーヒー" (省略)
+ *     ✓ "㈱コメリ" ≡ "株式会社コメリ" (会社形態のゆれ、正規化後は同一)
+ *     ✓ "STARBUCKS®" ⊆ "STARBUCKS® 福岡新宮店" (ブランド ⊆ ブランド+店舗)
+ *     ✗ "コメリ 領鹿店" vs "コメリ 新居浜店" (共通接頭辞の後、両者が別々に伸びる = 別店舗)
  *
  * @param partners {id, name} のリスト
  * @param usageMap 使用回数マップ (partner_id → count)
@@ -262,35 +282,38 @@ export function detectPartnerVariants(
 ): PartnerVariantPair[] {
   const out: PartnerVariantPair[] = [];
   const seen = new Set<string>();
-  for (let i = 0; i < partners.length; i++) {
-    for (let j = i + 1; j < partners.length; j++) {
-      const a = partners[i];
-      const b = partners[j];
-      const shorter = a.name.length <= b.name.length ? a : b;
-      const longer = a.name.length <= b.name.length ? b : a;
-      if (shorter.name.length < 3) continue;
-      const prefixLen = commonPrefixLen(shorter.name, longer.name);
-      if (prefixLen < 4) continue;
-      if (prefixLen / shorter.name.length < 0.6) continue;
-      const key = [shorter.id, longer.id].sort().join(":");
+  const norm = partners.map((p) => ({ ...p, n: normalizePartnerName(p.name) }));
+  for (let i = 0; i < norm.length; i++) {
+    for (let j = i + 1; j < norm.length; j++) {
+      const a = norm[i];
+      const b = norm[j];
+      // 正規化名の短い方 (= より一般的 / 残す候補) と長い方
+      const shortN = a.n.length <= b.n.length ? a : b;
+      const longN = a.n.length <= b.n.length ? b : a;
+      // 短すぎる前方一致は誤検知しやすいので除外 ("AB" ⊆ "ABC" 等)
+      if (shortN.n.length < 3) continue;
+      // ★ 前方一致 (含有) のみを表記ゆれとみなす。別々に伸びる別店舗はここで落ちる
+      if (!longN.n.startsWith(shortN.n)) continue;
+      const key = [shortN.id, longN.id].sort().join(":");
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
         base: {
-          id: shorter.id,
-          name: shorter.name,
-          usage: usageMap[shorter.id] ?? 0,
+          id: shortN.id,
+          name: shortN.name,
+          usage: usageMap[shortN.id] ?? 0,
         },
         variant: {
-          id: longer.id,
-          name: longer.name,
-          usage: usageMap[longer.id] ?? 0,
+          id: longN.id,
+          name: longN.name,
+          usage: usageMap[longN.id] ?? 0,
         },
-        prefixLen,
+        // 差が小さい (= 正規化名の長さが近い) ほど信頼度が高いので、共通接頭辞長で近似
+        prefixLen: commonPrefixLen(shortN.name, longN.name),
       });
     }
   }
-  // 共通 prefix が長い順 (信頼度高い順)
+  // 信頼度高い順 (共通接頭辞が長い順)
   out.sort((a, b) => b.prefixLen - a.prefixLen);
   return out;
 }

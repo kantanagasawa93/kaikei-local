@@ -416,8 +416,9 @@ export default function PartnersPage() {
               表記ゆれの可能性 ({variantPairs.length} ペア)
             </p>
             <p className="text-xs text-muted-foreground">
-              名前の先頭が一致する取引先ペアを検出しました。「見比べる」で取引履歴を
-              並べて確認してから統合できます。
+              一方の名前がもう一方に含まれる（表記ゆれの疑いがある）ペアです。
+              別店舗どうし（例:「〜薬院店」と「〜博多店」）は除外しています。
+              「見比べる」で取引履歴を確認してから統合できます。
             </p>
             <div className="space-y-1">
               {variantPairs.slice(0, 5).map((p) => (
