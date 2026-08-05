@@ -440,3 +440,185 @@ export async function undoPartnerMerge(): Promise<{
   }
   return { restored: { variantName: snap.variantName, baseName: snap.baseName } };
 }
+
+// ────────────────────────────────────────────────────────────
+// 表記ゆれ「見比べ」用のプロファイル取得 + 「別物」無視リスト
+//
+// 統合ボタンを押す前に、2 つの取引先が本当に同一かを判断できるよう、
+// 各取引先の「登録科目 / よく使う科目 / 最近の取引 (日付・摘要・科目・金額)」を
+// まとめて返す。誤検知ペアは「別物として無視」で二度と出さない。
+// ────────────────────────────────────────────────────────────
+
+export interface PartnerTxn {
+  date: string;
+  label: string; // 摘要 (仕訳) または vendor_name (領収書)
+  accountCode: string | null;
+  accountName: string | null;
+  amount: number;
+  source: "journal" | "receipt";
+}
+
+export interface PartnerProfile {
+  id: string;
+  defaultAccountCode: string | null;
+  notes: string | null;
+  count: number; // 取引総件数 (journal_lines + receipts)
+  totalAmount: number;
+  topAccounts: { code: string; name: string; count: number }[];
+  txns: PartnerTxn[]; // 新しい順、limit 件
+}
+
+/** 取引先 1 件の「見比べ」用プロファイルを組み立てる。 */
+export async function getPartnerProfile(
+  partnerId: string,
+  limit = 8,
+): Promise<PartnerProfile> {
+  const { data: p } = await db
+    .from("partners")
+    .select("default_account_code, notes")
+    .eq("id", partnerId)
+    .single();
+
+  const txns: PartnerTxn[] = [];
+
+  // 仕訳明細 (partner_id) → 親 journal の日付・摘要を突き合わせ
+  const { data: jl } = await db
+    .from("journal_lines")
+    .select("journal_id, account_code, account_name, debit_amount, credit_amount")
+    .eq("partner_id", partnerId);
+  const lines =
+    (jl as
+      | {
+          journal_id: string;
+          account_code: string | null;
+          account_name: string | null;
+          debit_amount: number;
+          credit_amount: number;
+        }[]
+      | null) ?? [];
+  const jids = Array.from(new Set(lines.map((l) => l.journal_id)));
+  const jmap = new Map<string, { date: string; description: string }>();
+  if (jids.length > 0) {
+    const { data: js } = await db
+      .from("journals")
+      .select("id, date, description")
+      .in("id", jids);
+    for (const j of (js as { id: string; date: string; description: string }[] | null) ?? []) {
+      jmap.set(j.id, { date: j.date, description: j.description });
+    }
+  }
+  for (const l of lines) {
+    const j = jmap.get(l.journal_id);
+    txns.push({
+      date: j?.date ?? "",
+      label: j?.description ?? "",
+      accountCode: l.account_code,
+      accountName: l.account_name,
+      amount: (l.debit_amount || 0) + (l.credit_amount || 0),
+      source: "journal",
+    });
+  }
+
+  // 領収書 (partner_id) — vendor_name が「生の OCR 名」= 表記ゆれの発生源
+  const { data: rc } = await db
+    .from("receipts")
+    .select("vendor_name, amount, date, account_code, account_name")
+    .eq("partner_id", partnerId);
+  for (const r of (rc as
+    | {
+        vendor_name: string | null;
+        amount: number | null;
+        date: string | null;
+        account_code: string | null;
+        account_name: string | null;
+      }[]
+    | null) ?? []) {
+    txns.push({
+      date: r.date ?? "",
+      label: r.vendor_name ?? "",
+      accountCode: r.account_code,
+      accountName: r.account_name,
+      amount: r.amount ?? 0,
+      source: "receipt",
+    });
+  }
+
+  const count = txns.length;
+  const totalAmount = txns.reduce((s, t) => s + t.amount, 0);
+
+  const accMap = new Map<string, { code: string; name: string; count: number }>();
+  for (const t of txns) {
+    if (!t.accountCode) continue;
+    const cur = accMap.get(t.accountCode);
+    if (cur) cur.count++;
+    else
+      accMap.set(t.accountCode, {
+        code: t.accountCode,
+        name: t.accountName ?? t.accountCode,
+        count: 1,
+      });
+  }
+  const topAccounts = Array.from(accMap.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+
+  txns.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  return {
+    id: partnerId,
+    defaultAccountCode:
+      (p as { default_account_code?: string | null } | null)?.default_account_code ?? null,
+    notes: (p as { notes?: string | null } | null)?.notes ?? null,
+    count,
+    totalAmount,
+    topAccounts,
+    txns: txns.slice(0, limit),
+  };
+}
+
+/** 2 取引先の順不同キー (無視リスト / 重複判定に使う)。 */
+export function variantPairKey(idA: string, idB: string): string {
+  return [idA, idB].sort().join(":");
+}
+
+const PARTNER_VARIANT_IGNORE_KEY = "partner_variant_ignore";
+
+/** 「別物」として無視したペアキーの集合を返す。 */
+export async function getIgnoredVariantKeys(): Promise<Set<string>> {
+  try {
+    const { data } = await db
+      .from("app_settings")
+      .select("value")
+      .eq("id", PARTNER_VARIANT_IGNORE_KEY)
+      .single();
+    const raw = (data as { value?: string } | null)?.value;
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** ペアを「別物」として無視リストに追加する。 */
+export async function addIgnoredVariantKey(key: string): Promise<void> {
+  const set = await getIgnoredVariantKeys();
+  set.add(key);
+  const value = JSON.stringify(Array.from(set));
+  const updated_at = new Date().toISOString();
+  const { data: existing } = await db
+    .from("app_settings")
+    .select("id")
+    .eq("id", PARTNER_VARIANT_IGNORE_KEY)
+    .single();
+  if (existing) {
+    await db
+      .from("app_settings")
+      .update({ value, updated_at })
+      .eq("id", PARTNER_VARIANT_IGNORE_KEY);
+  } else {
+    await db
+      .from("app_settings")
+      .insert({ id: PARTNER_VARIANT_IGNORE_KEY, value, updated_at });
+  }
+}
