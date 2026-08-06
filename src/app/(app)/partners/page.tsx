@@ -21,22 +21,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, GitMerge, RotateCcw, Pencil, Scale, Ban, ArrowRight, Loader2 } from "lucide-react";
+import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, Pencil } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
-import {
-  detectPartnerVariants,
-  mergePartnerVariant,
-  undoPartnerMerge,
-  getPartnerMergeUndoCount,
-  getPartnerProfile,
-  variantPairKey,
-  getIgnoredVariantKeys,
-  addIgnoredVariantKey,
-  type PartnerVariantPair,
-  type PartnerProfile,
-} from "@/lib/partner-cleanup";
-import { getAccountByCode } from "@/lib/accounts";
 import type { Partner } from "@/types";
 
 const AUTO_LEARNED_TAG = "[auto-learned]";
@@ -85,24 +72,11 @@ export default function PartnersPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Round 25 ⓐ: partner_id → 使用件数 (receipts + journal_lines の合算)
   const [usageMap, setUsageMap] = useState<Record<string, number>>({});
-  // Round 27 ⓐ: 表記ゆれ候補ペア
-  const [variantPairs, setVariantPairs] = useState<PartnerVariantPair[]>([]);
-  // Round 28 ⓑ: partner 統合の Undo 可能件数
-  const [mergeUndoCount, setMergeUndoCount] = useState(0);
-  // Round 31: 「別物」として無視したペアキー + 見比べモーダルの状態
-  const [ignoredKeys, setIgnoredKeys] = useState<Set<string>>(new Set());
-  const [compare, setCompare] = useState<PartnerVariantPair | null>(null);
-  const [baseProfile, setBaseProfile] = useState<PartnerProfile | null>(null);
-  const [variantProfile, setVariantProfile] = useState<PartnerProfile | null>(null);
-  const [loadingProfiles, setLoadingProfiles] = useState(false);
-  const [merging, setMerging] = useState(false);
 
-  useEffect(() => {
-    load();
-    void loadUsage();
-    void getPartnerMergeUndoCount().then(setMergeUndoCount);
-    void getIgnoredVariantKeys().then(setIgnoredKeys);
-  }, []);
+  async function load() {
+    const { data } = await supabase.from("partners").select("*").order("name");
+    if (data) setPartners(data);
+  }
 
   async function loadUsage() {
     const map: Record<string, number> = {};
@@ -129,96 +103,12 @@ export default function PartnersPage() {
     setUsageMap(map);
   }
 
-  // Round 27 ⓐ: partners + usageMap の両方が読まれた後に表記ゆれを再検出
-  // Round 31: 「別物」として無視したペアは除外する
   useEffect(() => {
-    if (partners.length === 0) {
-      setVariantPairs([]);
-      return;
-    }
-    const detected = detectPartnerVariants(partners, usageMap).filter(
-      (p) => !ignoredKeys.has(variantPairKey(p.base.id, p.variant.id)),
-    );
-    setVariantPairs(detected);
-  }, [partners, usageMap, ignoredKeys]);
-
-  // Round 31: 見比べモーダルを開く (両取引先のプロファイルを読む)
-  async function openCompare(pair: PartnerVariantPair) {
-    setCompare(pair);
-    setBaseProfile(null);
-    setVariantProfile(null);
-    setLoadingProfiles(true);
-    try {
-      const [bp, vp] = await Promise.all([
-        getPartnerProfile(pair.base.id),
-        getPartnerProfile(pair.variant.id),
-      ]);
-      setBaseProfile(bp);
-      setVariantProfile(vp);
-    } catch (e) {
-      toast.error(`比較データの取得に失敗: ${(e as Error).message}`);
-    } finally {
-      setLoadingProfiles(false);
-    }
-  }
-
-  // Round 31: モーダルから方向を選んで統合する (keep = 残す側)
-  async function doMergeFromCompare(keep: "base" | "variant") {
-    if (!compare || merging) return;
-    const keepP = keep === "base" ? compare.base : compare.variant;
-    const dropP = keep === "base" ? compare.variant : compare.base;
-    setMerging(true);
-    try {
-      await mergePartnerVariant({
-        variantId: dropP.id,
-        baseId: keepP.id,
-        variantName: dropP.name,
-        baseName: keepP.name,
-      });
-      toast.success(`「${dropP.name}」→「${keepP.name}」に統合しました（取り消し可）`);
-      setCompare(null);
-      load();
-      void loadUsage();
-      setMergeUndoCount(await getPartnerMergeUndoCount());
-    } catch (e) {
-      toast.error(`統合に失敗: ${(e as Error).message}`);
-    } finally {
-      setMerging(false);
-    }
-  }
-
-  // Round 31: 「別物」として無視 (以後このペアは表記ゆれ候補に出さない)
-  async function doIgnore() {
-    if (!compare) return;
-    const key = variantPairKey(compare.base.id, compare.variant.id);
-    try {
-      await addIgnoredVariantKey(key);
-      setIgnoredKeys((prev) => new Set(prev).add(key));
-      toast.info("別物として登録しました（以後この組み合わせは提案しません）");
-      setCompare(null);
-    } catch (e) {
-      toast.error(`登録に失敗: ${(e as Error).message}`);
-    }
-  }
-
-  // Round 28 ⓑ: 直近の partner 統合を取り消す
-  async function handleUndoMerge() {
-    try {
-      const r = await undoPartnerMerge();
-      if (!r.restored) {
-        toast.info("取り消せる統合がありません");
-      } else {
-        toast.success(
-          `「${r.restored.variantName}」を「${r.restored.baseName}」から分離して復元しました`,
-        );
-        load();
-        void loadUsage();
-      }
-      setMergeUndoCount(await getPartnerMergeUndoCount());
-    } catch (e) {
-      toast.error(`取り消しに失敗: ${(e as Error).message}`);
-    }
-  }
+    void (async () => {
+      await load();
+      await loadUsage();
+    })();
+  }, []);
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -264,11 +154,6 @@ export default function PartnersPage() {
     toast.success(`${ids.length} 件削除しました`);
     setSelectedIds(new Set());
     load();
-  }
-
-  async function load() {
-    const { data } = await supabase.from("partners").select("*").order("name");
-    if (data) setPartners(data);
   }
 
   // Round 28: 行クリックで既存 partner を編集モードで開く
@@ -391,170 +276,7 @@ export default function PartnersPage() {
             </Badge>
           </Button>
         )}
-        {/* Round 28 ⓑ: 直近の統合を取り消す */}
-        {mergeUndoCount > 0 && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void handleUndoMerge()}
-            title="直近の取引先統合を取り消して分離する"
-          >
-            <RotateCcw className="h-3 w-3 mr-1" />
-            統合を取り消す
-            <Badge variant="secondary" className="ml-2 text-[10px]">{mergeUndoCount}</Badge>
-          </Button>
-        )}
       </div>
-
-      {/* Round 27 ⓐ: 表記ゆれ候補ペア (検出されたら提示、ワンクリックで統合) */}
-      {variantPairs.length > 0 && (
-        <Card className="border-purple-200 bg-purple-50/40">
-          <CardContent className="p-4 space-y-2">
-            <p className="text-sm font-medium flex items-center gap-2">
-              <GitMerge className="h-4 w-4 text-purple-600" />
-              表記ゆれの可能性 ({variantPairs.length} ペア)
-            </p>
-            <p className="text-xs text-muted-foreground">
-              一方の名前がもう一方に含まれる（表記ゆれの疑いがある）ペアです。
-              別店舗どうし（例:「〜薬院店」と「〜博多店」）は除外しています。
-              「見比べる」で取引履歴を確認してから統合できます。
-            </p>
-            <div className="space-y-1">
-              {variantPairs.slice(0, 5).map((p) => (
-                <div
-                  key={`${p.base.id}:${p.variant.id}`}
-                  className="flex items-center gap-2 text-sm py-1 border-b border-purple-100 last:border-0"
-                >
-                  <span className="flex-1 truncate">
-                    <b>{p.base.name}</b>
-                    <span className="text-muted-foreground"> ({p.base.usage} 回) ↔ </span>
-                    <span>{p.variant.name}</span>
-                    <span className="text-muted-foreground"> ({p.variant.usage} 回)</span>
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void openCompare(p)}
-                    title="2 つの取引先の履歴を並べて見比べる"
-                  >
-                    <Scale className="h-3 w-3 mr-1" />
-                    見比べる
-                  </Button>
-                </div>
-              ))}
-              {variantPairs.length > 5 && (
-                <p className="text-[10px] text-muted-foreground pt-1">
-                  …他 {variantPairs.length - 5} ペア
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Round 31: 表記ゆれ「見比べる」モーダル */}
-      <Dialog
-        open={compare !== null}
-        onOpenChange={(o) => {
-          if (!o) setCompare(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Scale className="h-4 w-4" />
-              取引先を見比べる
-            </DialogTitle>
-          </DialogHeader>
-
-          {loadingProfiles ? (
-            <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              取引履歴を読み込み中...
-            </div>
-          ) : compare ? (
-            <div className="space-y-4">
-              {/* 判定ヒント: 主な勘定科目が一致していれば同一の可能性が高い */}
-              {(() => {
-                const baseCodes = new Set(
-                  (baseProfile?.topAccounts ?? []).map((a) => a.code),
-                );
-                const share = (variantProfile?.topAccounts ?? []).some((a) =>
-                  baseCodes.has(a.code),
-                );
-                return (
-                  <div
-                    className={`rounded-md border px-3 py-2 text-xs ${
-                      share
-                        ? "border-green-300 bg-green-50 text-green-800"
-                        : "border-amber-300 bg-amber-50 text-amber-800"
-                    }`}
-                  >
-                    {share
-                      ? "✓ 主に使う勘定科目が一致しています。同じ取引先の可能性が高いです。"
-                      : "⚠ 主に使う勘定科目が異なります。別の取引先かもしれません。履歴を確認してください。"}
-                  </div>
-                );
-              })()}
-
-              <div className="grid grid-cols-2 gap-3">
-                <ProfileColumn
-                  title={compare.base.name}
-                  usage={compare.base.usage}
-                  profile={baseProfile}
-                />
-                <ProfileColumn
-                  title={compare.variant.name}
-                  usage={compare.variant.usage}
-                  profile={variantProfile}
-                />
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                統合すると、選ばなかった方の領収書・仕訳の取引先がすべて残す側に
-                書き換わり、選ばなかった取引先は削除されます（取り消し可）。
-              </p>
-            </div>
-          ) : null}
-
-          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void doIgnore()}
-              disabled={merging}
-              className="text-muted-foreground"
-            >
-              <Ban className="h-3.5 w-3.5 mr-1" />
-              別物として無視
-            </Button>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void doMergeFromCompare("variant")}
-                disabled={merging || loadingProfiles}
-                title={`「${compare?.base.name}」を「${compare?.variant.name}」に統合`}
-              >
-                {compare?.base.name}
-                <ArrowRight className="h-3.5 w-3.5 mx-1" />
-                {compare?.variant.name} に統合
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void doMergeFromCompare("base")}
-                disabled={merging || loadingProfiles}
-                title={`「${compare?.variant.name}」を「${compare?.base.name}」に統合`}
-              >
-                {compare?.variant.name}
-                <ArrowRight className="h-3.5 w-3.5 mx-1" />
-                {compare?.base.name} に統合
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Round 22 ⓑ: bulk action toolbar (auto-learned 候補をまとめて承認 / 削除) */}
       {selectedIds.size > 0 && (
@@ -881,98 +603,6 @@ export default function PartnersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-/**
- * Round 31: 見比べモーダルの片側 (取引先 1 件) を表示する列。
- * 登録科目 / よく使う科目 / 最近の取引 (日付・摘要・科目・金額) を出し、
- * 「本当に同じ取引先か」を判断する材料にする。
- */
-function ProfileColumn({
-  title,
-  usage,
-  profile,
-}: {
-  title: string;
-  usage: number;
-  profile: PartnerProfile | null;
-}) {
-  const defAcc = profile?.defaultAccountCode
-    ? getAccountByCode(profile.defaultAccountCode)
-    : null;
-  const isAuto = Boolean(profile?.notes?.includes("[auto-learned]"));
-
-  return (
-    <div className="rounded-lg border p-3 space-y-2 min-w-0">
-      <div className="space-y-0.5">
-        <p className="font-semibold break-words">{title}</p>
-        <p className="text-xs text-muted-foreground">
-          使用 {usage} 回
-          {profile && profile.totalAmount > 0 && (
-            <> ・ 累計 ¥{profile.totalAmount.toLocaleString()}</>
-          )}
-          {isAuto && (
-            <Badge variant="secondary" className="ml-1 text-[10px]">
-              自動学習
-            </Badge>
-          )}
-        </p>
-      </div>
-
-      <div className="text-xs">
-        <span className="text-muted-foreground">登録科目: </span>
-        {defAcc ? (
-          <span>
-            {defAcc.code} {defAcc.name}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">未設定</span>
-        )}
-      </div>
-
-      {profile && profile.topAccounts.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {profile.topAccounts.map((a) => (
-            <Badge key={a.code} variant="outline" className="text-[10px] font-normal">
-              {a.name} ×{a.count}
-            </Badge>
-          ))}
-        </div>
-      )}
-
-      <div>
-        <p className="text-[11px] font-medium text-muted-foreground mb-1">
-          最近の取引
-        </p>
-        {profile && profile.txns.length > 0 ? (
-          <ul className="space-y-1">
-            {profile.txns.map((t, i) => (
-              <li key={i} className="text-[11px] leading-tight">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-mono text-muted-foreground shrink-0">
-                    {t.date || "日付なし"}
-                  </span>
-                  <span className="font-mono tabular-nums shrink-0">
-                    ¥{t.amount.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="truncate">{t.label || "—"}</span>
-                  {t.accountName && (
-                    <span className="text-muted-foreground shrink-0">
-                      {t.accountName}
-                    </span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-[11px] text-muted-foreground">取引履歴なし</p>
-        )}
-      </div>
     </div>
   );
 }
