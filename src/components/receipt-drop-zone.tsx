@@ -30,6 +30,7 @@ export function ReceiptDropZone({ onImported, className }: Props) {
       setMessage(null);
       let added = 0;
       let skipped = 0;
+      let pdfFailed = 0;
       try {
         const { writeFile, mkdir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
 
@@ -38,13 +39,14 @@ export function ReceiptDropZone({ onImported, className }: Props) {
         } catch {}
 
         for (const file of files) {
-          if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+          const isPdf = file.type === "application/pdf";
+          if (!file.type.startsWith("image/") && !isPdf) {
             continue;
           }
-          const buf = new Uint8Array(await file.arrayBuffer());
+          const original = new Uint8Array(await file.arrayBuffer());
 
-          // SHA-256 ファイルハッシュで重複検知
-          const hashBuf = await crypto.subtle.digest("SHA-256", buf as BufferSource);
+          // SHA-256 は「元ファイル」で計算 (PDF→JPEG 変換しても同じ PDF を重複検知できる)
+          const hashBuf = await crypto.subtle.digest("SHA-256", original as BufferSource);
           const hashHex = Array.from(new Uint8Array(hashBuf))
             .map((b) => b.toString(16).padStart(2, "0"))
             .join("");
@@ -58,12 +60,31 @@ export function ReceiptDropZone({ onImported, className }: Props) {
             continue;
           }
 
-          const ext =
-            (file.name.includes(".") ? file.name.split(".").pop() : null) ||
-            (file.type === "application/pdf" ? "pdf" : "jpg");
+          // 保存するバイト列。PDF は 1 ページ目を JPEG にラスタライズして
+          // サムネ表示・OCR が通常の画像領収書と同じ経路に乗るようにする。
+          // 変換に失敗した時だけ元 PDF を other として保存 (取り込み自体は成立させる)。
+          let bytesToSave: Uint8Array = original;
+          let ext =
+            (file.name.includes(".") ? file.name.split(".").pop() : null) || "jpg";
+          let docType = "receipt";
+          if (isPdf) {
+            try {
+              const { renderPdfFirstPageToJpeg } = await import("@/lib/pdf-to-image");
+              bytesToSave = await renderPdfFirstPageToJpeg(original);
+              ext = "jpg";
+              docType = "receipt";
+            } catch (e) {
+              console.error("PDF の画像化に失敗:", e);
+              pdfFailed++;
+              bytesToSave = original;
+              ext = "pdf";
+              docType = "other";
+            }
+          }
+
           const safeName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
           const relPath = `receipts/${safeName}`;
-          await writeFile(relPath, buf, { baseDir: BaseDirectory.AppData });
+          await writeFile(relPath, bytesToSave, { baseDir: BaseDirectory.AppData });
 
           await db.from("receipts").insert({
             image_url: `local://${relPath}`,
@@ -71,17 +92,19 @@ export function ReceiptDropZone({ onImported, className }: Props) {
             amount: null,
             date: new Date().toISOString().split("T")[0],
             status: "pending",
-            doc_type: file.type === "application/pdf" ? "other" : "receipt",
+            doc_type: docType,
             file_hash: hashHex,
           });
           added++;
         }
+        const pdfNote =
+          pdfFailed > 0 ? `（うち PDF ${pdfFailed}件は画像化できず原本のまま保存）` : "";
         if (added === 0 && skipped > 0) {
           setMessage(`すでに登録済み: ${skipped}件（重複スキップ）`);
         } else if (skipped > 0) {
-          setMessage(`${added}件を登録、${skipped}件は既存（重複スキップ）`);
+          setMessage(`${added}件を登録、${skipped}件は既存（重複スキップ）${pdfNote}`);
         } else {
-          setMessage(`${added}件を登録しました`);
+          setMessage(`${added}件を登録しました${pdfNote}`);
         }
         onImported?.();
       } catch (e) {
