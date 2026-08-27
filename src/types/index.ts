@@ -148,6 +148,8 @@ export interface IssuerSettings {
 
 export interface Invoice {
   id: string;
+  /** Round 31: 発行書類の種別。receipt = 領収書 (subject を但し書きとして扱う) */
+  doc_type: "invoice" | "receipt";
   invoice_number: string;
   issue_date: string;
   due_date: string | null;

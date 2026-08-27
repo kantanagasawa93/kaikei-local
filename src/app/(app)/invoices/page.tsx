@@ -37,11 +37,6 @@ export default function InvoicesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [undoCount, setUndoCount] = useState(0);
 
-  useEffect(() => {
-    load();
-    void getInvoiceBulkUndoCount().then(setUndoCount);
-  }, []);
-
   async function load() {
     const { data } = await db
       .from("invoices")
@@ -49,6 +44,13 @@ export default function InvoicesPage() {
       .order("issue_date", { ascending: false });
     if (data) setInvoices(data);
   }
+
+  useEffect(() => {
+    (async () => {
+      await load();
+      setUndoCount(await getInvoiceBulkUndoCount());
+    })();
+  }, []);
 
   function toggleSelected(id: string) {
     setSelectedIds((prev) => {
@@ -113,7 +115,8 @@ export default function InvoicesPage() {
       if (i.status === "cancelled") return acc;
       acc.count++;
       acc.total += i.total_amount;
-      if (i.status === "paid") acc.paid += i.total_amount;
+      // 領収書は入金を受けた事実の証憑なので常に「入金済」側に集計
+      if (i.status === "paid" || i.doc_type === "receipt") acc.paid += i.total_amount;
       else acc.outstanding += i.total_amount;
       return acc;
     },
@@ -123,7 +126,7 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">請求書</h1>
+        <h1 className="text-2xl font-bold">請求書・領収書</h1>
         <div className="flex gap-2">
           <Link href="/invoices/settings/">
             <Button variant="outline">
@@ -138,10 +141,17 @@ export default function InvoicesPage() {
               発注書から作成
             </Button>
           </Link>
+          {/* Round 31: 領収書発行 */}
+          <Link href="/invoices/edit/?type=receipt">
+            <Button variant="outline">
+              <Plus className="h-4 w-4 mr-1" />
+              領収書を作成
+            </Button>
+          </Link>
           <Link href="/invoices/edit/">
             <Button>
               <Plus className="h-4 w-4 mr-1" />
-              新規作成
+              請求書を作成
             </Button>
           </Link>
         </div>
@@ -150,7 +160,7 @@ export default function InvoicesPage() {
       <div className="grid gap-3 md:grid-cols-4">
         <Card>
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">請求書数</p>
+            <p className="text-xs text-muted-foreground">発行数</p>
             <p className="text-2xl font-bold">{totals.count}</p>
           </CardContent>
         </Card>
@@ -279,6 +289,7 @@ export default function InvoicesPage() {
                       )}
                     </button>
                   </TableHead>
+                  <TableHead>種別</TableHead>
                   <TableHead>番号</TableHead>
                   <TableHead>発行日</TableHead>
                   <TableHead>期日</TableHead>
@@ -306,6 +317,14 @@ export default function InvoicesPage() {
                         />
                       </TableCell>
                       <TableCell>
+                        <Badge
+                          variant={inv.doc_type === "receipt" ? "secondary" : "outline"}
+                          className="text-xs"
+                        >
+                          {inv.doc_type === "receipt" ? "領収書" : "請求書"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
                         <Link
                           href={`/invoices/edit/?id=${inv.id}`}
                           className="font-mono text-sm hover:underline text-primary"
@@ -326,7 +345,9 @@ export default function InvoicesPage() {
                       </TableCell>
                       <TableCell>
                         <Badge variant={statusLabels[inv.status].variant} className="text-xs">
-                          {statusLabels[inv.status].label}
+                          {inv.doc_type === "receipt" && inv.status === "sent"
+                            ? "発行済"
+                            : statusLabels[inv.status].label}
                         </Badge>
                       </TableCell>
                     </TableRow>

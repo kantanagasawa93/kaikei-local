@@ -574,3 +574,13 @@ CREATE INDEX IF NOT EXISTS idx_photo_inbox_state ON photo_inbox(state);
 CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
 "#;
 
+
+/// v12: invoices に doc_type カラムを追加 (Round 31: 領収書発行).
+///
+/// 請求書モジュールを「発行書類」として拡張し、領収書も同じテーブル・同じ
+/// 編集画面で発行できるようにする。doc_type = 'invoice' (請求書) | 'receipt'
+/// (領収書)。既存行はデフォルト 'invoice' で影響なし。
+/// 領収書では due_date は使わず、subject を但し書きとして扱う。
+pub const SCHEMA_V12_SQL: &str = r#"
+ALTER TABLE invoices ADD COLUMN doc_type TEXT DEFAULT 'invoice';
+"#;

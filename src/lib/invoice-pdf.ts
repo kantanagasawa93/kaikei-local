@@ -1,5 +1,9 @@
 /**
- * 請求書の簡易PDF出力。
+ * 請求書・領収書の簡易PDF出力。
+ * doc_type = 'receipt' の場合はタイトル・文言を領収書様式に切り替える
+ * (領収金額の強調枠 + 但し書き + 「正に領収いたしました」+ 印紙不要の注記。
+ *  振込先ブロックは出さない)。税率ごとの内訳は共通で出すので、
+ * どちらの様式でも適格請求書の記載要件を満たす。
  * 国税庁の適格請求書（インボイス）の要件を満たす項目を含める:
  *   1. 発行事業者の氏名・登録番号
  *   2. 取引年月日
@@ -70,16 +74,20 @@ export async function exportInvoicePdf(
     return lines.length ? lines : [""];
   };
 
+  const isReceipt = invoice.doc_type === "receipt";
+  const docLabel = isReceipt ? "領収書" : "請求書";
+
   let y = height - 50;
-  // ─── 1段目: タイトル「請求書」 (左) + 請求書番号 / 発行日 / 支払期限 (右上 3 行) ───
-  draw("請求書", 40, y, { size: 24, bold: true });
+  // ─── 1段目: タイトル「請求書/領収書」 (左) + 番号 / 発行日 / 支払期限 (右上 3 行) ───
+  draw(docLabel, 40, y, { size: 24, bold: true });
   {
     const rx = 380;
     let ry = y + 2;
-    draw(`請求書番号: ${invoice.invoice_number}`, rx, ry, { size: 10 });
+    draw(`${docLabel}番号: ${invoice.invoice_number}`, rx, ry, { size: 10 });
     ry -= 14;
     draw(`発行日: ${invoice.issue_date}`, rx, ry, { size: 10 });
-    if (invoice.due_date) {
+    // 領収書に支払期限は無い
+    if (invoice.due_date && !isReceipt) {
       ry -= 14;
       draw(`支払期限: ${invoice.due_date}`, rx, ry, { size: 10 });
     }
@@ -137,16 +145,46 @@ export async function exportInvoicePdf(
   // 2段目ブロックの高さを確保 (発行者ブロックの方が高いので、それに合わせて余白)
   y = headerY - 70;
 
-  // 件名
-  if (invoice.subject) {
-    draw(`件名: ${invoice.subject}`, 40, y, { size: 11 });
+  if (isReceipt) {
+    // ─── 領収書: 領収金額の強調枠 + 但し書き + 領収文言 ───
+    const boxLeft = 40;
+    const boxWidth = 320;
+    const boxHeight = 34;
+    page.drawRectangle({
+      x: boxLeft,
+      y: y - boxHeight + 12,
+      width: boxWidth,
+      height: boxHeight,
+      color: rgb(0.95, 0.95, 0.95),
+      borderColor: rgb(0.3, 0.3, 0.3),
+      borderWidth: 0.8,
+    });
+    draw("領収金額", boxLeft + 10, y - 10, { size: 11, bold: true });
+    drawRight(
+      `¥${invoice.total_amount.toLocaleString()} -`,
+      boxLeft + boxWidth - 12,
+      y - 12,
+      { size: 16, bold: true },
+    );
+    draw("(税込)", boxLeft + boxWidth + 8, y - 10, { size: 9, color: [0.4, 0.4, 0.4] });
+    y -= boxHeight + 8;
+    // 但し書き (subject を流用。未入力なら「お品代」)
+    draw(`但し ${invoice.subject || "お品代"} として`, 40, y, { size: 10 });
+    y -= 16;
+    draw("上記の金額、正に領収いたしました。", 40, y, { size: 10 });
+    y -= 20;
+  } else {
+    // 件名
+    if (invoice.subject) {
+      draw(`件名: ${invoice.subject}`, 40, y, { size: 11 });
+      y -= 20;
+    }
+
+    // 「下記の通り、ご請求申し上げます」案内文
+    y -= 4;
+    draw("下記の通り、ご請求申し上げます。", 40, y, { size: 10 });
     y -= 20;
   }
-
-  // 「下記の通り、ご請求申し上げます」案内文
-  y -= 4;
-  draw("下記の通り、ご請求申し上げます。", 40, y, { size: 10 });
-  y -= 20;
 
   // 明細テーブル — カラムの x 位置 (右端ベース)
   //   # | 内容 | 数量 | 単位 | 単価 | 金額
@@ -275,16 +313,23 @@ export async function exportInvoicePdf(
     height: 26,
     color: rgb(0.95, 0.95, 0.95),
   });
-  drawRight("ご請求金額", totalLabelRight, y + 3, { size: 12, bold: true });
+  drawRight(isReceipt ? "領収金額" : "ご請求金額", totalLabelRight, y + 3, { size: 12, bold: true });
   drawRight(`¥${invoice.total_amount.toLocaleString()}`, totalAmountRight, y + 1, {
     size: 15,
     bold: true,
   });
   y -= 34;
 
-  // 振込先ブロック (見やすい枠 + ラベル付き整列)
+  // 振込先ブロック (見やすい枠 + ラベル付き整列) — 領収書には不要
   y -= 16;
-  {
+  if (isReceipt) {
+    // 電子交付の領収書は印紙税の課税文書に当たらない旨を注記
+    draw("※ 本領収書は電子交付のため、収入印紙は貼付しておりません。", 40, y, {
+      size: 8,
+      color: [0.4, 0.4, 0.4],
+    });
+    y -= 14;
+  } else {
     // 全体を薄い枠で囲む
     const boxTop = y + 14;
     const boxLeft = 40;

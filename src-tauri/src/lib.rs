@@ -1240,6 +1240,12 @@ pub fn run() {
             sql: migrations::SCHEMA_V11_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 12,
+            description: "invoices_doc_type",
+            sql: migrations::SCHEMA_V12_SQL,
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

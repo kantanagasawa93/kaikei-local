@@ -46,6 +46,12 @@ function EditInner() {
   const router = useRouter();
   const params = useSearchParams();
   const id = params.get("id");
+  // Round 31: /invoices/edit/?type=receipt で領収書モード (既存文書は DB の doc_type が優先)
+  const [docType, setDocType] = useState<Invoice["doc_type"]>(
+    params.get("type") === "receipt" ? "receipt" : "invoice"
+  );
+  const isReceipt = docType === "receipt";
+  const docLabel = isReceipt ? "領収書" : "請求書";
 
   const [loading, setLoading] = useState(true);
   const [partners, setPartners] = useState<Partner[]>([]);
@@ -78,6 +84,7 @@ function EditInner() {
         const { data: inv } = await db.from("invoices").select("*").eq("id", id).single();
         if (inv) {
           const i = inv as Invoice;
+          setDocType(i.doc_type === "receipt" ? "receipt" : "invoice");
           setInvoiceNumber(i.invoice_number);
           setIssueDate(i.issue_date);
           setDueDate(i.due_date || "");
@@ -107,11 +114,13 @@ function EditInner() {
           );
         }
       } else {
-        // 自動採番: INV-YYYYMMDD-XXX
+        // 自動採番: INV-YYYYMMDD-XXX (領収書は RCP-)。連番は同じ種別の最新から継続
+        const wantReceipt = params.get("type") === "receipt";
         const today = new Date().toISOString().replace(/-/g, "").slice(0, 8);
         const { data: existing } = await db
           .from("invoices")
           .select("invoice_number")
+          .eq("doc_type", wantReceipt ? "receipt" : "invoice")
           .order("issue_date", { ascending: false })
           .limit(1);
         let seq = 1;
@@ -120,9 +129,9 @@ function EditInner() {
           const m = last.match(/(\d+)$/);
           if (m) seq = parseInt(m[1], 10) + 1;
         }
-        setInvoiceNumber(`INV-${today}-${String(seq).padStart(3, "0")}`);
+        setInvoiceNumber(`${wantReceipt ? "RCP" : "INV"}-${today}-${String(seq).padStart(3, "0")}`);
 
-        if (iRes.data?.default_payment_terms_days) {
+        if (!wantReceipt && iRes.data?.default_payment_terms_days) {
           const d = new Date();
           d.setDate(d.getDate() + iRes.data.default_payment_terms_days);
           setDueDate(d.toISOString().split("T")[0]);
@@ -130,7 +139,7 @@ function EditInner() {
       }
       setLoading(false);
     })();
-  }, [id]);
+  }, [id, params]);
 
   // 請求書明細は「税抜」の unit_price 入力を想定する。
   // total は 小計 + 消費税 − 源泉徴収 (実際にクライアントが振込む額)。
@@ -170,9 +179,10 @@ function EditInner() {
     setSaving(true);
     const saveStatus = newStatus || status;
     const payload = {
+      doc_type: docType,
       invoice_number: invoiceNumber,
       issue_date: issueDate,
-      due_date: dueDate || null,
+      due_date: isReceipt ? null : dueDate || null,
       partner_id: partnerId || null,
       partner_name: partnerName,
       partner_address: partnerAddress || null,
@@ -226,7 +236,8 @@ function EditInner() {
     // 「INVOICE 番号と取引先しか書いてない」紙が出来上がるので、警告
     const missing: string[] = [];
     if (!issuer || !issuer.business_name) missing.push("屋号・氏名");
-    if (!issuer?.bank_info) missing.push("振込先 (口座情報)");
+    // 領収書に振込先は載せないので未登録でも警告しない
+    if (!isReceipt && !issuer?.bank_info) missing.push("振込先 (口座情報)");
     if (!issuer?.address) missing.push("住所");
     if (missing.length > 0) {
       const ok = confirm(
@@ -242,9 +253,10 @@ function EditInner() {
     }
     const invoice: Invoice = {
       id: id || "tmp",
+      doc_type: docType,
       invoice_number: invoiceNumber,
       issue_date: issueDate,
-      due_date: dueDate || null,
+      due_date: isReceipt ? null : dueDate || null,
       partner_id: partnerId || null,
       partner_name: partnerName,
       partner_address: partnerAddress || null,
@@ -301,7 +313,7 @@ function EditInner() {
               戻る
             </Button>
           </Link>
-          <h1 className="text-2xl font-bold">{id ? "請求書を編集" : "新規請求書"}</h1>
+          <h1 className="text-2xl font-bold">{id ? `${docLabel}を編集` : `新規${docLabel}`}</h1>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleDownloadPdf}>
@@ -310,20 +322,23 @@ function EditInner() {
           </Button>
           <Button variant="outline" onClick={() => handleSave("sent")} disabled={saving}>
             <Send className="h-4 w-4 mr-1" />
-            送付済にする
+            {isReceipt ? "発行済にする" : "送付済にする"}
           </Button>
-          <Button variant="outline" onClick={() => handleSave("paid")} disabled={saving}>
-            <CheckCircle2 className="h-4 w-4 mr-1" />
-            入金済にする
-          </Button>
+          {/* 領収書は入金を受けた事実の証憑なので「入金済にする」は出さない */}
+          {!isReceipt && (
+            <Button variant="outline" onClick={() => handleSave("paid")} disabled={saving}>
+              <CheckCircle2 className="h-4 w-4 mr-1" />
+              入金済にする
+            </Button>
+          )}
           <Button onClick={() => handleSave()} disabled={saving}>
             {saving ? "保存中..." : "保存"}
           </Button>
         </div>
       </div>
 
-      {/* 発行者情報未登録の警告 (PDF に屋号・振込先が出ない) */}
-      {(!issuer || !issuer.business_name || !issuer.bank_info) && (
+      {/* 発行者情報未登録の警告 (PDF に屋号・振込先が出ない)。領収書は振込先不要 */}
+      {(!issuer || !issuer.business_name || (!isReceipt && !issuer.bank_info)) && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
           <p className="font-medium text-amber-900">
             ⚠️ 発行者情報が未登録です
@@ -346,20 +361,26 @@ function EditInner() {
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">
           <div>
-            <Label>請求書番号</Label>
+            <Label>{docLabel}番号</Label>
             <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
           </div>
           <div>
             <Label>発行日</Label>
             <Input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
           </div>
-          <div>
-            <Label>お支払期日</Label>
-            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-          </div>
+          {!isReceipt && (
+            <div>
+              <Label>お支払期日</Label>
+              <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </div>
+          )}
           <div className="md:col-span-3">
-            <Label>件名</Label>
-            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="例: 2025年5月分 Webサイト運用保守料" />
+            <Label>{isReceipt ? "但し書き" : "件名"}</Label>
+            <Input
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder={isReceipt ? "例: お品代 (未入力なら「お品代」で出力)" : "例: 2025年5月分 Webサイト運用保守料"}
+            />
           </div>
         </CardContent>
       </Card>
@@ -537,7 +558,7 @@ function EditInner() {
             />
           </div>
           <div className="flex justify-between text-lg font-bold pt-2 border-t">
-            <span>請求金額 (差引)</span>
+            <span>{isReceipt ? "領収金額" : "請求金額 (差引)"}</span>
             <span>¥{totals.total.toLocaleString()}</span>
           </div>
           {withholding > 0 && (
@@ -558,7 +579,7 @@ function EditInner() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             className="w-full min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm"
-            placeholder="振込先、備考など"
+            placeholder={isReceipt ? "備考など" : "振込先、備考など"}
           />
         </CardContent>
       </Card>
