@@ -24,7 +24,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ArrowLeft, Plus, Trash2, FileDown, Send, CheckCircle2 } from "lucide-react";
-import { TAX_CLASSES, calculateTax } from "@/lib/tax-classes";
+import {
+  TAX_CLASSES,
+  calculateTax,
+  extractTaxFromIncluded,
+  calcWithholdingTax,
+} from "@/lib/tax-classes";
 import { exportInvoicePdf } from "@/lib/invoice-pdf";
 import { downloadBlob } from "@/lib/pdf-export";
 import type { Invoice, InvoiceItem, IssuerSettings, Partner } from "@/types";
@@ -69,6 +74,10 @@ function EditInner() {
   const [items, setItems] = useState<ItemInput[]>([newItem()]);
   // Round 28: 源泉徴収税 (個人事業主の報酬で計上)
   const [withholding, setWithholding] = useState(0);
+  // Round 32: 税込入力モード + 源泉徴収の扱い (差引/別記) + 自動計算
+  const [taxInclusive, setTaxInclusive] = useState(false);
+  const [whMode, setWhMode] = useState<Invoice["withholding_mode"]>("deduct");
+  const [whAuto, setWhAuto] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -95,6 +104,8 @@ function EditInner() {
           setNotes(i.notes || "");
           setStatus(i.status);
           setWithholding(i.withholding_tax ?? 0);
+          setTaxInclusive(!!i.tax_inclusive);
+          setWhMode(i.withholding_mode === "note" ? "note" : "deduct");
         }
         const { data: itemRows } = await db
           .from("invoice_items")
@@ -141,18 +152,31 @@ function EditInner() {
     })();
   }, [id, params]);
 
-  // 請求書明細は「税抜」の unit_price 入力を想定する。
-  // total は 小計 + 消費税 − 源泉徴収 (実際にクライアントが振込む額)。
+  // 明細の unit_price は 税抜 (デフォルト) / 税込 (taxInclusive) のどちらでも入力できる。
+  // 税込入力時は subtotal = 税込合計、tax = 内税で逆算した消費税 (加算しない)。
+  // 源泉徴収は whAuto で税抜報酬額から段階税率 (10.21% / 100万円超 20.42%) を自動計算。
+  // total は whMode='deduct' なら 税込合計 − 源泉徴収、'note' なら 税込合計のまま。
   const totals = useMemo(() => {
     let subtotal = 0;
     let tax = 0;
     for (const it of items) {
       const amt = Math.floor(it.quantity * it.unit_price);
       subtotal += amt;
-      tax += calculateTax(amt, it.tax_code);
+      tax += taxInclusive
+        ? extractTaxFromIncluded(amt, it.tax_code)
+        : calculateTax(amt, it.tax_code);
     }
-    return { subtotal, tax, total: subtotal + tax - withholding };
-  }, [items, withholding]);
+    const gross = taxInclusive ? subtotal : subtotal + tax;
+    const whBase = taxInclusive ? subtotal - tax : subtotal;
+    const wh = whAuto ? calcWithholdingTax(whBase) : withholding;
+    return {
+      subtotal,
+      tax,
+      gross,
+      wh,
+      total: whMode === "deduct" ? gross - wh : gross,
+    };
+  }, [items, withholding, taxInclusive, whMode, whAuto]);
 
   const updateItem = (idx: number, patch: Partial<ItemInput>) => {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -189,7 +213,9 @@ function EditInner() {
       subject: subject || null,
       subtotal: totals.subtotal,
       tax_amount: totals.tax,
-      withholding_tax: withholding,
+      tax_inclusive: taxInclusive ? 1 : 0,
+      withholding_tax: totals.wh,
+      withholding_mode: whMode,
       total_amount: totals.total,
       status: saveStatus,
       notes: notes || null,
@@ -220,7 +246,9 @@ function EditInner() {
           unit_price: it.unit_price,
           amount,
           tax_code: it.tax_code,
-          tax_amount: calculateTax(amount, it.tax_code),
+          tax_amount: taxInclusive
+            ? extractTaxFromIncluded(amount, it.tax_code)
+            : calculateTax(amount, it.tax_code),
         });
       }
     }
@@ -263,7 +291,9 @@ function EditInner() {
       subject: subject || null,
       subtotal: totals.subtotal,
       tax_amount: totals.tax,
-      withholding_tax: withholding,
+      tax_inclusive: taxInclusive ? 1 : 0,
+      withholding_tax: totals.wh,
+      withholding_mode: whMode,
       total_amount: totals.total,
       status,
       sent_at: null,
@@ -285,7 +315,9 @@ function EditInner() {
         unit_price: it.unit_price,
         amount,
         tax_code: it.tax_code,
-        tax_amount: calculateTax(amount, it.tax_code),
+        tax_amount: taxInclusive
+          ? extractTaxFromIncluded(amount, it.tax_code)
+          : calculateTax(amount, it.tax_code),
       };
     });
     const bytes = await exportInvoicePdf(invoice, itemRows, issuer);
@@ -422,10 +454,24 @@ function EditInner() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">明細</CardTitle>
-          <Button size="sm" variant="outline" onClick={() => setItems([...items, newItem()])}>
-            <Plus className="h-4 w-4 mr-1" />
-            行を追加
-          </Button>
+          <div className="flex items-center gap-2">
+            <Select
+              value={taxInclusive ? "inclusive" : "exclusive"}
+              onValueChange={(v) => v && setTaxInclusive(v === "inclusive")}
+            >
+              <SelectTrigger className="w-36 h-8 text-xs">
+                <SelectValue>{taxInclusive ? "税込で入力 (内税)" : "税抜で入力 (外税)"}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="exclusive">税抜で入力 (外税)</SelectItem>
+                <SelectItem value="inclusive">税込で入力 (内税)</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button size="sm" variant="outline" onClick={() => setItems([...items, newItem()])}>
+              <Plus className="h-4 w-4 mr-1" />
+              行を追加
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
@@ -522,33 +568,49 @@ function EditInner() {
       <Card>
         <CardContent className="p-4 space-y-1">
           <div className="flex justify-between">
-            <span className="text-muted-foreground">小計</span>
+            <span className="text-muted-foreground">{taxInclusive ? "合計 (税込)" : "小計"}</span>
             <span>¥{totals.subtotal.toLocaleString()}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">うち消費税</span>
+            <span className="text-muted-foreground">{taxInclusive ? "うち消費税" : "消費税"}</span>
             <span>¥{totals.tax.toLocaleString()}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-muted-foreground inline-flex items-center gap-2">
               源泉徴収税
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-6 text-[10px] px-1.5"
-                title="小計 × 10.21% で自動計算 (個人事業主の報酬の標準税率)"
-                onClick={() =>
-                  setWithholding(Math.floor(totals.subtotal * 0.1021))
-                }
+              <label
+                className="inline-flex items-center gap-1 text-[10px] cursor-pointer select-none"
+                title="税抜報酬額から自動計算 (100万円以下 10.21% / 超過分 20.42%)"
               >
-                10.21%
-              </Button>
+                <input
+                  type="checkbox"
+                  checked={whAuto}
+                  onChange={(e) => {
+                    // OFF に戻す時は直前の自動計算値を手入力欄に引き継ぐ
+                    if (!e.target.checked) setWithholding(totals.wh);
+                    setWhAuto(e.target.checked);
+                  }}
+                  className="h-3 w-3 cursor-pointer"
+                />
+                自動計算
+              </label>
+              <Select value={whMode} onValueChange={(v) => v && setWhMode(v as Invoice["withholding_mode"])}>
+                <SelectTrigger className="w-40 h-6 text-[10px]">
+                  <SelectValue>
+                    {whMode === "deduct" ? "差引する (請求額から引く)" : "別記のみ (満額請求)"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="deduct">差引する (請求額から引く)</SelectItem>
+                  <SelectItem value="note">別記のみ (満額請求)</SelectItem>
+                </SelectContent>
+              </Select>
             </span>
             <Input
               type="text"
               inputMode="numeric"
-              value={withholding ? String(withholding) : ""}
+              value={totals.wh ? String(totals.wh) : ""}
+              disabled={whAuto}
               onChange={(e) => {
                 const raw = e.target.value.replace(/[^0-9]/g, "");
                 setWithholding(raw === "" ? 0 : Number(raw));
@@ -558,13 +620,23 @@ function EditInner() {
             />
           </div>
           <div className="flex justify-between text-lg font-bold pt-2 border-t">
-            <span>{isReceipt ? "領収金額" : "請求金額 (差引)"}</span>
+            <span>
+              {isReceipt ? "領収金額" : whMode === "deduct" && totals.wh > 0 ? "請求金額 (差引)" : "請求金額"}
+            </span>
             <span>¥{totals.total.toLocaleString()}</span>
           </div>
-          {withholding > 0 && (
+          {totals.wh > 0 && whMode === "deduct" && (
             <p className="text-[11px] text-muted-foreground pt-1">
-              小計 ¥{totals.subtotal.toLocaleString()} + 消費税 ¥{totals.tax.toLocaleString()}
-              {" "}− 源泉徴収 ¥{withholding.toLocaleString()} = ¥{totals.total.toLocaleString()}
+              {taxInclusive
+                ? `税込合計 ¥${totals.gross.toLocaleString()} (うち消費税 ¥${totals.tax.toLocaleString()})`
+                : `小計 ¥${totals.subtotal.toLocaleString()} + 消費税 ¥${totals.tax.toLocaleString()}`}
+              {" "}− 源泉徴収 ¥{totals.wh.toLocaleString()} = ¥{totals.total.toLocaleString()}
+            </p>
+          )}
+          {totals.wh > 0 && whMode === "note" && (
+            <p className="text-[11px] text-muted-foreground pt-1">
+              （参考）源泉徴収税額 ¥{totals.wh.toLocaleString()} ／ 差引お振込額 ¥
+              {(totals.total - totals.wh).toLocaleString()}
             </p>
           )}
         </CardContent>

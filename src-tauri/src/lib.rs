@@ -1246,6 +1246,12 @@ pub fn run() {
             sql: migrations::SCHEMA_V12_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "invoices_tax_inclusive_and_withholding_mode",
+            sql: migrations::SCHEMA_V13_SQL,
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

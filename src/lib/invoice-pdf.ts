@@ -76,6 +76,10 @@ export async function exportInvoicePdf(
 
   const isReceipt = invoice.doc_type === "receipt";
   const docLabel = isReceipt ? "領収書" : "請求書";
+  // Round 32: 税込入力 (内税) と源泉徴収の別記 (満額請求) に対応
+  const isInclusive = !!invoice.tax_inclusive;
+  const whNoteOnly = invoice.withholding_mode === "note";
+  const wh = invoice.withholding_tax ?? 0;
 
   let y = height - 50;
   // ─── 1段目: タイトル「請求書/領収書」 (左) + 番号 / 発行日 / 支払期限 (右上 3 行) ───
@@ -280,8 +284,18 @@ export async function exportInvoicePdf(
       label = `${code} (${t.rate}%)`;
     }
     draw(label, 340, y, { size: 9 });
-    drawRight(`${t.subtotal.toLocaleString()} 円`, colAmountRight - 80, y, { size: 9 });
-    drawRight(`消費税: ${t.tax.toLocaleString()} 円`, colAmountRight, y, { size: 9 });
+    drawRight(
+      `${isInclusive ? "税込 " : ""}${t.subtotal.toLocaleString()} 円`,
+      colAmountRight - 80,
+      y,
+      { size: 9 },
+    );
+    drawRight(
+      `${isInclusive ? "内消費税" : "消費税"}: ${t.tax.toLocaleString()} 円`,
+      colAmountRight,
+      y,
+      { size: 9 },
+    );
     y -= 12;
   }
 
@@ -289,16 +303,16 @@ export async function exportInvoicePdf(
   const totalLabelRight = 440;   // ラベル列の右端
   const totalAmountRight = colAmountRight; // 金額列の右端 (明細表と同じ)
   y -= 8;
-  drawRight("小計", totalLabelRight, y, { bold: true });
+  drawRight(isInclusive ? "合計 (税込)" : "小計", totalLabelRight, y, { bold: true });
   drawRight(`¥${invoice.subtotal.toLocaleString()}`, totalAmountRight, y);
   y -= 14;
-  drawRight("消費税", totalLabelRight, y, { bold: true });
+  drawRight(isInclusive ? "(うち消費税)" : "消費税", totalLabelRight, y, { bold: true });
   drawRight(`¥${invoice.tax_amount.toLocaleString()}`, totalAmountRight, y);
-  // Round 28: 源泉徴収税 — 0 の時は表示省略
-  if ((invoice.withholding_tax ?? 0) > 0) {
+  // Round 28: 源泉徴収税 — 0 の時は表示省略。別記モードは合計に含めず後段で注記
+  if (wh > 0 && !whNoteOnly) {
     y -= 14;
     drawRight("源泉徴収", totalLabelRight, y, { bold: true, color: [0.6, 0.1, 0.1] });
-    drawRight(`-¥${(invoice.withholding_tax ?? 0).toLocaleString()}`, totalAmountRight, y, {
+    drawRight(`-¥${wh.toLocaleString()}`, totalAmountRight, y, {
       color: [0.6, 0.1, 0.1],
     });
   }
@@ -319,6 +333,17 @@ export async function exportInvoicePdf(
     bold: true,
   });
   y -= 34;
+
+  // 源泉徴収の別記 (満額請求): 金額欄には含めず参考情報として注記
+  if (wh > 0 && whNoteOnly) {
+    drawRight(
+      `（参考）源泉徴収税額 ¥${wh.toLocaleString()} ／ 差引お振込額 ¥${(invoice.total_amount - wh).toLocaleString()}`,
+      totalBoxRight,
+      y + 20,
+      { size: 9, color: [0.35, 0.35, 0.35] },
+    );
+    y -= 6;
+  }
 
   // 振込先ブロック (見やすい枠 + ラベル付き整列) — 領収書には不要
   y -= 16;

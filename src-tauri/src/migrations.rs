@@ -584,3 +584,15 @@ CREATE INDEX IF NOT EXISTS idx_photo_inbox_taken_at ON photo_inbox(taken_at);
 pub const SCHEMA_V12_SQL: &str = r#"
 ALTER TABLE invoices ADD COLUMN doc_type TEXT DEFAULT 'invoice';
 "#;
+
+/// v13: invoices に税込入力フラグと源泉徴収の扱いを追加 (Round 32).
+///
+/// - tax_inclusive: 1 なら明細の単価・金額を税込として扱う (消費税は内税で逆算)。
+///   0 (デフォルト) は従来通り税抜入力 + 消費税を加算。
+/// - withholding_mode: 'deduct' (デフォルト) は源泉徴収を請求額から差し引く従来動作。
+///   'note' は請求額に含めず参考表示のみ (満額請求し、先方が源泉分を控除して振込む形)。
+/// 既存行はデフォルト値で従来動作のまま。
+pub const SCHEMA_V13_SQL: &str = r#"
+ALTER TABLE invoices ADD COLUMN tax_inclusive INTEGER DEFAULT 0;
+ALTER TABLE invoices ADD COLUMN withholding_mode TEXT DEFAULT 'deduct';
+"#;

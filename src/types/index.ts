@@ -157,11 +157,16 @@ export interface Invoice {
   partner_name: string;
   partner_address: string | null;
   subject: string | null;
+  /** tax_inclusive=0: 税抜合計 / tax_inclusive=1: 税込合計 (明細金額をそのまま合算) */
   subtotal: number;
   tax_amount: number;
+  /** Round 32: 1 なら明細の単価・金額を税込として扱う (消費税は内税で逆算) */
+  tax_inclusive: number;
   /** Round 28: 源泉徴収税 (個人事業主の報酬 10.21% 等)。total_amount から差し引かれる。 */
   withholding_tax: number;
-  /** 請求金額 = subtotal + tax_amount − withholding_tax (実際にクライアントが振込む額) */
+  /** Round 32: 'deduct'=請求額から差し引く / 'note'=請求額に含めず参考表示のみ */
+  withholding_mode: "deduct" | "note";
+  /** 請求金額。deduct: 税込合計 − 源泉徴収 / note: 税込合計 */
   total_amount: number;
   status: "draft" | "sent" | "paid" | "cancelled";
   sent_at: string | null;

@@ -50,6 +50,17 @@ export function extractTaxFromIncluded(amountIncluded: number, taxCode: string |
 }
 
 /**
+ * 報酬・料金の源泉徴収税額 (復興特別所得税込み)。
+ * 100万円以下: 10.21% / 100万円超の部分: 20.42% (所得税法204条・205条)。
+ * base は税抜の報酬額 (請求書で消費税を区分している場合は税抜額が基準)。
+ */
+export function calcWithholdingTax(base: number): number {
+  if (base <= 0) return 0;
+  if (base <= 1_000_000) return Math.floor(base * 0.1021);
+  return Math.floor(102_100 + (base - 1_000_000) * 0.2042);
+}
+
+/**
  * 勘定科目からデフォルトの税区分を推測する
  */
 export function suggestTaxCodeForAccount(accountCategory: string, accountCode: string): string {
