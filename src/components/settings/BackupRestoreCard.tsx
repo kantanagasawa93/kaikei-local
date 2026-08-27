@@ -8,8 +8,13 @@ import {
   HardDriveUpload,
   FolderOpen,
   Trash2,
+  FileImage,
 } from "lucide-react";
-import { cleanupOrphanReceiptFiles, openReceiptsFolder } from "@/lib/receipts";
+import {
+  cleanupOrphanReceiptFiles,
+  migrateRawPdfReceipts,
+  openReceiptsFolder,
+} from "@/lib/receipts";
 import { confirmDialog } from "@/lib/confirm";
 
 /**
@@ -37,6 +42,34 @@ export function BackupRestoreCard({
       onMessage(`整理完了: ${removed}件削除 / ${kept}件保持`);
     } catch (e) {
       onMessage(`整理に失敗: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Round 33: PDF→JPEG 変換 (v0.3.2) 以前に取り込まれた raw PDF 領収書の移行
+  const handleMigratePdf = async () => {
+    if (
+      !(await confirmDialog(
+        "PDF のまま登録されている領収書を 1 ページ目の画像 (JPEG) に変換します。\n" +
+          "変換後はサムネイル表示と AI OCR が使えるようになります。\n" +
+          "元の PDF ファイルは変換成功後に削除されます。"
+      ))
+    )
+      return;
+    setBusy(true);
+    try {
+      const { converted, failed, total } = await migrateRawPdfReceipts();
+      if (total === 0) {
+        onMessage("PDF のままの領収書はありません（移行不要）");
+      } else {
+        onMessage(
+          `PDF領収書の画像化: ${converted}件変換` +
+            (failed > 0 ? ` / ${failed}件失敗（元PDFのまま残しています）` : ""),
+        );
+      }
+    } catch (e) {
+      onMessage(`PDF領収書の画像化に失敗: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -296,6 +329,15 @@ export function BackupRestoreCard({
           <Button onClick={handleCleanup} variant="outline" disabled={busy}>
             <Trash2 className="h-4 w-4 mr-1" />
             孤児ファイル整理
+          </Button>
+          <Button
+            onClick={handleMigratePdf}
+            variant="outline"
+            disabled={busy}
+            title="PDF のまま登録済みの領収書を 1 ページ目 JPEG に変換 (サムネ・AI OCR が有効に)"
+          >
+            <FileImage className="h-4 w-4 mr-1" />
+            PDF領収書を画像化
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
