@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cleanupOrphanReceiptFiles, openReceiptsFolder } from "@/lib/receipts";
+import { confirmDialog } from "@/lib/confirm";
 
 /**
  * 設定画面「バックアップ・復元」: kaikei.db + receipts/ の ZIP 書き出し・復元・
@@ -25,9 +26,9 @@ export function BackupRestoreCard({
 
   const handleCleanup = async () => {
     if (
-      !confirm(
+      !(await confirmDialog(
         "DBに紐付いていない画像ファイルを削除します。\n（通常は削除済み領収書のゴミファイル）"
-      )
+      ))
     )
       return;
     setBusy(true);
@@ -138,9 +139,9 @@ export function BackupRestoreCard({
 
   const handleRestore = async () => {
     if (
-      !confirm(
+      !(await confirmDialog(
         "現在のデータは全て上書きされます。続行しますか？\n念のため事前にバックアップを取ることを推奨します。"
-      )
+      ))
     )
       return;
     setBusy(true);

@@ -31,6 +31,7 @@ import { Plus, Trash2, Calculator, Home } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { DEFAULT_ACCOUNTS, getAccountByCode } from "@/lib/accounts";
 import type { BizAllocation, JournalLine } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 type Row = BizAllocation & {
   total_amount: number;
@@ -45,10 +46,6 @@ export default function AllocationsPage() {
   const [form, setForm] = useState({ account_code: "", business_ratio: 50 });
   const [loading, setLoading] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
-
-  useEffect(() => {
-    load();
-  }, [year]);
 
   async function load() {
     setLoading(true);
@@ -104,6 +101,12 @@ export default function AllocationsPage() {
     setLoading(false);
   }
 
+  useEffect(() => {
+    void (async () => {
+      await load();
+    })();
+  }, [year]);
+
   async function handleAdd() {
     if (!form.account_code) return;
     const account = getAccountByCode(form.account_code);
@@ -130,7 +133,7 @@ export default function AllocationsPage() {
   }
 
   async function handleRecalculate() {
-    if (!confirm("選択年度の按分仕訳を再生成しますか？")) return;
+    if (!(await confirmDialog("選択年度の按分仕訳を再生成しますか？"))) return;
     setRecalculating(true);
     const {
       data: { user },

@@ -55,6 +55,7 @@ import {
   formatAddress,
   type ZipCloudResult,
 } from "@/lib/zipcloud";
+import { confirmDialog } from "@/lib/confirm";
 
 /**
  * 動作確認用プリセット (scripts/gen_real_xtx.mjs と同値)。
@@ -216,7 +217,7 @@ export default function EtaxSettingsPage() {
         return;
       }
       // 候補1件のみ
-      applyZipCandidate(results[0]);
+      await applyZipCandidate(results[0]);
     } catch (e) {
       setMessage(`郵便番号検索に失敗: ${(e as Error).message}`);
     } finally {
@@ -224,14 +225,14 @@ export default function EtaxSettingsPage() {
     }
   };
 
-  const applyZipCandidate = (r: ZipCloudResult) => {
+  const applyZipCandidate = async (r: ZipCloudResult) => {
     const newAddr = formatAddress(r);
     if (
       form.address.trim() &&
       form.address !== newAddr &&
-      !window.confirm(
+      !(await confirmDialog(
         `住所を「${newAddr}」に置き換えます。よろしいですか？\n（建物名・部屋番号は再入力してください）`
-      )
+      ))
     ) {
       return;
     }
@@ -243,11 +244,11 @@ export default function EtaxSettingsPage() {
     );
   };
 
-  const handleLoadSample = () => {
+  const handleLoadSample = async () => {
     if (
-      !window.confirm(
+      !(await confirmDialog(
         "入力中の内容を破棄して、開発者サンプル (サンプル商店 / 山田太郎) を読み込みます。よろしいですか？"
-      )
+      ))
     ) {
       return;
     }

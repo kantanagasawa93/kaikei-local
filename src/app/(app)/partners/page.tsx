@@ -25,6 +25,7 @@ import { Plus, Trash2, Users, Sparkles, CheckSquare, Square, Pencil } from "luci
 import { supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
 import type { Partner } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 const AUTO_LEARNED_TAG = "[auto-learned]";
 
@@ -147,7 +148,7 @@ export default function PartnersPage() {
   async function bulkDelete() {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
-    if (!confirm(`${ids.length} 件の取引先を削除します。よろしいですか？`)) return;
+    if (!(await confirmDialog(`${ids.length} 件の取引先を削除します。よろしいですか？`))) return;
     for (const id of ids) {
       await supabase.from("partners").delete().eq("id", id);
     }
@@ -224,7 +225,7 @@ export default function PartnersPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("この取引先を削除しますか？")) return;
+    if (!(await confirmDialog("この取引先を削除しますか？"))) return;
     await supabase.from("partners").delete().eq("id", id);
     load();
   }

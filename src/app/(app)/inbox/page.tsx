@@ -63,6 +63,7 @@ import {
   type FailureBucket,
 } from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
+import { confirmDialog } from "@/lib/confirm";
 
 type InboxState = InboxRow["state"];
 
@@ -355,7 +356,7 @@ export default function InboxPage() {
       toast.info("未判定の写真がありません");
       return;
     }
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       `未判定 ${count} 件をまとめて「破棄」状態にします。\n\n` +
         `※ 画像ファイル自体は残ります (受信箱内の状態が変わるだけ)。\n` +
         `※ 後で「破棄」タブから個別に「領収書」へ戻すこともできます。\n\n` +
@@ -396,7 +397,7 @@ export default function InboxPage() {
       }
     }
 
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       `${count} 枚の領収書を AI OCR にかけて自動仕訳します。\n\n` +
         `Claude API への画像送信が ${count} 回発生します (ライセンスキーの月次使用量を消費)。${warnMsg}\n\n` +
         `続行しますか?`
@@ -656,7 +657,7 @@ export default function InboxPage() {
       toast.success("仕訳化しました — 仕訳帳で確認できます");
     } catch (e) {
       if (e instanceof BlockedByPattern) {
-        const open = window.confirm(
+        const open = await confirmDialog(
           `仕訳化を止めました。\n\n${e.hint}\n\n` +
             `「OK」で AI OCR の設定画面を開きます。`,
         );
@@ -1286,9 +1287,9 @@ export default function InboxPage() {
                   const targets = items.filter((it) => matchReason(it, want));
                   if (targets.length === 0) return;
                   if (
-                    !confirm(
+                    !(await confirmDialog(
                       `${targets.length} 件を「未判定」に戻します。よろしいですか?`,
-                    )
+                    ))
                   )
                     return;
                   let restored = 0;

@@ -12,6 +12,7 @@ import { ArrowLeft, Sparkles, Wand2, Image as ImageIcon, X, ExternalLink } from 
 import Link from "next/link";
 import { rejournalize } from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
+import { confirmDialog } from "@/lib/confirm";
 
 /** 編集画面で参照する、元領収書の軽量ビュー。 */
 type ReceiptLite = {
@@ -54,7 +55,7 @@ function EditInner() {
   // 再仕訳化ボタンのハンドラ
   async function handleRejournalize() {
     if (!id || rejournalizing) return;
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       "現在の仕訳と領収書を削除し、写真を受信箱に戻して AI OCR で再度仕訳化します。\n\n" +
         "(誤操作の場合は、仕訳帳の「直近の差し戻しを取り消す」で復元できます)\n\n" +
         "続行しますか?",

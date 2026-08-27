@@ -42,6 +42,7 @@ import {
 } from "@/lib/journal-tags";
 import { toast } from "@/lib/toast";
 import type { Journal, JournalLine } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 interface JournalWithLines extends Journal {
   journal_lines: JournalLine[];
@@ -178,10 +179,10 @@ export default function JournalsPage() {
     if (selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
     if (
-      !confirm(
+      !(await confirmDialog(
         `${ids.length} 件の仕訳を削除します。\n\n` +
           `(直後なら「直近の一括削除を取り消す」で復元できます)`,
-      )
+      ))
     )
       return;
     const deleted = await bulkDeleteJournals(ids);
@@ -326,7 +327,7 @@ export default function JournalsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("この仕訳を削除しますか？")) return;
+    if (!(await confirmDialog("この仕訳を削除しますか？"))) return;
     await supabase.from("journals").delete().eq("id", id);
     setJournals((prev) => prev.filter((j) => j.id !== id));
   }
@@ -337,7 +338,7 @@ export default function JournalsPage() {
   // Round 6 ㊍: 削除前にスナップショットを undo stack に積むので、押した直後でも
   //              取り消せる (上の handleUndoReverse から復元)。
   async function handleReverseToInbox(id: string) {
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       "この仕訳と紐付く領収書レコードを削除して、写真を「未判定」状態の受信箱に戻します。\n\n" +
         "戻したあと、受信箱の「いますぐ仕訳化」または「領収書として登録」から再仕訳できます。\n\n" +
         "(押した直後なら「直近の差し戻しを取り消す」ボタンで復元可能)\n\n" +

@@ -20,6 +20,7 @@ import type { Receipt } from "@/types";
 import { ReceiptDropZone } from "@/components/receipt-drop-zone";
 import { downloadCsv } from "@/lib/journal-export";
 import { toast } from "@/lib/toast";
+import { confirmDialog } from "@/lib/confirm";
 
 export default function ReceiptsPage() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -28,10 +29,6 @@ export default function ReceiptsPage() {
   // Round 24 ⓑ: bulk select 状態
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    loadReceipts();
-  }, []);
-
   async function loadReceipts() {
     const { data } = await supabase
       .from("receipts")
@@ -39,6 +36,12 @@ export default function ReceiptsPage() {
       .order("created_at", { ascending: false });
     if (data) setReceipts(data);
   }
+
+  useEffect(() => {
+    void (async () => {
+      await loadReceipts();
+    })();
+  }, []);
 
   function toggleSelected(id: string, e: React.MouseEvent) {
     e.preventDefault();
@@ -66,7 +69,7 @@ export default function ReceiptsPage() {
 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!confirm(`${selectedIds.size} 件の領収書を削除します。よろしいですか?`))
+    if (!(await confirmDialog(`${selectedIds.size} 件の領収書を削除します。よろしいですか?`)))
       return;
     let count = 0;
     for (const id of selectedIds) {

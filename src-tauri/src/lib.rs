@@ -31,6 +31,40 @@ fn list_pending_lan_uploads() -> Vec<lan_server::PendingUpload> {
 }
 
 // ────────────────────────────────────────────────────────────
+// 確認ダイアログ (Round 33)
+//
+// tauri-plugin-dialog は init-iife.js で window.confirm を
+// `plugin:dialog|confirm` の invoke に上書きするが、クレート側 (〜2.7.2) は
+// confirm コマンドを登録していないため常に reject する。さらに上書き後の
+// window.confirm は async なので、同期前提の `if (!confirm(...))` は
+// コマンドの有無に関わらず確認をすり抜ける。
+// → フロントは lib/confirm.ts の confirmDialog() (await 前提) に統一し、
+//   実体はこのコマンドがネイティブの OK/キャンセル ダイアログを出す。
+// ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn confirm_dialog(
+    app: tauri::AppHandle,
+    message: String,
+    title: Option<String>,
+) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    // blocking_show はスレッドをブロックするので async ランタイムから逃がす
+    tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .message(&message)
+            .title(title.as_deref().unwrap_or("確認"))
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "OK".to_string(),
+                "キャンセル".to_string(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+// ────────────────────────────────────────────────────────────
 // Photos.framework (macOS) 連携コマンド
 //   - 写真ライブラリへのアクセス権限の確認・リクエスト
 //   - 指定日時以降の写真をスキャンして、画像を inbox/ にコピー
@@ -1413,6 +1447,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_lan_upload_info,
             list_pending_lan_uploads,
+            confirm_dialog,
             photos_authorization_status,
             photos_request_authorization,
             photos_scan_recent,

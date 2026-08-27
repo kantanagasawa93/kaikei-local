@@ -23,6 +23,7 @@ import {
   undoBulkDeleteInvoices,
   getInvoiceBulkUndoCount,
 } from "@/lib/invoice-bulk";
+import { confirmDialog } from "@/lib/confirm";
 
 const statusLabels: Record<Invoice["status"], { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
   draft: { label: "下書き", variant: "outline" },
@@ -69,11 +70,11 @@ export default function InvoicesPage() {
     if (selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
     if (
-      !confirm(
+      !(await confirmDialog(
         `${ids.length} 件の請求書を削除します。\n\n` +
           `紐付く品目 (invoice_items) もまとめて削除されます。\n` +
           `(直後なら「直近の一括削除を取り消す」で復元できます)`,
-      )
+      ))
     )
       return;
     try {

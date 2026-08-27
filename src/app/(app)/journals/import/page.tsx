@@ -16,6 +16,7 @@ import {
   type GenericMapping,
 } from "@/lib/journal-import";
 import { commitParsedJournals } from "@/lib/journal-commit";
+import { confirmDialog } from "@/lib/confirm";
 
 const FORMAT_LABELS: Record<ImportFormat, string> = {
   moneyforward: "マネーフォワード クラウド会計",
@@ -83,9 +84,9 @@ export default function JournalImportPage() {
   async function handleCommit() {
     if (!parseResult || parseResult.journals.length === 0) return;
     if (
-      !confirm(
+      !(await confirmDialog(
         `${parseResult.journals.length}件の仕訳を KAIKEI LOCAL に取り込みます。\n同じ日付・摘要の仕訳が既にある場合はスキップします。`
-      )
+      ))
     )
       return;
     setCommitting(true);

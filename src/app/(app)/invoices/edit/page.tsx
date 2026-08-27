@@ -33,6 +33,7 @@ import {
 import { exportInvoicePdf } from "@/lib/invoice-pdf";
 import { downloadBlob } from "@/lib/pdf-export";
 import type { Invoice, InvoiceItem, IssuerSettings, Partner } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 type ItemInput = {
   id?: string;
@@ -268,7 +269,7 @@ function EditInner() {
     if (!isReceipt && !issuer?.bank_info) missing.push("振込先 (口座情報)");
     if (!issuer?.address) missing.push("住所");
     if (missing.length > 0) {
-      const ok = confirm(
+      const ok = await confirmDialog(
         `次の項目が「発行者情報」に未登録です:\n  ・ ${missing.join("\n  ・ ")}\n\n` +
           `このまま PDF を出すと、振込先などが空欄のままになります。\n` +
           `先に「発行者情報」を登録しますか?\n\n` +

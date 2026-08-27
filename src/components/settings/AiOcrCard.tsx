@@ -17,6 +17,7 @@ import {
 } from "@/lib/ai-ocr";
 import { AiOcrQuotaBanner } from "@/components/ai-ocr-quota-banner";
 import Link from "next/link";
+import { confirmDialog } from "@/lib/confirm";
 
 type LicenseInfo = {
   valid: boolean;
@@ -101,7 +102,7 @@ export function AiOcrCard() {
   };
 
   const handleLicenseClear = async () => {
-    if (!window.confirm("保存済みのライセンスキーを削除しますか？\n無料プラン扱いに戻ります。")) {
+    if (!(await confirmDialog("保存済みのライセンスキーを削除しますか？\n無料プラン扱いに戻ります。"))) {
       return;
     }
     try {

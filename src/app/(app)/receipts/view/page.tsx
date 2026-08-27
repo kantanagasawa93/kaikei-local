@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { db, resolveLocalImageUrl } from "@/lib/localDb";
 import { formatSqliteDate } from "@/lib/date-utils";
 import { deleteReceipt } from "@/lib/receipts";
+import { confirmDialog } from "@/lib/confirm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +39,7 @@ function ReceiptDetailInner() {
   }
 
   async function handleDelete() {
-    if (!id || !confirm("この領収書を削除しますか？画像ファイルも削除されます。")) return;
+    if (!id || !(await confirmDialog("この領収書を削除しますか？画像ファイルも削除されます。"))) return;
     await deleteReceipt(id);
     router.push("/receipts");
   }

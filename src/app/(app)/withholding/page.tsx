@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, FileText, Trash2, Sparkles, Save } from "lucide-react";
 import type { WithholdingSlip } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 export default function WithholdingPage() {
   const currentYear = new Date().getFullYear();
@@ -117,7 +118,7 @@ export default function WithholdingPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("この源泉徴収票を削除しますか？")) return;
+    if (!(await confirmDialog("この源泉徴収票を削除しますか？"))) return;
     await supabase.from("withholding_slips").delete().eq("id", id);
     setSlips((prev) => prev.filter((s) => s.id !== id));
   }

@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Plus, Landmark, CreditCard, Trash2 } from "lucide-react";
 import type { BankAccount } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 export default function BankAccountsPage() {
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
@@ -32,10 +33,6 @@ export default function BankAccountsPage() {
   const [accountType, setAccountType] = useState<"bank" | "credit_card">("bank");
   const [last4, setLast4] = useState("");
 
-  useEffect(() => {
-    loadAccounts();
-  }, []);
-
   async function loadAccounts() {
     const { data } = await supabase
       .from("bank_accounts")
@@ -43,6 +40,12 @@ export default function BankAccountsPage() {
       .order("created_at", { ascending: false });
     if (data) setAccounts(data);
   }
+
+  useEffect(() => {
+    void (async () => {
+      await loadAccounts();
+    })();
+  }, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -65,7 +68,7 @@ export default function BankAccountsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("この口座を削除しますか？関連する明細も全て削除されます。")) return;
+    if (!(await confirmDialog("この口座を削除しますか？関連する明細も全て削除されます。"))) return;
     await supabase.from("bank_accounts").delete().eq("id", id);
     setAccounts((prev) => prev.filter((a) => a.id !== id));
   }

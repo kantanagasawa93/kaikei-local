@@ -14,6 +14,7 @@ import {
   type ParsedAccount,
   type ParsedPartner,
 } from "@/lib/master-import";
+import { confirmDialog } from "@/lib/confirm";
 
 type TabKey = "accounts" | "partners";
 
@@ -50,7 +51,7 @@ export default function MasterImportPage() {
 
   async function commitAccountsImport() {
     if (!accParsed) return;
-    if (!confirm(`${accParsed.length}件の勘定科目を取り込みます。既存は${accUpdateExisting ? "上書き" : "スキップ"}します。続行しますか？`)) return;
+    if (!(await confirmDialog(`${accParsed.length}件の勘定科目を取り込みます。既存は${accUpdateExisting ? "上書き" : "スキップ"}します。続行しますか？`))) return;
     setAccUpdating(true);
     try {
       const res = await commitAccounts(accParsed, { updateExisting: accUpdateExisting });
@@ -64,7 +65,7 @@ export default function MasterImportPage() {
 
   async function commitPartnersImport() {
     if (!ptParsed) return;
-    if (!confirm(`${ptParsed.length}件の取引先を取り込みます。既存は${ptUpdateExisting ? "上書き" : "スキップ"}します。続行しますか？`)) return;
+    if (!(await confirmDialog(`${ptParsed.length}件の取引先を取り込みます。既存は${ptUpdateExisting ? "上書き" : "スキップ"}します。続行しますか？`))) return;
     setPtUpdating(true);
     try {
       const res = await commitPartners(ptParsed, { updateExisting: ptUpdateExisting });

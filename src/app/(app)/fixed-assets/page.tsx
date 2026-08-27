@@ -33,6 +33,7 @@ import { supabase } from "@/lib/supabase";
 import { DEFAULT_ACCOUNTS, getAccountByCode } from "@/lib/accounts";
 import { straightLineYear, bookValueAtYearEnd } from "@/lib/depreciation";
 import type { FixedAsset } from "@/types";
+import { confirmDialog } from "@/lib/confirm";
 
 const ASSET_ACCOUNT_CODES = ["160", "161", "162", "163", "164", "165"];
 
@@ -110,7 +111,7 @@ export default function FixedAssetsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("この固定資産を削除しますか？")) return;
+    if (!(await confirmDialog("この固定資産を削除しますか？"))) return;
     await supabase.from("fixed_assets").delete().eq("id", id);
     load();
   }
@@ -159,11 +160,11 @@ export default function FixedAssetsPage() {
     }
     const totalBiz = todo.reduce((s, t) => s + t.businessDepreciation, 0);
     if (
-      !confirm(
+      !(await confirmDialog(
         `${year}-12-31 付で ${todo.length} 件の減価償却仕訳を作成します。\n` +
           `経費計上額 (事業分) 合計: ¥${totalBiz.toLocaleString()}\n` +
           `作成後は仕訳帳から通常の仕訳と同様に編集・削除できます。`
-      )
+      ))
     )
       return;
     setPosting(true);
