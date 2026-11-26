@@ -1,6 +1,6 @@
 {
   "name": "kaikei",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "scripts": {
     "predev": "node scripts/sync-pdfjs-assets.mjs",
