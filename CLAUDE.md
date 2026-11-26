@@ -19,6 +19,9 @@ codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist --o
 open "/Applications/KAIKEI LOCAL.app"
 
 # 2) 公式リリース (署名+公証+両アーキ DMG → GitHub Release)
+#    ※ ビルド後に **起動中の KAIKEI LOCAL を終了して /Applications を新ビルドに差し替える**
+#      (build-all.sh → install-and-open.sh)。ユーザが作業中かもしれない時は先に一言伝えるか、
+#      SKIP_LOCAL_INSTALL=1 を付けて差し替えを止める
 scripts/release.sh v0.X.Y
 ```
 

@@ -43,6 +43,8 @@ scripts/release.sh — KAIKEI LOCAL リリース発火
   SKIP_PUSH_CHECK=1 git fetch + ahead/behind 判定を省略
   SKIP_PUSH=1       ahead でも push しない (gh release create が古い HEAD を指す可能性)
   SKIP_VERIFY=1     末尾の verify-release.sh を省略
+  SKIP_LOCAL_INSTALL=1  ビルド後に手元の /Applications/KAIKEI LOCAL.app を差し替えない
+                        (既定では起動中のアプリを終了して新ビルドに入れ替え、起動し直す)
 
 事前準備 (1 回だけ):
   scripts/release-setup-credentials.sh   APPLE_ID + app-specific password を keychain に保存
