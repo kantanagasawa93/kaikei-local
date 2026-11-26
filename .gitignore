@@ -58,3 +58,10 @@ next-env.d.ts
 
 # pdf.js の cmaps / standard_fonts (scripts/sync-pdfjs-assets.mjs がビルド前に node_modules からコピーする)
 /public/pdfjs/
+
+# 実機の画面を録った動画・静止画は絶対にコミットしない
+# (デスクトップ全体が写った録画を公開サイトとアプリに同梱してしまった事故の再発防止)
+/public/demo*.mp4
+/public/demo-poster*
+/docs/assets/demo*.mp4
+/docs/assets/demo-poster*

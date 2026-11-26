@@ -75,8 +75,11 @@ cmd_ui_screenshot() {
   local bounds
   bounds=$(osascript "$SCRIPT_DIR/verify/window-bounds.applescript" "$APP_NAME" 2>/dev/null || true)
   if [ -z "$bounds" ]; then
-    # 取れない時は全画面
-    screencapture -x "$out"
+    # 窓の位置が取れない時に全画面を撮ってはいけない。
+    # 以前はここで全画面にフォールバックしており、デスクトップ全体 (メモ・チャット・ファイル名)
+    # が写った画像からデモ動画が作られ、そのまま公開サイトとアプリに同梱されてしまった。
+    echo "ERROR: $APP_NAME のウィンドウ位置を取得できないため撮影を中止しました (全画面は撮りません)" >&2
+    return 1
   else
     # bounds = "X Y W H"
     # shellcheck disable=SC2086
@@ -557,32 +560,14 @@ cmd_autorun() {
     echo "  ⚠️  release.sh dry-run 失敗 — 詳細は $dry_log"
   fi
 
-  # ㊔ Round 20: REGEN_DEMO=1 なら autorun 後に demo 動画も再生成
-  # UI が変わったら demo 動画も古くなるので、ラウンド完了時に
-  # docs/assets/ + public/ の MP4 を最新版に差し替えるオプション。
-  # ffmpeg + KAIKEI LOCAL.app 起動が必要。
-  if [ -n "${REGEN_DEMO:-}" ] && command -v ffmpeg >/dev/null 2>&1; then
+  # デモ動画の自動再生成 + commit + push (旧 REGEN_DEMO=1) は廃止した。
+  # 実機の画面を録った動画には実データ・他アプリの画面が写り込むため、
+  # 公開サイト (docs/) やアプリ同梱 (public/) に自動で入れてはいけない。
+  # デモ素材は scripts/capture-lp-screenshots.mjs (デモデータ) で作り、
+  # 人が中身を確認してから手で追加すること。
+  if [ -n "${REGEN_DEMO:-}" ]; then
     echo ""
-    echo "==> 4. demo 動画再生成 (REGEN_DEMO=1)"
-    local demo_out
-    demo_out=$(cmd_demo /tmp/kaikei-autorun-demo.mp4 2>&1 | tail -1)
-    if [ -f "/tmp/kaikei-autorun-demo.mp4" ]; then
-      cp /tmp/kaikei-autorun-demo.mp4 docs/assets/demo-v0.3.0.mp4
-      cp /tmp/kaikei-autorun-demo.mp4 public/demo.mp4
-      echo "  ✓ docs/assets/ + public/ を更新 ($(du -h /tmp/kaikei-autorun-demo.mp4 | awk '{print $1}'))"
-      git add docs/assets/demo-v0.3.0.mp4 public/demo.mp4
-      if git diff --cached --quiet; then
-        echo "  (動画に変更なし — 追加 commit 不要)"
-      else
-        git commit -m "chore: autorun で demo 動画再生成
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-        git push origin "$current_branch"
-        echo "  ✓ demo 動画 commit + push"
-      fi
-    else
-      echo "  ✗ demo 生成失敗"
-    fi
+    echo "  ⚠️  REGEN_DEMO は廃止されました (実機の画面録画を自動で公開しないため)。無視します"
   fi
 }
 

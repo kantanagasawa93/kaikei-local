@@ -32,16 +32,6 @@ const STEPS = [
     color: "text-blue-600",
   },
   {
-    // ㊊ Round 18: アプリ同梱の demo 動画 (主要 4 画面ツアー)
-    // public/demo.mp4 を Tauri が静的配信する形で参照する
-    icon: Shield,
-    title: "実際の使い方を 16 秒で",
-    description:
-      "ダッシュボード → 写真受信箱 → 仕訳帳 → AI OCR ログ までの主要画面を見られます。",
-    color: "text-blue-600",
-    isVideo: true,
-  },
-  {
     icon: Receipt,
     title: "領収書をためる",
     description:
@@ -75,43 +65,6 @@ const STEPS = [
 const SLIDE_COUNT = STEPS.length;
 // 基本情報入力ステップのインデックス (スライドの後)
 const INFO_STEP = SLIDE_COUNT;
-
-/**
- * ㊕ Round 20: video が読み込めない時 (asset 不在 / Tauri バンドル外で
- * デモ環境で動かしている時) に poster 画像へ fallback する小コンポーネント。
- * onError で失敗を検知して img へ差し替える。
- */
-function VideoWithFallback() {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return (
-      <img
-        src="/demo-poster.jpg"
-        alt="KAIKEI LOCAL のデモ"
-        className="mx-auto w-full rounded-lg border bg-black"
-        style={{ maxHeight: "320px", objectFit: "contain" }}
-        onError={() => {
-          /* poster も無ければそのまま (空表示) */
-        }}
-      />
-    );
-  }
-  return (
-    <video
-      controls
-      autoPlay
-      muted
-      loop
-      preload="metadata"
-      poster="/demo-poster.jpg"
-      className="mx-auto w-full rounded-lg border bg-black"
-      style={{ maxHeight: "320px" }}
-      onError={() => setFailed(true)}
-    >
-      <source src="/demo.mp4" type="video/mp4" />
-    </video>
-  );
-}
 
 export function Onboarding() {
   const [show, setShow] = useState(false);
@@ -365,17 +318,11 @@ export function Onboarding() {
             ))}
           </div>
 
-          {/* ㊊ Round 18: video ステップは動画再生、それ以外はアイコン表示
-              ㊕ Round 20: 動画ロード失敗時に poster 画像へ fallback */}
-          {"isVideo" in current && current.isVideo ? (
-            <VideoWithFallback />
-          ) : (
-            <div
-              className={`mx-auto w-16 h-16 rounded-2xl bg-muted flex items-center justify-center ${current.color}`}
-            >
-              <Icon className="w-8 h-8" />
-            </div>
-          )}
+          <div
+            className={`mx-auto w-16 h-16 rounded-2xl bg-muted flex items-center justify-center ${current.color}`}
+          >
+            <Icon className="w-8 h-8" />
+          </div>
 
           <div className="space-y-2">
             <h2 className="text-xl font-bold">{current.title}</h2>
