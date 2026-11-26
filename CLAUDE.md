@@ -136,8 +136,13 @@ Round 33 の全体レビューで見つけて、まだ直していないもの�
 - 科目セレクトに DB の科目 (マスタ取込分) が出ない / 請求書の whAuto が保存されない / 原本 PDF を開くボタン
 - journals/page.tsx の分割 (旧 ㊱) / freee・MF エクスポートの税区分マッピング表 (旧 ㊋)
 - eslint 既存 8 エラーの解消 (hoisted 関数の使用前参照 6 / setState-in-effect 2)
+- AI 読み取りの残高切れ (`upstream_credits_depleted`) をアプリ側でも分類する (いまは「原因不明」に入る) /
+  その時に当日枠切れと同じく端末内 OCR へ切り替えるかを決める (vision-ocr-fallback.ts isQuotaError)
+- 取り込んだら元の写真・ファイルを消すオプション (写真アプリからの削除は OS の確認ダイアログが毎回出る /
+  iCloud 写真なら iPhone からも消える / いまの権限要求は読み取り用なので readWrite が要る)
 - api-server (Vercel) は 2026-11-26 に本番デプロイ済み (`cd api-server && vercel --prod` → api-server-lac.vercel.app):
-  OCR の利用回数を失敗時に返す / 台帳に届かない時は 503 / Stripe webhook は secret 未設定なら拒否。
+  OCR の利用回数を失敗時に返す / 台帳に届かない時は 503 / Stripe webhook は secret 未設定なら拒否 /
+  上流 (Gemini) の前払いクレジット切れ (402) は 503 + `code: upstream_credits_depleted` で返す (api-server/lib/gemini-errors.ts)。
   本番の env は GEMINI_API_KEY / OWNER_LICENSE_KEY / APP_SECRET のみ = **ライセンス台帳 (Upstash) と Stripe は未設定**。
   オーナーキー以外は使えない状態なので、ライセンスを販売するならここの整備が先
 
@@ -310,4 +315,6 @@ Round 33 の全体レビューで見つけて、まだ直していないもの�
 - **伝票番号だけで仕訳を束ねない**: 番号が月ごと・年ごとに振り直される CSV では「同じ番号・別の日付」が後勝ちで上書きされて消える。番号 + 日付で束ねる
 - **実機の画面を録った動画・スクリーンショットを公開物に入れない**: verify-app.sh の画面キャプチャは「窓の位置が取れない時は全画面」にフォールバックしていて、デスクトップ全体 (メモ・チャット・ファイル名) が写ったデモ動画を自動で commit + push し、LP (docs/) とアプリ (public/ → 全ユーザのオンボーディング) に同梱してしまった (v0.3.0〜v0.3.3)。公開する素材は必ずデモデータ (scripts/capture-lp-screenshots.mjs) で作り、**中身を人が見てから** 手で追加する。`public/` に置いたものは全部アプリに埋め込まれて配布される
 - **サンプルデータ・placeholder に実在の個人情報を書かない**: 動作確認用プリセットや入力例に本人の氏名・住所・電話番号・利用者識別番号を書くと、公開リポジトリの履歴と配布バイナリ (placeholder は本番ビルドにも残る) の両方に入る。架空の値 (山田太郎 / 東京都千代田区千代田1-1-1 / 1234567890123456) だけを使う
+- **api-server のエラー文言は、配布済みのアプリが正規表現で分類している**: 文言に「上限」「超過」「本日」「接続」などが入ると、別の原因 (ライセンス上限・当日枠切れ・ネットワーク不調) として案内される (classifyOcrError / isQuotaError)。文言を足す・変える時は gemini-errors.test.ts のように取り違えないことをテストし、機械判定用の `code` を付ける
+- **AI 読み取りの不調は、まずサーバのログで上流のエラーを見る**: アプリには「AI 読み取りに失敗しました」としか出ない失敗でも、上流 (Gemini) の本文に原因が書いてある。`cd api-server && vercel logs --environment production --since 30m --no-branch --no-follow --expand`。本番で試す時は架空の領収書画像だけを送る
 - **履歴は 2026-11-26 に書き換え済み (git filter-repo)**: それ以前のコミット ID は全部変わっている。このファイルや CHANGELOG に出てくる古いコミット ID (例: `ea22c7b`, `f408b31`) は現在の履歴には存在しない。作成者名は GitHub ユーザー名に統一 (このリポジトリの user.name / user.email を設定済み)

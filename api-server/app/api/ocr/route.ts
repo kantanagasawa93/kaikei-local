@@ -5,6 +5,7 @@ import {
   isLicenseValid,
   refundUsage,
 } from "@/lib/license";
+import { classifyGeminiFailure, type GeminiFailureCode } from "@/lib/gemini-errors";
 
 // 約30秒タイムアウト
 export const maxDuration = 30;
@@ -47,9 +48,13 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: corsHeaders() });
 }
 
-/** Gemini API 呼び出しが上流エラーになった時に投げる (HTTP 502 にマップ) */
+/** Gemini API 呼び出しが上流エラーになった時に投げる (返すステータスと文言は gemini-errors.ts が決める) */
 class GeminiUpstreamError extends Error {
-  constructor(message: string, public readonly httpStatus = 502) {
+  constructor(
+    message: string,
+    public readonly httpStatus: number,
+    public readonly code: GeminiFailureCode,
+  ) {
     super(message);
   }
 }
@@ -96,14 +101,9 @@ async function callGemini(
   if (!res.ok) {
     const errText = await res.text();
     console.error("Gemini API error:", res.status, errText);
-    // 429 RESOURCE_EXHAUSTED は Free Tier 上限超過。ユーザに正確に伝える。
-    if (res.status === 429) {
-      throw new GeminiUpstreamError(
-        "AI OCR の本日利用枠を超えました。明日以降に再試行してください (api-server の Gemini 課金を有効にすると恒久的に解決します)",
-        429,
-      );
-    }
-    throw new GeminiUpstreamError("AI 読み取りに失敗しました");
+    // 当日枠切れ (429) と前払いクレジット切れ (402) は、原因が分かる文言で返す。
+    const failure = classifyGeminiFailure(res.status, errText);
+    throw new GeminiUpstreamError(failure.error, failure.status, failure.code);
   }
   const data = await res.json();
   const text: string =
@@ -248,7 +248,7 @@ export async function POST(req: NextRequest) {
     await refundUsage(licenseKey);
     if (e instanceof GeminiUpstreamError) {
       return NextResponse.json(
-        { error: e.message },
+        { error: e.message, code: e.code },
         { status: e.httpStatus, headers: corsHeaders() }
       );
     }

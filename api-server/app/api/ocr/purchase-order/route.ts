@@ -17,6 +17,7 @@ import {
   isLicenseValid,
   refundUsage,
 } from "@/lib/license";
+import { classifyGeminiFailure } from "@/lib/gemini-errors";
 
 export const maxDuration = 30;
 export const runtime = "nodejs";
@@ -184,18 +185,11 @@ export async function POST(req: NextRequest) {
       console.error("Gemini API error (PO):", res.status, errText);
       // 結果を返せなかったので、消費した 1 枚分を戻す
       await refundUsage(licenseKey);
-      if (res.status === 429) {
-        return NextResponse.json(
-          {
-            error:
-              "AI OCR の本日利用枠を超えました。明日以降に再試行してください (api-server の Gemini 課金を有効にすると恒久的に解決します)",
-          },
-          { status: 429, headers: corsHeaders() }
-        );
-      }
+      // 当日枠切れ (429) と前払いクレジット切れ (402) は、原因が分かる文言で返す。
+      const failure = classifyGeminiFailure(res.status, errText);
       return NextResponse.json(
-        { error: "AI 読み取りに失敗しました" },
-        { status: 502, headers: corsHeaders() }
+        { error: failure.error, code: failure.code },
+        { status: failure.status, headers: corsHeaders() }
       );
     }
 
