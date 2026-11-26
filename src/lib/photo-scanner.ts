@@ -476,6 +476,25 @@ export function splitScanWindows(
 }
 
 /**
+ * 期間スキャンの実行計画: **新しい区間から順に** 並べる (純関数)。
+ *
+ *   - 古い方から始めると、「過去 1 年」を選んだ直後に 1 年前の日付だけが表示され、
+ *     「1 年前の一部だけを取り込んでいる」ように見える。途中で中断した時に手元に残るのも
+ *     古い写真だけになる。新しい方から処理すれば、最近の領収書が先に受信箱へ入る。
+ *   - 「現在まで」の期間 (openEnded) では、いちばん新しい区間だけ終わりを区切らない。
+ *     その区間は通常のスキャンと同じ扱いになり、次回スキャンの起点も進む。
+ */
+export function planScanWindows(
+  fromUnix: number,
+  toUnix: number,
+  openEnded: boolean,
+  windowSeconds?: number,
+): ScanRange[] {
+  const newestFirst = splitScanWindows(fromUnix, toUnix, windowSeconds).reverse();
+  return newestFirst.map((w, i) => (i === 0 && openEnded ? { sinceUnix: w.sinceUnix } : w));
+}
+
+/**
  * スキャン後に「次回の起点」(カーソル) をどこへ動かすか。動かさない時は null (純関数)。
  *
  *   - 終わりを区切った期間 (過去の一部分) のスキャンでは動かさない。動かすと、
@@ -982,11 +1001,15 @@ export function resolveScanPeriod(
 
 /** 期間指定スキャンの進み具合 */
 export interface PeriodScanProgress {
-  /** いま処理している区間 (1 始まり) と区間の総数 */
+  /** いま処理している区間 (1 始まり・新しい方から数える) と区間の総数 */
   windowIndex: number;
   windowCount: number;
+  /** いま処理している区間 */
   sinceUnix: number;
   untilUnix: number;
+  /** 指定された期間の全体 */
+  periodSinceUnix: number;
+  periodUntilUnix: number;
   /** 区間内の進み具合。写真の取得が終わるまでは 0 / 0 */
   done: number;
   total: number;
@@ -1005,8 +1028,9 @@ export interface PeriodScanResult extends ScanResult {
  *
  * @param period fromUnix より後、toUnix まで (省略時は現在まで) に撮影された写真が対象
  *
+ * 2 週間ごとの区間に分け、新しい区間から順に処理する (planScanWindows)。
  * 既に受信箱にある写真 (取り込み済み・破棄済みを含む) は、もう一度は入らない。
- * 中断した時は、処理し終えた区間までの結果が残る。
+ * 中断した時は、処理し終えた区間 (= 新しい側) までの結果が残る。
  */
 export async function scanPeriod(
   period: { fromUnix: number; toUnix?: number },
@@ -1018,7 +1042,7 @@ export async function scanPeriod(
   // 次回の起点も進む)
   const openEnded = period.toUnix === undefined || period.toUnix >= now;
   const to = openEnded ? now : (period.toUnix as number);
-  const windows = splitScanWindows(period.fromUnix, to);
+  const windows = planScanWindows(period.fromUnix, to, openEnded);
   if (windows.length === 0) {
     throw new Error("スキャンする期間が正しくありません（開始日が終了日より後になっています）");
   }
@@ -1042,7 +1066,6 @@ export async function scanPeriod(
       break;
     }
     const w = windows[i];
-    const isLast = i === windows.length - 1;
     const emit = (done: number, count: number, lastItem?: ScanItemProgress) => {
       if (!onProgress) return;
       try {
@@ -1050,7 +1073,10 @@ export async function scanPeriod(
           windowIndex: i + 1,
           windowCount: windows.length,
           sinceUnix: w.sinceUnix,
-          untilUnix: w.untilUnix,
+          // 終わりを区切らない区間 (いちばん新しい区間) は「いま」まで
+          untilUnix: w.untilUnix ?? to,
+          periodSinceUnix: period.fromUnix,
+          periodUntilUnix: to,
           done,
           total: count,
           lastItem,
@@ -1060,10 +1086,7 @@ export async function scanPeriod(
       }
     };
     emit(0, 0);
-    const r = await scanNow("manual", undefined, emit, signal, {
-      sinceUnix: w.sinceUnix,
-      untilUnix: isLast && openEnded ? undefined : w.untilUnix,
-    });
+    const r = await scanNow("manual", undefined, emit, signal, w);
     total.scanned += r.scanned;
     total.newPhotos += r.newPhotos;
     total.receiptCount += r.receiptCount;

@@ -401,7 +401,8 @@ export default function PhotoScanSettingsPage() {
               <div className="text-sm font-medium">期間を指定してスキャン</div>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                 前回より前に撮った写真も対象にできます。既に受信箱にある写真（取り込み済み・破棄済みを含む）は、
-                もう一度は入りません。長い期間ほど時間がかかり、途中で中断できます。
+                もう一度は入りません。期間は 2 週間ずつに区切って、新しい方から順に処理します。
+                長い期間ほど時間がかかり、途中で中断できます（中断しても、処理済みの分は残ります）。
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -451,12 +452,29 @@ export default function PhotoScanSettingsPage() {
               )}
             </div>
             {periodProgress && (
-              <div className="text-xs text-muted-foreground" role="status">
-                区間 {periodProgress.windowIndex} / {periodProgress.windowCount}（
-                {formatDay(periodProgress.sinceUnix + 1)}〜{formatDay(periodProgress.untilUnix)}）:{" "}
-                {periodProgress.total > 0
-                  ? `${periodProgress.done} / ${periodProgress.total} 枚を判定中`
-                  : "写真を取得中…"}
+              <div className="text-xs text-muted-foreground space-y-1" role="status">
+                <div>
+                  対象の期間: {formatDay(periodProgress.periodSinceUnix + 1)}〜
+                  {formatDay(periodProgress.periodUntilUnix)}（2 週間ずつ、新しい方から順に処理します）
+                </div>
+                <div>
+                  {periodProgress.windowIndex} / {periodProgress.windowCount} 区間目（
+                  {formatDay(periodProgress.sinceUnix + 1)}〜{formatDay(periodProgress.untilUnix)} の分）:{" "}
+                  {periodProgress.total > 0
+                    ? `${periodProgress.done} / ${periodProgress.total} 枚を判定中`
+                    : "写真を取得中…"}
+                </div>
+                <div
+                  className="h-1.5 rounded bg-muted overflow-hidden"
+                  aria-label={`全体の進み具合 ${periodProgress.windowIndex - 1} / ${periodProgress.windowCount} 区間`}
+                >
+                  <div
+                    className="h-full bg-primary transition-all"
+                    style={{
+                      width: `${Math.round(((periodProgress.windowIndex - 1) / periodProgress.windowCount) * 100)}%`,
+                    }}
+                  />
+                </div>
               </div>
             )}
           </div>

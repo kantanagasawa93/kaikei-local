@@ -6,6 +6,7 @@ import {
   localDayBoundaryIso,
   nextScanCursor,
   normalizeOcrForDedupe,
+  planScanWindows,
   purgeOldDismissed,
   resolveScanPeriod,
   setInboxState,
@@ -38,6 +39,36 @@ describe("期間を指定したスキャン", () => {
       expect(splitScanWindows(100, 100)).toEqual([]);
       expect(splitScanWindows(NaN, 100)).toEqual([]);
       expect(splitScanWindows(0, 100, 0)).toEqual([]);
+    });
+  });
+
+  describe("planScanWindows — 新しい区間から順に処理する", () => {
+    it("新しい方から並び、区間どうしに隙間も重なりも無い", () => {
+      const plan = planScanWindows(0, 30 * DAY, false, 14 * DAY);
+      expect(plan).toEqual([
+        { sinceUnix: 28 * DAY, untilUnix: 30 * DAY },
+        { sinceUnix: 14 * DAY, untilUnix: 28 * DAY },
+        { sinceUnix: 0, untilUnix: 14 * DAY },
+      ]);
+      for (let i = 1; i < plan.length; i++) expect(plan[i].untilUnix).toBe(plan[i - 1].sinceUnix);
+    });
+    it("「現在まで」の時は、いちばん新しい区間だけ終わりを区切らない", () => {
+      const plan = planScanWindows(0, 30 * DAY, true, 14 * DAY);
+      expect(plan[0]).toEqual({ sinceUnix: 28 * DAY });
+      expect(plan.slice(1).every((w) => w.untilUnix !== undefined)).toBe(true);
+      // 最初に処理する区間 (= 最新) だけが、次回スキャンの起点を進められる
+      expect(cursorAfterScan({ lastScan: 0, since: plan[0].sinceUnix, cursor: 29 * DAY, range: plan[0] })).toBe(29 * DAY);
+      expect(cursorAfterScan({ lastScan: 29 * DAY, since: plan[1].sinceUnix, cursor: 20 * DAY, range: plan[1] })).toBeNull();
+    });
+    it("「過去 1 年」は、最近の 2 週間から始まる (1 年前から始めない)", () => {
+      const now = 400 * DAY;
+      const plan = planScanWindows(now - 365 * DAY, now, true);
+      expect(plan).toHaveLength(27);
+      expect(now - plan[0].sinceUnix).toBeLessThanOrEqual(14 * DAY);
+      expect(plan[plan.length - 1].sinceUnix).toBe(now - 365 * DAY);
+    });
+    it("期間が不正な時は空", () => {
+      expect(planScanWindows(100, 100, true)).toEqual([]);
     });
   });
 
