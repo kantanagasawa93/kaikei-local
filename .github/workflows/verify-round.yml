@@ -33,7 +33,7 @@ on:
 jobs:
   sanity:
     name: Sanity (cargo check + tsc + next build)
-    runs-on: macos-14
+    runs-on: macos-latest # macos-14 は GitHub 側で提供終了 (「configuration not supported」で即キャンセルされる)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +82,7 @@ jobs:
     # input.full にチェックを入れない場合も bundle は走る (default true 相当に
     # するか迷ったが、明示 opt-in の方が課金枠を保てるので false)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
-    runs-on: macos-14
+    runs-on: macos-latest # macos-14 は GitHub 側で提供終了 (「configuration not supported」で即キャンセルされる)
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +126,7 @@ jobs:
     name: smoke-report (NO_GUI)
     needs: sanity
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
-    runs-on: macos-14
+    runs-on: macos-latest # macos-14 は GitHub 側で提供終了 (「configuration not supported」で即キャンセルされる)
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
