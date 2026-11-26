@@ -136,7 +136,10 @@ Round 33 の全体レビューで見つけて、まだ直していないもの�
 - 科目セレクトに DB の科目 (マスタ取込分) が出ない / 請求書の whAuto が保存されない / 原本 PDF を開くボタン
 - journals/page.tsx の分割 (旧 ㊱) / freee・MF エクスポートの税区分マッピング表 (旧 ㊋)
 - eslint 既存 8 エラーの解消 (hoisted 関数の使用前参照 6 / setState-in-effect 2)
-- api-server (Vercel) の修正は **未デプロイ** (`cd api-server && vercel --prod`): OCR の利用回数を失敗時に返す / Stripe webhook の署名必須化
+- api-server (Vercel) は 2026-11-26 に本番デプロイ済み (`cd api-server && vercel --prod` → api-server-lac.vercel.app):
+  OCR の利用回数を失敗時に返す / 台帳に届かない時は 503 / Stripe webhook は secret 未設定なら拒否。
+  本番の env は GEMINI_API_KEY / OWNER_LICENSE_KEY / APP_SECRET のみ = **ライセンス台帳 (Upstash) と Stripe は未設定**。
+  オーナーキー以外は使えない状態なので、ライセンスを販売するならここの整備が先
 
 ### ✓ Round 33 で完了した項目 (履歴) — テーマ「全体レビュー: 失わない / 二重にしない / 引っ越せる」
 - バックアップ・復元を Rust (backup.rs) に移設: VACUUM INTO スナップショット / 復元は次回起動時に適用 /
