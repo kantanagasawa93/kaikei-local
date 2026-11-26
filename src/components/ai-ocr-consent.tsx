@@ -55,7 +55,7 @@ export function AiOcrConsentDialog({
           </p>
 
           <div className="rounded-md border bg-muted/40 p-3 space-y-1.5 text-xs">
-            <p><b>送信先:</b> kaikei の AI OCR API → Google Gemini 2.5 Flash</p>
+            <p><b>送信先:</b> kaikei の AI OCR API → Google Gemini</p>
             <p><b>送信する内容:</b> 領収書 / 発注書の画像 (base64) のみ。氏名・住所・利用者識別番号などの納税者情報は一切送信しません。</p>
             <p><b>保存:</b> サーバー側で解析後に即座に破棄。AI の学習にも使われません。</p>
             <p><b>通信:</b> HTTPS 暗号化済み</p>

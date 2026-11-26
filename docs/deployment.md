@@ -27,7 +27,7 @@ Vercel 側で環境変数を設定:
 | 変数名 | 内容 | 取得元 |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (Google Gemini を Anthropic 経由で使う設計の場合は Claude API key) | https://console.anthropic.com |
-| `GEMINI_API_KEY` | Google Gemini 2.5 Flash の API key | https://aistudio.google.com/apikey |
+| `GEMINI_API_KEY` | Google Gemini の API key | https://aistudio.google.com/apikey |
 | `STRIPE_SECRET_KEY` | Stripe シークレットキー | https://dashboard.stripe.com |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_...` | Stripe ダッシュボードで webhook 登録後 |
 | `UPSTASH_REDIS_REST_URL` | Redis REST エンドポイント | https://upstash.com |

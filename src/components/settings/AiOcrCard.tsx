@@ -164,7 +164,7 @@ export function AiOcrCard() {
               <b>AI 読み取りのデータ送信に同意する</b>
               <br />
               <span className={aiConsent ? "text-muted-foreground" : "text-amber-800"}>
-                領収書 / 発注書の画像 (base64) のみを暗号化して AI OCR API (→ Google Gemini 2.5 Flash)
+                領収書 / 発注書の画像 (base64) のみを暗号化して AI OCR API (→ Google Gemini)
                 に送信します。氏名・住所・利用者識別番号などの納税者情報は送りません。
                 サーバー側で解析後に即破棄され、AI 学習にも使われません。
                 {" "}<Link href="/legal" className="underline">プライバシーポリシー</Link>
@@ -267,7 +267,7 @@ export function AiOcrCard() {
           </p>
           <p className="text-muted-foreground">
             <b>月額 ¥980 / 年額 ¥9,800:</b> AI 読み取り 月 500 枚まで。
-            AI エンジンは <code>Google Gemini 2.5 Flash</code>。
+            AI エンジンは <code>Google Gemini</code>。
             画像はサーバー側で解析後に即座に破棄され、保存・AI 学習には使われません。
           </p>
         </div>
@@ -318,7 +318,7 @@ function UsageStatsRow() {
         <b className="font-mono">¥{stats.yen.toFixed(1)}</b>
       </span>
       <span className="text-[10px] text-muted-foreground ml-auto">
-        ※ gemini-2.5-flash 換算 (~0.02 円/回)
+        ※ 概算 (~0.02 円/回)
       </span>
     </div>
   );

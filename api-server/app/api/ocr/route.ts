@@ -6,14 +6,11 @@ import {
   refundUsage,
 } from "@/lib/license";
 import { classifyGeminiFailure, type GeminiFailureCode } from "@/lib/gemini-errors";
+import { GEMINI_MODEL, extractionGenerationConfig } from "@/lib/gemini-config";
 
 // 約30秒タイムアウト
 export const maxDuration = 30;
 export const runtime = "nodejs";
-
-// Gemini モデル. Tier 1 (有料) 課金されていれば 2.5-flash の方が高精度。
-// thinking は構造化抽出には不要なので thinkingBudget=0 で OFF にする。
-const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の領収書・レシートの読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -89,13 +86,8 @@ async function callGemini(
           ],
         },
       ],
-      generationConfig: {
-        temperature: 0,
-        // 2.5-flash は既定で thinking を行うが、構造化抽出には不要なので OFF
-        thinkingConfig: { thinkingBudget: 0 },
-        maxOutputTokens: maxTokens,
-        responseMimeType: "application/json",
-      },
+      // モデルごとに指定方法が違うので、モデル ID と一緒に gemini-config.ts で管理する
+      generationConfig: extractionGenerationConfig(maxTokens),
     }),
   });
   if (!res.ok) {

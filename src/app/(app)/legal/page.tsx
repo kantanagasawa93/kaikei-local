@@ -47,7 +47,7 @@ export default function LegalPage() {
                 <ul className="list-disc pl-5 space-y-1">
                   <li>
                     <strong>AI 読み取り (明示同意時のみ):</strong> 領収書の AI 読み取り機能を利用する場合、
-                    領収書画像 (base64) を <code>api.kaikei-local.com</code> 経由で Google Gemini 2.5 Flash に送信します。
+                    領収書画像 (base64) を <code>api.kaikei-local.com</code> 経由で Google Gemini に送信します。
                     初回利用時に明示同意を取得し、同意しない場合は従来の Tesseract OCR (オフライン処理) にフォールバックします。
                     画像はサーバー側で解析後に即時破棄され、AI モデルの学習には使用されません。
                   </li>

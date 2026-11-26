@@ -5,8 +5,32 @@ import {
   DAILY_QUOTA_MESSAGE,
   GENERIC_UPSTREAM_MESSAGE,
 } from "../../api-server/lib/gemini-errors";
+import { GEMINI_MODEL, extractionGenerationConfig } from "../../api-server/lib/gemini-config";
 import { classifyOcrError } from "@/lib/auto-journal";
 import { isQuotaError } from "@/lib/vision-ocr-fallback";
+
+describe("Gemini の呼び出し設定 — モデル ID と thinking の指定は組で変える", () => {
+  // 2026-11-26 に実際のリクエストで確かめた組み合わせ:
+  //   gemini-3.5-flash-lite + thinkingBudget: 0   → 400 (invalid argument)
+  //   gemini-3.5-flash-lite + thinkingLevel       → 200
+  //   gemini-2.5-flash      + thinkingLevel       → 400 (not supported for this model)
+  // 2.5-flash へのリクエストは 2026-12-01 から 3.5-flash-lite に回されるので、2.5 用の指定を残すと全滅する。
+  const config = extractionGenerationConfig(4096) as Record<string, unknown>;
+
+  it("Gemini 3.x のモデルには thinkingBudget を送らない", () => {
+    expect(GEMINI_MODEL).toBe("gemini-3.5-flash-lite");
+    expect(config.thinkingConfig).toEqual({ thinkingLevel: "minimal" });
+    expect(JSON.stringify(config)).not.toContain("thinkingBudget");
+  });
+
+  it("廃止予定の sampling パラメータを送らず、JSON だけを返させる", () => {
+    expect(config).not.toHaveProperty("temperature");
+    expect(config).not.toHaveProperty("topP");
+    expect(config).not.toHaveProperty("topK");
+    expect(config.responseMimeType).toBe("application/json");
+    expect(config.maxOutputTokens).toBe(4096);
+  });
+});
 
 // 2026-11-26 に本番で実際に返ってきた本文 (前払いクレジット切れ)
 const DEPLETED_BODY = JSON.stringify({

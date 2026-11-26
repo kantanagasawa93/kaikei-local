@@ -1,7 +1,7 @@
 /**
  * Round 28: 発注書 (Purchase Order) → 請求書自動生成のための OCR エンドポイント.
  *
- * Gemini Vision (gemini-2.5-flash) で発注書を読み、請求書の元データを抽出する。
+ * Gemini Vision (モデルは lib/gemini-config.ts) で発注書を読み、請求書の元データを抽出する。
  * 領収書用 /api/ocr とは抽出スキーマが違うので別ルート。
  *
  * 抽出フィールド:
@@ -18,12 +18,10 @@ import {
   refundUsage,
 } from "@/lib/license";
 import { classifyGeminiFailure } from "@/lib/gemini-errors";
+import { GEMINI_MODEL, extractionGenerationConfig } from "@/lib/gemini-config";
 
 export const maxDuration = 30;
 export const runtime = "nodejs";
-
-// Tier 1 課金前提なら 2.5-flash の方が高精度.
-const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `あなたは日本の発注書 (Purchase Order) の読み取りアシスタントです。
 画像から以下の情報を正確に抽出してJSON形式で返してください。
@@ -170,13 +168,8 @@ export async function POST(req: NextRequest) {
             ],
           },
         ],
-        generationConfig: {
-          temperature: 0,
-          // 2.5-flash の thinking を無効化 — 構造化抽出には不要
-          thinkingConfig: { thinkingBudget: 0 },
-          maxOutputTokens: 4096,
-          responseMimeType: "application/json",
-        },
+        // モデルごとに指定方法が違うので、モデル ID と一緒に gemini-config.ts で管理する
+        generationConfig: extractionGenerationConfig(4096),
       }),
     });
 
