@@ -75,41 +75,88 @@ scripts/verify-app.sh db-dump photo_inbox  # DB を JSON 配列で
 scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + 公証チェック
 ```
 
-## 次ラウンド (Round 31) 候補
+## 実データに触れない検証 (Round 33 で導入)
 
-推し優先順は ㊗ → ㊰ → ㊱ → ㊋ → ㊊。
+ユーザの本物のアプリ (/Applications の KAIKEI LOCAL) は使用中のことが多い。**killall / quit は使わない**。
+新しいビルドは HOME を差し替えた別インスタンスで動かす:
 
-### ㊗ v0.3.1 リリース実発火 ★★★★★ (prep 済み・creds 待ち)
-- version bump + CHANGELOG + DRY_RUN 検証は Round 29.5/30 で完了済み (`ea22c7b` +本ラウンド)
-- 要・ユーザ操作 (5 分): ①Apple ID の App 用パスワード `kaikei-release` を削除 (旧パスワードは
-  チャットログに平文で残っていて keychain 上まだ有効 = セキュリティ課題) → ②新パスワード生成
-  → ③`scripts/release-setup-credentials.sh` で AC_PASSWORD profile 再作成
-- その後 `source ~/.kaikei-release.env && scripts/release.sh v0.3.1` で Claude 単独で発火可能
-- これが通ると release.sh 初の end-to-end 完走 + Intel x64 実配布 + updater の x86_64 経路開通
+```bash
+APP="$PWD/src-tauri/target/debug/bundle/macos/KAIKEI LOCAL.app"
+FAKE=<スクラッチ>/home   # DB・領収書・ログ・WebKit ストレージが全部この下に出来る
+open -g -n "$APP" --env HOME="$FAKE" --env CFFIXED_USER_HOME="$FAKE"   # -g: 前面に出さない
+PID=$(pgrep -f "target/debug/bundle/macos/KAIKEI LOCAL.app/Contents/MacOS/kaikei")
+HOME="$FAKE" CFFIXED_USER_HOME="$FAKE" "$APP/Contents/MacOS/kaikei" --navigate=/journals
+screencapture -x -o -l <CGWindowID> out.png   # 裏にある窓でも撮れる
+kill "$PID"                                    # テスト用だけを PID 指定で止める
+```
 
-### ㊰ 家事按分と減価償却仕訳の整合検証 ★★★★
-- Round 30 で固定資産→償却仕訳 (611 事業分 + 190 家事分) を作れるようになった。
-  家事按分ページの「再計算」が 611 を按分対象にすると二重按分になるリスクを検証し、
-  按分対象科目から 611 を除外 or 警告を出す
-- 対象: src/app/(app)/allocations/page.tsx + 検証は verify-app.sh db-dump
+- 空の `$FAKE` = 新規インストールの再現。実データで試す時は
+  `sqlite3 "$REAL/kaikei.db" "VACUUM INTO '$FAKE/.../kaikei.db'"` + `cp -cR receipts inbox` でコピーを作り、
+  コピー側の app_settings から `license_key` と `ai_ocr_consent` を消してから起動する (外部送信を起こさない)
+- 裏にある窓は WebKit が CSS トランジションと描画を間引く。サイドバーの選択表示が古いまま・
+  一覧が空に見えるのは撮るのが早いだけのことが多い → 8 秒以上待って撮り直す
+- `npm run test` は本番と同じマイグレーションを当てたインメモリ SQLite で動く (`installTestDb()`)
 
-### ㊱ journals/page.tsx (1,269 行) の分割 ★★★
-- settings (Round 30) と同じ要領で src/components/journals/ にカード/モーダルを切り出し
-- 対象: src/app/(app)/journals/page.tsx
+## 次ラウンド (Round 34) 候補
 
-### ㊋ freee/MF エクスポートの税区分マッピング表 ★★★ (Round 29 から持ち越し)
-- kaikei tax_classes.code → freee/MF の税区分名への変換表で手読み替えを不要に
-- 対象: src/lib/journal-export.ts (TAX_CODE_TO_FREEE / _TO_MF マップ) — vitest テスト付きで
+Round 33 の全体レビューで見つけて、まだ直していないもの。推し優先順は ㊀ → ㊁ → ㊂ → ㊃ → ㊄。
 
-### ㊊ auto_rules の stale ルール掃除 ★★★ (Round 29 から持ち越し)
-- 正答率<30% or 90 日以上未適用のルールを「見直し候補」として /auto-rules 上部に提示
-- 対象: src/lib/auto-rules.ts (detectStaleRules) + src/app/(app)/auto-rules/page.tsx
+### ㊀ 未分類 (999) 明細の付け替えツール ★★★★★
+- 他社ソフトの CSV を取り込んだ帳簿には 999 (未分類) の明細が大量に残る (交際費・外注費・カード/銀行口座名など、
+  科目表に無い名前で来たもの)。Round 33 で「集計から黙って消える」は止めた (未分類として警告) が、
+  正しい科目に直す手段が手作業しか無い
+- 元の科目名 (journal_lines.account_name) ごとに件数・金額を出し、まとめて科目を付け替える画面を作る
+- 対象: src/app/(app)/tax-return/page.tsx の警告からリンク + src/lib/accounts.ts resolveAccountByName
 
-### 候補プール (旧 Round 29 候補の残り)
-- ⓐ 定期取引候補の一括ルール化 / ⓑ partner Undo 複数段戻し / ⓒ 失敗 bucket 一括再試行
-- ⓓ readiness スヌーズ / ⓔ verify-app.sh regression サブコマンド
-- ⓕ updater フォールバック OS/アーキ別 / ⓖ 再 OCR 中断ボタン
-- eslint 既存 19 エラーの解消 (hoisted 関数の使用前参照 / setState-in-effect — 旧ページ 17 箇所)
+### ㊁ 消費税ページの計算検証 ★★★★ (課税事業者なので実害あり)
+- consumption-tax/page.tsx の集計を税区分ベースで検算 (簡易課税 / 2 割特例 / 本則)。vitest 付きで
+- ダッシュボード・journal-export にも「コード先頭の数字で売上/経費を判定」が残っている → classifyAccountCode に統一
+
+### ㊂ e-Tax XTX の XSD 適合 ★★★★
+- KOA020 / KOA210 / RSH / IT 部が xmllint で XSD 不適合 (envelope.ts のコメントは「e-Tax で表示できた」としている)。
+  様式ごとに XSD を通す vitest を追加し、不適合を潰す
+- 年度をまたいだ時に前年の入力が残る (etax ページの state)、予定納税の欄が無い
+
+### ㊃ 給与所得のある年の申告 ★★★
+- 給与所得控除 (令和8〜9年分は 220 万円以下 → 74 万円) が未実装で、いまは警告だけ
+- 源泉徴収票 (withholding_slips) の給与を所得に入れる
+
+### ㊄ 銀行 CSV まわり ★★★
+- bank-csv.ts: 符号・日付の解釈が銀行によってずれる (parseCardRows は未使用のまま)
+- 定期取引 → ルール化が入金に対応していない / auto_rules の stale ルール掃除 (旧 ㊊)
+
+### 候補プール
+- 証憑 ZIP 取込の再照合 / キーワードによる科目の誤判定 / Vision フォールバック時の金額
+- Vision ハンドラの解放漏れ / launchd の plist パス・引数 / ヘッドレススキャンの停止 / 遅れて届く写真 (スキャン窓の重なり)
+- checksum 修復の経路 / updater のオフライン時バナー / 請求書 PDF の改ページ・発注書からの作成
+- 取引先「未使用」判定が請求書を見ていない / ocr.ts の Tesseract を CDN から読んでいる
+- 科目セレクトに DB の科目 (マスタ取込分) が出ない / 請求書の whAuto が保存されない / 原本 PDF を開くボタン
+- journals/page.tsx の分割 (旧 ㊱) / freee・MF エクスポートの税区分マッピング表 (旧 ㊋)
+- eslint 既存 8 エラーの解消 (hoisted 関数の使用前参照 6 / setState-in-effect 2)
+- api-server (Vercel) の修正は **未デプロイ** (`cd api-server && vercel --prod`): OCR の利用回数を失敗時に返す / Stripe webhook の署名必須化
+
+### ✓ Round 33 で完了した項目 (履歴) — テーマ「全体レビュー: 失わない / 二重にしない / 引っ越せる」
+- バックアップ・復元を Rust (backup.rs) に移設: VACUUM INTO スナップショット / 復元は次回起動時に適用 /
+  別 Mac 向けの絶対パス書き換え / 新しいスキーマの拒否 / 自動バックアップも同方式で 7 世代
+- 申告: 基礎控除の表を更新 (2025 / 2026–27 / 2028+)・青色控除後の合計所得で判定・青色控除は利益が上限 /
+  科目の区分を科目表から判定 (classifyAccountCode)・未分類を警告 / e-Tax 経費・BS マッピング作り直し
+- 仕訳: journal-save.ts (新規・編集を安全な順序で) / bulkDeleteJournals + Undo / 受信箱の二重仕訳化防止・
+  失敗時ロールバック / CSV 取込の重複判定・別名解決・伝票番号 + 日付で束ねる
+- 写真: migration v14 (photo_inbox.state_changed_at + トリガ) / OCR 失敗写真を残す / 重複統合は全文一致 /
+  領収書が参照する画像は purge しない
+- 家事按分 (allocations.ts) / 明細取込 (bank-journal.ts) / 請求書 (invoice-save.ts) / マスタ取込 /
+  自動ルールの収支判定 — いずれもテスト付きでライブラリに切り出し
+- 領収書: PDF 複数ページ + CMap 同梱 + 原本保持 / スマホ取込の一覧を実ファイルから作る・トークン必須・遅延起動
+- プライバシー: AI OCR の同意チェックを全経路の入口に / サンプルの個人情報を架空データに
+- 日付: 「今日」をローカル日付に (18 箇所) / 最小 macOS 11.0
+- 配布: updater tarball の AppleDouble 混入を修正 (これまで自動アップデートは必ず失敗していた) /
+  release.sh のタグ・バージョン検査 / CI を Node 24 + vitest に
+- テスト 49 → 228 件 (実マイグレーションを当てたインメモリ SQLite: src/test-stubs/test-db.ts)、Rust 11 件
+
+### ✓ Round 31–32 で完了した項目 (履歴、v0.3.2)
+- 領収書発行 (doc_type) / 勘定科目ピッカー / PDF 領収書の画像化 / 請求書の税込入力と源泉徴収 /
+  window.confirm → confirmDialog 全面移行 / 既存 raw PDF 領収書の JPEG 化移行
+- v0.3.1・v0.3.2 は release.sh で公証付きリリース済み (旧 ㊗ は完了)
 
 ### ✓ Round 30 で完了した項目 (履歴) — テーマ「申告ロジックの正しさ + 品質基盤」
 - ㊕ 固定資産「N年分を仕訳化」: 12/31 付の償却仕訳 (611 事業分 + 190 家事分 / 資産科目) 一括作成
@@ -243,4 +290,15 @@ scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + �
 - **Next 16 static export で `useSearchParams()` には Suspense boundary 必須**: 直接呼ぶと `useSearchParams() should be wrapped in a suspense boundary` で `next build` がコケる。static export (Tauri アプリ) なら `window.location.search` を `useEffect` 内で読む方がシンプル (Round 22 ⓓ で踏んだ)
 - **photo_inbox の「未判定」雪崩問題**: 写真ライブラリ全件を素直に取り込むと、家族写真・風景・チャットスクショが全部 candidate になって受信箱が詰まる。Round 23 で **常時 ON のフィルタ** を導入: photos.rs Stage 0 で isHidden / 短辺<600px / アスペクト比>1:5 を弾き、photo-scanner.ts と scanner.rs で「OCR テキスト空 + classifier.score==0」を photo_inbox に INSERT すらしない (file も削除)。設定トグルは出さない (= ユーザに判断を求めない、付加価値が下がるため)。scan 結果に `skipped` 件数を返して toast に併記
 - **PHAsset.isFavorite (♥) は強シグナル扱いしない**: Round 21 ⓐ で classifier に +0.10 のスコアブーストを入れたのは妥当だが、Round 23 当初に追加した「♥なら厳格フィルタ免除」は誤り。♥は家族写真・思い出・友人スナップにも付くので「領収書として必ず取り込む」根拠にはならない。score ブーストは「OCR で何か読めた時の弱い positive シグナル」として残し、フィルタ免除は外す
-
+- **localDb は例外を投げない**: `await db.from(..).insert(..)` は失敗しても `{ data: null, error }` を返すだけ。`error` を見ないコードは「保存できたつもり」で先へ進む (マスタ取込は 1 件も保存せず「成功」と表示していた)。書き込みは必ず `const { error } = await ...; if (error) throw error;`
+- **localDb にトランザクションは無い**: 「全部消してから入れ直す」は途中で失敗すると空になる。**新しい行を入れる → 参照を付け替える → 古い行を消す** の順にし、失敗時は新しい方を消して戻す (journal-save.ts / invoice-save.ts / allocations.ts が手本)
+- **SQLite の真偽値は 0/1 で返る**: `rule.is_income !== tx.is_income` のように boolean と === で比べると常に不一致。比べる前に両辺を `Boolean()` に通す
+- **localDb の insert は id を自動付与する**: id 列の無い表 (accounts / tax_classes は code が主キー) は `TABLES_WITHOUT_ID` に入れないと INSERT が必ず失敗する
+- **使用中の kaikei.db をコピー・上書きしない**: WAL モードなので、ファイルコピーには直近のコミットが入らず、開いたままの DB を上書きすると次のチェックポイントで壊れる/巻き戻る。取り出しは `VACUUM INTO`、差し替えは次回起動時 (SQL プラグインが開く前) に行う
+- **科目の区分をコードの先頭の数字で判定しない**: 取込で付く 999 (未分類) や A9xx (マスタ取込の採番) が売上にも経費にも入らず集計から消える。必ず `classifyAccountCode()` (科目表から引く) を使い、null は「未分類」として利用者に見せる
+- **集計に自分が生成した仕訳を含めない**: 家事按分の「年間合計」に前回の按分仕訳が入っていて、再計算のたびに金額が変わっていた。生成物は id で除外してから集計する
+- **「今日」に `new Date().toISOString().slice(0, 10)` を使わない**: UTC なので日本時間の 0〜9 時は前日になる。`todayLocal()` (date-utils.ts) を使う
+- **金額の掛け算を浮動小数のままやらない**: `2.3 * 1500` は 3449.99… で切り捨てると 1 円欠ける。数量を整数に直してから掛ける (`lineAmount()`)
+- **消費税の端数処理は「請求書ごと・税率ごとに 1 回」**: 行ごとに切り捨てて足すのは適格請求書の要件を満たさない
+- **macOS の tar は AppleDouble (`._*`) を別エントリで書く**: tauri-plugin-updater は先頭のパス要素を落として展開するので、`._KAIKEI LOCAL.app` が混ざると展開先が壊れてアップデートが必ず失敗する。`COPYFILE_DISABLE=1 tar --no-mac-metadata` で作り、中身を検査する (release.sh)
+- **伝票番号だけで仕訳を束ねない**: 番号が月ごと・年ごとに振り直される CSV では「同じ番号・別の日付」が後勝ちで上書きされて消える。番号 + 日付で束ねる

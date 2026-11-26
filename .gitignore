@@ -55,3 +55,6 @@ next-env.d.ts
 # scripts/gen_real_xtx.mjs が読み込む個人情報設定 (氏名・住所・利用者識別番号など)。
 # デフォルト位置は ~/.kaikei/etax-config.json だが、cwd 直下に置く運用も許容している。
 /etax-config.json
+
+# pdf.js の cmaps / standard_fonts (scripts/sync-pdfjs-assets.mjs がビルド前に node_modules からコピーする)
+/public/pdfjs/

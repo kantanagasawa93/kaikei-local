@@ -11,7 +11,8 @@ import { chromium } from "playwright";
 import fs from "node:fs";
 import path from "node:path";
 
-const OUTPUT_DIR = "/Users/nagasawakanta/kaikei/site/assets/screenshots";
+// スクリプトの場所からの相対パス (特定マシンの絶対パスに依存しない)
+const OUTPUT_DIR = path.resolve(import.meta.dirname, "../site/assets/screenshots");
 const BASE_URL = "http://localhost:3000";
 const VIEWPORT = { width: 1440, height: 900 };
 

@@ -41,7 +41,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24" # ローカル (Node 24 / npm 11) と揃える。npm 10 の npm ci は lockfile 差異 (@emnapi/*) で失敗する
           cache: "npm"
 
       - name: Setup Rust toolchain
@@ -64,6 +64,10 @@ jobs:
       - name: tsc --noEmit
         run: npx tsc --noEmit
 
+      # 金額・税計算のユニットテスト (Round 30 で導入)。数秒で終わる。
+      - name: vitest
+        run: npm run test
+
       - name: cargo check
         working-directory: src-tauri
         run: cargo check --all-targets
@@ -85,7 +89,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24" # ローカル (Node 24 / npm 11) と揃える。npm 10 の npm ci は lockfile 差異 (@emnapi/*) で失敗する
           cache: "npm"
 
       - uses: dtolnay/rust-toolchain@stable
@@ -129,7 +133,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24" # ローカル (Node 24 / npm 11) と揃える。npm 10 の npm ci は lockfile 差異 (@emnapi/*) で失敗する
           cache: "npm"
 
       - uses: dtolnay/rust-toolchain@stable

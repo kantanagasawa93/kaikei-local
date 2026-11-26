@@ -237,10 +237,16 @@ export default function PhotoScanSettingsPage() {
                 size="sm"
                 variant="outline"
                 onClick={async () => {
-                  const { invoke } = await import("@tauri-apps/api/core");
-                  await invoke("plugin:shell|open", {
-                    path: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos",
-                  });
+                  // plugin:shell|open は x-apple.systempreferences: を拒否するので専用コマンドで開く
+                  try {
+                    const { invoke } = await import("@tauri-apps/api/core");
+                    await invoke("open_photos_privacy_settings");
+                  } catch (e) {
+                    console.error("open system settings failed", e);
+                    toast.error(
+                      "システム設定を開けませんでした。 メニューから「システム設定 → プライバシーとセキュリティ → 写真」を開いてください。",
+                    );
+                  }
                 }}
               >
                 システム設定を開く

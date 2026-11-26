@@ -30,8 +30,11 @@ import {
   calculateBasicDeduction,
   calculateTaxableIncome,
   calculateTaxDue,
+  capBlueDeduction,
   getTaxBracketInfo,
 } from "@/lib/tax-calculator";
+import { classifyAccountCode, loadAccountCategoryMap } from "@/lib/accounts";
+import { toast } from "@/lib/toast";
 import { FileCheck, Calculator, ArrowRight, FileDown } from "lucide-react";
 import type { TaxReturn, TaxReturnExpense, JournalLine, WithholdingSlip } from "@/types";
 import { exportTaxReturnPdf, downloadBlob } from "@/lib/pdf-export";
@@ -53,6 +56,8 @@ export default function TaxReturnPage() {
   const [medicalDeduction, setMedicalDeduction] = useState(0);
   const [smallBusinessDeduction, setSmallBusinessDeduction] = useState(0);
   const [withholdingTotal, setWithholdingTotal] = useState(0);
+  // 集計に入れられなかった明細 (科目が未分類) と、未対応の給与収入についての注意
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     loadTaxReturn();
@@ -86,80 +91,149 @@ export default function TaxReturnPage() {
     } else {
       setTaxReturn(null);
       setExpenses([]);
+      // 別の年の控除額・源泉徴収額を引き継がない。引き継いだまま「計算」を押すと、
+      // 前の年の数字がこの年の申告として保存されてしまう。
+      setSocialInsurance(0);
+      setLifeInsurance(0);
+      setEarthquakeInsurance(0);
+      setSpouseDeduction(0);
+      setDependentsDeduction(0);
+      setMedicalDeduction(0);
+      setSmallBusinessDeduction(0);
+      setWithholdingTotal(0);
     }
+    setWarnings([]);
   }
 
   async function handleCalculate() {
+    if (saving) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    try {
+      await calculateAndSave();
+    } catch (e) {
+      console.error("確定申告の計算に失敗:", e);
+      toast.error(`計算に失敗しました: ${(e as Error)?.message ?? String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
 
+  async function calculateAndSave() {
     // 仕訳から売上と経費を集計
     const startDate = `${year}-01-01`;
     const endDate = `${year}-12-31`;
 
-    const { data: journals } = await supabase
+    // 読み込みに失敗したまま進むと「売上 0・経費 0」で既存の計算結果を上書きして
+    // しまうので、エラーは必ずここで止める。
+    const { data: journals, error: journalsError } = await supabase
       .from("journals")
       .select("id")
-      .eq("user_id", user.id)
       .gte("date", startDate)
       .lte("date", endDate);
+    if (journalsError) throw journalsError;
 
     const journalIds: string[] = journals?.map((j: { id: string }) => j.id) || [];
 
     let revenueTotal = 0;
     let expenseTotal = 0;
     const expenseByAccount: Record<string, { code: string; name: string; amount: number }> = {};
+    // 科目表に無いコード (取込時に解決できなかった 999 = 未分類 など) の明細。
+    // 売上にも経費にも入れられないので、黙って捨てずに利用者へ知らせる。
+    const unclassified = new Map<string, { count: number; debit: number; credit: number }>();
 
-    if (journalIds.length > 0) {
-      const { data: lines } = await supabase
+    const categories = await loadAccountCategoryMap();
+    for (let i = 0; i < journalIds.length; i += 400) {
+      const { data: lines, error: linesError } = await supabase
         .from("journal_lines")
         .select("*")
-        .in("journal_id", journalIds);
+        .in("journal_id", journalIds.slice(i, i + 400));
+      if (linesError) throw linesError;
 
-      if (lines) {
-        for (const line of lines as JournalLine[]) {
-          if (line.account_code.startsWith("4")) {
-            revenueTotal += line.credit_amount - line.debit_amount;
-          } else if (line.account_code.startsWith("5") || line.account_code.startsWith("6")) {
-            const amount = line.debit_amount - line.credit_amount;
-            expenseTotal += amount;
-            if (!expenseByAccount[line.account_code]) {
-              expenseByAccount[line.account_code] = {
-                code: line.account_code,
-                name: line.account_name,
-                amount: 0,
-              };
-            }
-            expenseByAccount[line.account_code].amount += amount;
+      for (const line of (lines ?? []) as JournalLine[]) {
+        // 区分は科目表から引く (コードの先頭桁では判定しない)
+        const kind = classifyAccountCode(line.account_code, categories);
+        if (kind === "revenue") {
+          revenueTotal += line.credit_amount - line.debit_amount;
+        } else if (kind === "cogs" || kind === "expense") {
+          const amount = line.debit_amount - line.credit_amount;
+          expenseTotal += amount;
+          if (!expenseByAccount[line.account_code]) {
+            expenseByAccount[line.account_code] = {
+              code: line.account_code,
+              name: line.account_name,
+              amount: 0,
+            };
           }
+          expenseByAccount[line.account_code].amount += amount;
+        } else if (kind === null) {
+          const key = line.account_name || line.account_code || "(科目なし)";
+          const cur = unclassified.get(key) ?? { count: 0, debit: 0, credit: 0 };
+          cur.count++;
+          cur.debit += line.debit_amount || 0;
+          cur.credit += line.credit_amount || 0;
+          unclassified.set(key, cur);
         }
       }
     }
 
     // 源泉徴収票から金額を取得
-    const { data: slips } = await supabase
+    const { data: slips, error: slipsError } = await supabase
       .from("withholding_slips")
       .select("*")
-      .eq("user_id", user.id)
       .eq("year", year);
+    if (slipsError) throw slipsError;
 
+    const nextWarnings: string[] = [];
     let wTotal = withholdingTotal;
+    // 社会保険料は「いま画面に入っている値」が基準。源泉徴収票に記載があればそちらを使う。
+    // (setSocialInsurance は次のレンダーまで反映されないので、計算にはこのローカル変数を使う。
+    //  以前は更新前の state を使っていたため、源泉徴収票の社会保険料が計算に入っていなかった)
+    let socialInsuranceForCalc = socialInsurance;
     if (slips && slips.length > 0) {
       const slipsList = slips as WithholdingSlip[];
       wTotal = slipsList.reduce((sum, s) => sum + s.withholding_tax, 0);
       setWithholdingTotal(wTotal);
       const sInsurance = slipsList.reduce((sum, s) => sum + s.social_insurance, 0);
-      if (sInsurance > 0) setSocialInsurance(sInsurance);
+      if (sInsurance > 0) {
+        socialInsuranceForCalc = sInsurance;
+        setSocialInsurance(sInsurance);
+      }
+      const salary = slipsList.reduce((sum, s) => sum + (s.payment_amount || 0), 0);
+      if (salary > 0) {
+        nextWarnings.push(
+          `源泉徴収票の支払金額（合計 ${salary.toLocaleString()}円）は、この計算の所得に含まれていません。` +
+            "給与所得がある場合、実際の税額はここに表示される額より多くなります。" +
+            "申告の際は、確定申告書等作成コーナー（e-Tax）で給与所得を合算してください。",
+        );
+      }
+    }
+
+    if (unclassified.size > 0) {
+      const total = [...unclassified.values()].reduce((a, v) => a + v.count, 0);
+      const names = [...unclassified.entries()]
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 6)
+        .map(([name, v]) => `${name}（${v.count}件・借方 ${v.debit.toLocaleString()}円 / 貸方 ${v.credit.toLocaleString()}円）`)
+        .join("、");
+      nextWarnings.push(
+        `勘定科目が未分類の明細が ${total}件あり、売上にも経費にも集計されていません: ${names}` +
+          `${unclassified.size > 6 ? " ほか" : ""}。` +
+          "他のソフトから取り込んだ仕訳で科目名が一致しなかったものです。仕訳帳で正しい勘定科目を選び直してから、もう一度計算してください。",
+      );
     }
 
     // 税額計算
-    const blueDeduction = returnType === "blue" ? 650000 : 0;
-    const basicDeduction = calculateBasicDeduction(revenueTotal - expenseTotal, year);
+    const businessProfit = revenueTotal - expenseTotal;
+    // 青色申告特別控除は事業の所得が上限 (赤字・少額黒字の年に所得をマイナスにしない)
+    const blueDeduction = returnType === "blue" ? capBlueDeduction(650000, businessProfit) : 0;
+    // 基礎控除は「合計所得金額」= 青色申告特別控除 **後** の所得で判定する。
+    // 控除前の金額で判定すると階層がずれ、税額が多く出ていた。
+    const totalIncome = Math.max(0, businessProfit - blueDeduction);
+    const basicDeduction = calculateBasicDeduction(totalIncome, year);
 
     const taxableIncome = calculateTaxableIncome(revenueTotal, expenseTotal, {
       basic: basicDeduction,
-      social_insurance: socialInsurance,
+      social_insurance: socialInsuranceForCalc,
       life_insurance: lifeInsurance,
       earthquake_insurance: earthquakeInsurance,
       spouse: spouseDeduction,
@@ -175,15 +249,14 @@ export default function TaxReturnPage() {
 
     // DB保存
     const taxReturnData = {
-      user_id: user.id,
       year,
       return_type: returnType,
       status: "calculated" as const,
       revenue_total: revenueTotal,
       expense_total: expenseTotal,
-      income_total: revenueTotal - expenseTotal,
+      income_total: businessProfit,
       basic_deduction: basicDeduction,
-      social_insurance_deduction: socialInsurance,
+      social_insurance_deduction: socialInsuranceForCalc,
       life_insurance_deduction: lifeInsurance,
       earthquake_insurance_deduction: earthquakeInsurance,
       spouse_deduction: spouseDeduction,
@@ -200,20 +273,28 @@ export default function TaxReturnPage() {
 
     let taxReturnId: string;
     if (taxReturn) {
-      await supabase.from("tax_returns").update(taxReturnData).eq("id", taxReturn.id);
+      const { error } = await supabase
+        .from("tax_returns")
+        .update(taxReturnData)
+        .eq("id", taxReturn.id);
+      if (error) throw error;
       taxReturnId = taxReturn.id;
     } else {
-      const { data, error: insertErr } = await supabase.from("tax_returns").insert(taxReturnData).select().single();
-      if (insertErr || !data) {
-        console.error("確定申告データの保存に失敗:", insertErr);
-        setSaving(false);
-        return;
-      }
+      const { data, error: insertErr } = await supabase
+        .from("tax_returns")
+        .insert(taxReturnData)
+        .select()
+        .single();
+      if (insertErr || !data) throw insertErr ?? new Error("確定申告データを保存できませんでした");
       taxReturnId = data.id;
     }
 
     // 経費内訳を保存
-    await supabase.from("tax_return_expenses").delete().eq("tax_return_id", taxReturnId);
+    const { error: deleteError } = await supabase
+      .from("tax_return_expenses")
+      .delete()
+      .eq("tax_return_id", taxReturnId);
+    if (deleteError) throw deleteError;
     const expenseRecords = Object.values(expenseByAccount).map((e) => ({
       tax_return_id: taxReturnId,
       account_code: e.code,
@@ -221,11 +302,12 @@ export default function TaxReturnPage() {
       amount: e.amount,
     }));
     if (expenseRecords.length > 0) {
-      await supabase.from("tax_return_expenses").insert(expenseRecords);
+      const { error } = await supabase.from("tax_return_expenses").insert(expenseRecords);
+      if (error) throw error;
     }
 
-    setSaving(false);
-    loadTaxReturn();
+    await loadTaxReturn();
+    setWarnings(nextWarnings); // loadTaxReturn が消すので、その後に出す
   }
 
   const formatCurrency = (amount: number) =>
@@ -265,6 +347,17 @@ export default function TaxReturnPage() {
           </Select>
         </div>
       </div>
+
+      {warnings.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 space-y-2">
+          <p className="font-semibold">この計算結果は、そのまま申告に使えません</p>
+          <ul className="list-disc pl-5 space-y-1">
+            {warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <Tabs defaultValue="input">
         <TabsList>
@@ -374,9 +467,25 @@ export default function TaxReturnPage() {
                         <span className="font-medium text-red-600">-{formatCurrency(taxReturn.expense_total)}</span>
                       </div>
                       <Separator />
+                      <div className="flex justify-between">
+                        <span>差引金額（青色申告特別控除前）</span>
+                        <span>{formatCurrency(taxReturn.income_total)}</span>
+                      </div>
+                      {taxReturn.blue_special_deduction > 0 && (
+                        <div className="flex justify-between">
+                          <span>青色申告特別控除</span>
+                          <span className="text-red-600">
+                            -{formatCurrency(taxReturn.blue_special_deduction)}
+                          </span>
+                        </div>
+                      )}
                       <div className="flex justify-between font-bold">
                         <span>事業所得</span>
-                        <span>{formatCurrency(taxReturn.income_total)}</span>
+                        <span>
+                          {formatCurrency(
+                            taxReturn.income_total - taxReturn.blue_special_deduction,
+                          )}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -386,7 +495,6 @@ export default function TaxReturnPage() {
                     <h3 className="font-semibold text-sm text-muted-foreground mb-2">所得控除</h3>
                     <div className="space-y-1 text-sm">
                       <div className="flex justify-between"><span>基礎控除</span><span>{formatCurrency(taxReturn.basic_deduction)}</span></div>
-                      {taxReturn.blue_special_deduction > 0 && <div className="flex justify-between"><span>青色申告特別控除</span><span>{formatCurrency(taxReturn.blue_special_deduction)}</span></div>}
                       {taxReturn.social_insurance_deduction > 0 && <div className="flex justify-between"><span>社会保険料控除</span><span>{formatCurrency(taxReturn.social_insurance_deduction)}</span></div>}
                       {taxReturn.life_insurance_deduction > 0 && <div className="flex justify-between"><span>生命保険料控除</span><span>{formatCurrency(taxReturn.life_insurance_deduction)}</span></div>}
                       {taxReturn.earthquake_insurance_deduction > 0 && <div className="flex justify-between"><span>地震保険料控除</span><span>{formatCurrency(taxReturn.earthquake_insurance_deduction)}</span></div>}

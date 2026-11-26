@@ -70,6 +70,7 @@ import {
   type JournalLike,
 } from "@/lib/etax";
 
+import { todayLocal } from "@/lib/date-utils";
 type ConsumptionTaxType = "exempt" | "simplified" | "standard" | "invoice";
 
 export default function EtaxPage() {
@@ -142,7 +143,7 @@ export default function EtaxPage() {
     try {
       const ctx: EtaxContext = {
         fiscalYear: year,
-        sakuseiDay: new Date().toISOString().slice(0, 10),
+        sakuseiDay: todayLocal(),
         softName: "kaikei",
         vendorName: "Personal",
         taxpayer,
@@ -277,7 +278,7 @@ export default function EtaxPage() {
     try {
       const ctx: EtaxContext = {
         fiscalYear: year,
-        sakuseiDay: new Date().toISOString().slice(0, 10),
+        sakuseiDay: todayLocal(),
         softName: "kaikei",
         vendorName: "Personal",
         taxpayer,

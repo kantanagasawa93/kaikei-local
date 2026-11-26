@@ -596,3 +596,51 @@ pub const SCHEMA_V13_SQL: &str = r#"
 ALTER TABLE invoices ADD COLUMN tax_inclusive INTEGER DEFAULT 0;
 ALTER TABLE invoices ADD COLUMN withholding_mode TEXT DEFAULT 'deduct';
 "#;
+
+/// v14: photo_inbox に state_changed_at (判定が最後に変わった時刻) を追加 (Round 34).
+///
+/// 受信箱の自動整理 (30 日で破棄 → 90 日で物理削除) は、これまで写真の「撮影日」を
+/// 基準にしていた。そのため
+///   - しばらくぶりにスキャンして取り込まれた古い写真が、利用者が一度も見ないうちに
+///     破棄され、同じ起動の数秒後に画像ごと物理削除される
+///   - 手で破棄した写真も、撮影日が古ければ次の起動で即座に物理削除される
+///     (「破棄タブから戻せます」と案内しているのに戻す猶予が無い)
+/// という経路があった。基準を「その状態になってからの経過日数」に変えるため、
+/// 状態が変わった時刻を持つ。
+///
+/// 更新はトリガで行う。photo_inbox.state を書き換える経路は画面・自動整理・
+/// ヘッドレススキャナ (Rust) と多数あり、アプリ側で個別に設定すると入れ忘れが出る。
+///
+/// 既存行の初期値:
+///   - 破棄 / 違う: 「いま」。いつ破棄されたか分からないので、物理削除までの
+///     猶予 (90 日) をここから数え直す (早すぎる削除より、遅い削除の方が安全)
+///   - それ以外: 取り込み時刻 (imported_at)、無ければ受信箱に入った時刻 (detected_at)
+pub const SCHEMA_V14_SQL: &str = r#"
+ALTER TABLE photo_inbox ADD COLUMN state_changed_at TEXT;
+
+UPDATE photo_inbox
+   SET state_changed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+ WHERE state IN ('dismissed', 'not_receipt');
+
+UPDATE photo_inbox
+   SET state_changed_at = COALESCE(imported_at, detected_at)
+ WHERE state_changed_at IS NULL;
+
+CREATE TRIGGER IF NOT EXISTS trg_photo_inbox_state_changed
+AFTER UPDATE OF state ON photo_inbox
+FOR EACH ROW WHEN OLD.state IS NOT NEW.state
+BEGIN
+  UPDATE photo_inbox
+     SET state_changed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+   WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_photo_inbox_state_inserted
+AFTER INSERT ON photo_inbox
+FOR EACH ROW WHEN NEW.state_changed_at IS NULL
+BEGIN
+  UPDATE photo_inbox
+     SET state_changed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+   WHERE id = NEW.id;
+END;
+"#;

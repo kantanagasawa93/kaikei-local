@@ -40,6 +40,9 @@ export default function JournalImportPage() {
   const [parseResult, setParseResult] = useState<ParseResult | null>(null);
   const [committing, setCommitting] = useState(false);
   const [commitMsg, setCommitMsg] = useState<string | null>(null);
+  // 取込結果の警告 (未分類になった科目・貸借不一致など)。件数だけだと何が起きたか
+  // 分からず、未分類のまま気付かずに申告計算から漏れるので、中身を必ず見せる。
+  const [commitWarnings, setCommitWarnings] = useState<string[]>([]);
   const [genericMap, setGenericMap] = useState<GenericMapping>({
     dateCol: 0,
     debitAccountCol: 1,
@@ -53,6 +56,7 @@ export default function JournalImportPage() {
   async function handleFileSelect(f: File) {
     setFile(f);
     setCommitMsg(null);
+    setCommitWarnings([]);
     const buf = new Uint8Array(await f.arrayBuffer());
     const text = decodeCsvBytes(buf);
     const parsed = parseCsvLines(text);
@@ -85,18 +89,20 @@ export default function JournalImportPage() {
     if (!parseResult || parseResult.journals.length === 0) return;
     if (
       !(await confirmDialog(
-        `${parseResult.journals.length}件の仕訳を KAIKEI LOCAL に取り込みます。\n同じ日付・摘要の仕訳が既にある場合はスキップします。`
+        `${parseResult.journals.length}件の仕訳を KAIKEI LOCAL に取り込みます。\n同じ日付・摘要・金額の仕訳が既にある場合はスキップします。`
       ))
     )
       return;
     setCommitting(true);
     try {
       const res = await commitParsedJournals(parseResult.journals, { dedupe: true });
-      const warningText = res.warnings.length > 0 ? `\n警告 ${res.warnings.length}件` : "";
+      setCommitWarnings(res.warnings);
       setCommitMsg(
-        `${res.inserted}件を登録、${res.skipped}件はスキップ（重複 or 明細なし）${warningText}`
+        `${res.inserted}件を登録、${res.skipped}件はスキップ（重複 or 明細なし）` +
+          (res.warnings.length > 0 ? `／警告 ${res.warnings.length}件（下に表示）` : "")
       );
     } catch (e) {
+      setCommitWarnings([]);
       setCommitMsg(`取り込み失敗: ${(e as Error).message}`);
     } finally {
       setCommitting(false);
@@ -366,6 +372,30 @@ export default function JournalImportPage() {
             </p>
           )}
         </div>
+      )}
+
+      {commitWarnings.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2 text-amber-900">
+              <AlertCircle className="h-4 w-4" />
+              取り込み時の警告（{commitWarnings.length}件）
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-amber-900">
+            <ul className="list-disc pl-5 space-y-1 max-h-64 overflow-y-auto">
+              {commitWarnings.map((w, i) => (
+                <li key={i} className="break-all">
+                  {w}
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs">
+              「未分類」で登録された明細は、売上・経費の集計や確定申告の計算に入りません。
+              仕訳帳で該当の仕訳を開き、正しい勘定科目を選び直してください。
+            </p>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::StatusCode,
     response::Html,
     routing::{get, post},
@@ -20,7 +20,12 @@ use tokio::runtime::Runtime;
 // ============================================================
 const PORT: u16 = 17777;
 const MAX_BODY_SIZE: usize = 25 * 1024 * 1024; // 25MB
-const MAX_PENDING: usize = 500;                // 未回収のままメモリに残る最大件数
+const MAX_NAME_MEMO: usize = 500;              // 元ファイル名を覚えておく最大件数
+/// スマホから受信したファイルの保存名の接頭辞。
+/// 受信済み・未登録の一覧は「receipts/ にあるこの接頭辞のファイル」から組み立てる。
+/// (以前はメモリ上のキューだけで管理していたため、画面を離れる・アプリを再起動すると
+///  受信済みの写真が一覧から消え、さらに「孤児ファイル整理」で削除されていた)
+pub const PHONE_PREFIX: &str = "phone-";
 const MAX_FIELDS_PER_REQUEST: usize = 10;      // multipart 1 リクエストで処理する上限
 const UPLOAD_TIMEOUT_SECS: u64 = 30;           // 1 フィールドの読み取りタイムアウト
 
@@ -50,7 +55,8 @@ pub struct PendingUpload {
 // 共有状態
 // ============================================================
 static INFO: OnceLock<Mutex<Option<LanInfo>>> = OnceLock::new();
-static PENDING: OnceLock<Mutex<Vec<PendingUpload>>> = OnceLock::new();
+/// 保存名 → スマホ側の元ファイル名 (表示用のメモ。無くても動く)
+static ORIGINAL_NAMES: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static STARTED: OnceLock<()> = OnceLock::new();
 
@@ -98,7 +104,7 @@ pub fn start(receipts_dir: PathBuf) {
         *g = Some(info);
     }
 
-    PENDING.get_or_init(|| Mutex::new(Vec::new()));
+    ORIGINAL_NAMES.get_or_init(|| Mutex::new(Vec::new()));
 
     let state = AppState {
         receipts_dir,
@@ -145,18 +151,50 @@ pub fn current_info() -> Option<LanInfo> {
     INFO.get()?.lock().ok()?.clone()
 }
 
-pub fn drain_pending() -> Vec<PendingUpload> {
-    match PENDING.get() {
-        Some(m) => match m.lock() {
-            Ok(mut g) => std::mem::take(&mut *g),
-            Err(poisoned) => {
-                log::error!("PENDING mutex poisoned; recovering");
-                let mut g = poisoned.into_inner();
-                std::mem::take(&mut *g)
-            }
-        },
-        None => Vec::new(),
+fn original_name_of(safe: &str) -> Option<String> {
+    let guard = ORIGINAL_NAMES.get()?.lock().ok()?;
+    guard.iter().rev().find(|(k, _)| k == safe).map(|(_, v)| v.clone())
+}
+
+/// `phone-<秒>-<uuid>.<ext>` の <秒> 部分を取り出す。形式が違えば None。
+fn received_secs_of(safe: &str) -> Option<u64> {
+    let rest = safe.strip_prefix(PHONE_PREFIX)?;
+    let (secs, _) = rest.split_once('-')?;
+    if secs.is_empty() || !secs.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
+    secs.parse().ok()
+}
+
+/// スマホから受信して receipts/ に保存済みのファイル一覧 (受信の古い順)。
+///
+/// ディスク上のファイルから毎回組み立てるので、読んでも消えない。
+/// 領収書として登録済みかどうかは DB を見ないと分からないため、呼び出し側
+/// (phone-upload ページ) が receipts.image_url と突き合わせて未登録分だけを表示する。
+pub fn list_pending(receipts_dir: &std::path::Path) -> Vec<PendingUpload> {
+    let Ok(read) = std::fs::read_dir(receipts_dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(u64, PendingUpload)> = Vec::new();
+    for entry in read.flatten() {
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let safe = entry.file_name().to_string_lossy().to_string();
+        let Some(secs) = received_secs_of(&safe) else {
+            continue;
+        };
+        out.push((
+            secs,
+            PendingUpload {
+                filename: original_name_of(&safe).unwrap_or_else(|| safe.clone()),
+                relative_path: format!("receipts/{}", safe),
+                received_at: secs.to_string(),
+            },
+        ));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.relative_path.cmp(&b.1.relative_path)));
+    out.into_iter().map(|(_, p)| p).collect()
 }
 
 // ============================================================
@@ -199,34 +237,43 @@ fn constant_time_eq_str(a: &str, b: &str) -> bool {
     a.as_bytes().ct_eq(b.as_bytes()).unwrap_u8() == 1
 }
 
-fn push_pending(entry: PendingUpload) {
-    if let Some(m) = PENDING.get() {
-        match m.lock() {
-            Ok(mut g) => {
-                while g.len() >= MAX_PENDING {
-                    g.remove(0);
-                }
-                g.push(entry);
-            }
-            Err(poisoned) => {
-                let mut g = poisoned.into_inner();
-                while g.len() >= MAX_PENDING {
-                    g.remove(0);
-                }
-                g.push(entry);
-            }
+fn remember_original_name(safe: &str, original: &str) {
+    if let Some(m) = ORIGINAL_NAMES.get() {
+        let mut g = match m.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        while g.len() >= MAX_NAME_MEMO {
+            g.remove(0);
         }
+        g.push((safe.to_string(), original.to_string()));
     }
 }
 
 // ============================================================
 // ハンドラ
 // ============================================================
-async fn root(State(state): State<AppState>) -> Html<String> {
-    upload_form(State(state)).await
+#[derive(Deserialize)]
+struct FormQuery {
+    t: Option<String>,
 }
 
-async fn upload_form(State(state): State<AppState>) -> Html<String> {
+/// ルートは何も返さない。以前はここがアップロードフォーム (= トークン入り) を
+/// 無条件で返していたため、同じ Wi-Fi 上の誰でもトークンを取得してアップロードできた。
+async fn root() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
+/// アップロードフォーム。QR コードの URL に付いている `?t=<トークン>` が合っている時だけ返す。
+async fn upload_form(
+    State(state): State<AppState>,
+    Query(q): Query<FormQuery>,
+) -> Result<Html<String>, StatusCode> {
+    let given = q.t.unwrap_or_default();
+    if !constant_time_eq_str(&given, &state.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     // token は英数字のみの乱数なので HTML エスケープ不要だが、
     // 念のため非英数字が混入していた場合のフォールバック処理
     let token_safe: String = state
@@ -280,7 +327,7 @@ f.addEventListener('submit', async (e) => {{
 </body></html>"##,
         token = token_safe
     );
-    Html(html)
+    Ok(Html(html))
 }
 
 async fn upload_file(
@@ -326,7 +373,8 @@ async fn upload_file(
 
         let ext = sanitize_ext(&filename);
         let safe = format!(
-            "{}-{}.{}",
+            "{}{}-{}.{}",
+            PHONE_PREFIX,
             chrono_like_timestamp(),
             uuid::Uuid::new_v4(),
             ext
@@ -336,11 +384,56 @@ async fn upload_file(
             log::warn!("write upload failed: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
-        push_pending(PendingUpload {
-            filename,
-            relative_path: format!("receipts/{}", safe),
-            received_at: chrono_like_timestamp(),
-        });
+        remember_original_name(&safe, &filename);
     }
     Ok("ok")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_list_is_built_from_disk_and_is_not_consumed_by_reading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("phone-1700000200-aaaaaaaa-0000-0000-0000-000000000000.jpg"), b"2").unwrap();
+        std::fs::write(dir.join("phone-1700000100-bbbbbbbb-0000-0000-0000-000000000000.heic"), b"1").unwrap();
+        // スマホ受信ではないファイル (ドロップ取込・旧形式・トリミング前バックアップ)
+        std::fs::write(dir.join("1700000000000-cccccccc.jpg"), b"x").unwrap();
+        std::fs::write(dir.join("phone-notanumber-x.jpg"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("phone-1700000300-dir")).unwrap();
+
+        let first = list_pending(dir);
+        let names: Vec<_> = first.iter().map(|p| p.relative_path.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "receipts/phone-1700000100-bbbbbbbb-0000-0000-0000-000000000000.heic",
+                "receipts/phone-1700000200-aaaaaaaa-0000-0000-0000-000000000000.jpg",
+            ],
+            "受信の古い順・スマホ受信ファイルだけ"
+        );
+        assert_eq!(first[0].received_at, "1700000100");
+
+        // 何度読んでも同じ (旧実装は 1 回読むと消えた)
+        assert_eq!(list_pending(dir).len(), 2);
+    }
+
+    #[test]
+    fn received_secs_only_accepts_the_phone_upload_name_shape() {
+        assert_eq!(received_secs_of("phone-1700000000-uuid.jpg"), Some(1700000000));
+        assert_eq!(received_secs_of("1700000000-uuid.jpg"), None);
+        assert_eq!(received_secs_of("phone--uuid.jpg"), None);
+        assert_eq!(received_secs_of("phone-12ab-uuid.jpg"), None);
+        assert_eq!(received_secs_of("phone-1700000000.jpg"), None);
+    }
+
+    #[test]
+    fn token_comparison_rejects_empty_and_wrong_values() {
+        assert!(constant_time_eq_str("ABCD2345", "ABCD2345"));
+        assert!(!constant_time_eq_str("", "ABCD2345"));
+        assert!(!constant_time_eq_str("ABCD2346", "ABCD2345"));
+        assert!(!constant_time_eq_str("ABCD234", "ABCD2345"));
+    }
 }

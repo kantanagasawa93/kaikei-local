@@ -45,8 +45,9 @@ export async function findMatchingRule(
       if (r.bank_account_id && r.bank_account_id !== tx.bank_account_id) return false;
       // 収支フィルタ
       if (r.is_income !== null && r.is_income !== undefined) {
-        const ruleIncome = Boolean(r.is_income);
-        if (ruleIncome !== tx.is_income) return false;
+        // is_income は SQLite から 0/1 (数値) で返る。boolean と === で比べると
+        // 常に不一致になり、収支を指定したルールが 1 件も当たらなくなる。
+        if (Boolean(r.is_income) !== Boolean(tx.is_income)) return false;
       }
       // 金額範囲
       const absAmount = Math.abs(tx.amount);

@@ -50,3 +50,8 @@ block = "0.1"
 # CLI ヘッドレススキャン (LaunchAgent) で使う SQLite 直接アクセス
 rusqlite = { version = "0.31", features = ["bundled"] }
 plist = "1"
+# バックアップ ZIP の作成・復元 (backup.rs)。画像を数百 MB 含むのでストリーミングで扱う
+zip = { version = "4", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"

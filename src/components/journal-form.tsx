@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,8 +16,10 @@ import { Plus, Trash2 } from "lucide-react";
 import { TAX_CLASSES, suggestTaxCodeForAccount, extractTaxFromIncluded } from "@/lib/tax-classes";
 import { getAccountByCode } from "@/lib/accounts";
 import { supabase } from "@/lib/supabase";
+import { meaningfulLines, validateJournalLines } from "@/lib/journal-save";
 import type { Partner } from "@/types";
 
+import { todayLocal } from "@/lib/date-utils";
 export interface JournalLineInput {
   account_code: string;
   account_name: string;
@@ -57,7 +59,7 @@ function emptyLine(): JournalLineInput {
 
 export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
   const [date, setDate] = useState(
-    initialData?.date || new Date().toISOString().split("T")[0]
+    initialData?.date || todayLocal()
   );
   const [description, setDescription] = useState(initialData?.description || "");
   const [lines, setLines] = useState<JournalLineInput[]>(
@@ -65,6 +67,10 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
   );
   const [partners, setPartners] = useState<Partner[]>([]);
   const [saving, setSaving] = useState(false);
+  // Enter キー連打などで submit が同じティックに 2 回走るのを防ぐ
+  // (saving は次のレンダーまで反映されないので、state だけでは守れない)
+  const submittingRef = useRef(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
@@ -82,15 +88,26 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
         if (i !== index) return line;
         const merged = { ...line, ...updates };
         // 勘定科目が変わったら税区分を推測
-        if (updates.account_code && updates.account_code !== line.account_code) {
+        const accountChanged =
+          updates.account_code !== undefined && updates.account_code !== line.account_code;
+        if (accountChanged && updates.account_code) {
           const acc = getAccountByCode(updates.account_code);
           if (acc) {
             merged.tax_code = suggestTaxCodeForAccount(acc.category, acc.code);
           }
         }
-        // 金額/税区分が変わったら内税で税額を逆算
-        const amount = merged.debit_amount || merged.credit_amount;
-        merged.tax_amount = extractTaxFromIncluded(amount, merged.tax_code);
+        // 金額・税区分・科目が変わった時だけ、内税で税額を逆算する。
+        // メモや取引先を直しただけで税額を計算し直すと、他ソフトから取り込んだ
+        // 仕訳などの元の税額 (端数処理が違う) を黙って書き換えてしまう。
+        if (
+          accountChanged ||
+          updates.tax_code !== undefined ||
+          updates.debit_amount !== undefined ||
+          updates.credit_amount !== undefined
+        ) {
+          const amount = merged.debit_amount || merged.credit_amount;
+          merged.tax_amount = extractTaxFromIncluded(amount, merged.tax_code);
+        }
         return merged;
       })
     );
@@ -107,26 +124,28 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
 
   const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0);
   const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0);
-  const isBalanced = totalDebit === totalCredit && totalDebit > 0;
 
   // なぜ保存できないかを明示する (金額 0 の領収書仕訳を科目だけ直そうとした時、
   // 以前はボタンが無言で無効になり「押せない」状態だった)。
-  const disabledReason =
-    totalDebit === 0 && totalCredit === 0
-      ? "金額が未入力です。借方・貸方に同額を入力してください。"
-      : !isBalanced
-        ? `借方と貸方の合計が一致していません（差額 ${Math.abs(
-            totalDebit - totalCredit,
-          ).toLocaleString()}円）。`
-        : null;
+  // 貸借の一致だけでなく、科目の無い行・金額の無い行・借方貸方の両方に金額がある行も弾く。
+  const disabledReason = validateJournalLines(lines);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isBalanced) return;
+    if (disabledReason) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSaving(true);
+    setSaveError(null);
     try {
-      await onSubmit({ date, description, lines });
+      // 完全な空行は保存しない
+      await onSubmit({ date, description, lines: meaningfulLines(lines) });
+    } catch (err) {
+      // 保存に失敗したのに何も表示されないと、利用者は保存できたと思って画面を離れてしまう
+      console.error("仕訳の保存に失敗:", err);
+      setSaveError(`保存に失敗しました: ${(err as Error)?.message ?? String(err)}`);
     } finally {
+      submittingRef.current = false;
       setSaving(false);
     }
   };
@@ -225,10 +244,11 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
                 <Label className="text-xs text-muted-foreground">借方</Label>
                 <Input
                   type="number"
+                  min={0}
                   value={line.debit_amount || ""}
                   onChange={(e) =>
                     updateLine(index, {
-                      debit_amount: parseInt(e.target.value, 10) || 0,
+                      debit_amount: Math.max(0, parseInt(e.target.value, 10) || 0),
                     })
                   }
                   placeholder="0"
@@ -240,10 +260,11 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
                 <div className="flex gap-1">
                   <Input
                     type="number"
+                    min={0}
                     value={line.credit_amount || ""}
                     onChange={(e) =>
                       updateLine(index, {
-                        credit_amount: parseInt(e.target.value, 10) || 0,
+                        credit_amount: Math.max(0, parseInt(e.target.value, 10) || 0),
                       })
                     }
                     placeholder="0"
@@ -294,9 +315,15 @@ export function JournalForm({ onSubmit, initialData }: JournalFormProps) {
         </div>
       </div>
 
+      {saveError && (
+        <p className="text-sm text-destructive whitespace-pre-wrap" role="alert">
+          {saveError}
+        </p>
+      )}
+
       <Button
         type="submit"
-        disabled={saving || !isBalanced}
+        disabled={saving || !!disabledReason}
         title={disabledReason ?? undefined}
         className="w-full"
       >

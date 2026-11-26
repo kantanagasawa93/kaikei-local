@@ -28,68 +28,64 @@ import type {
   FixedAssetDepreciation,
 } from "@/types";
 import { straightLineRate, monthsInService } from "@/lib/depreciation";
+import {
+  classifyAccountCode,
+  DEFAULT_CATEGORY_MAP,
+  type AccountCategoryMap,
+} from "@/lib/accounts";
 
 // ──────────────────────────────────────────────────────────
 // 勘定科目コード → 青色決算書の経費科目 のマッピング
 // ──────────────────────────────────────────────────────────
 
 /**
- * 勘定科目コードの先頭2〜3桁を見て、青色決算書 (KOA210) の
- * どの経費科目カラムに加算するか決定する。
+ * アプリの勘定科目コード (src/lib/accounts.ts の DEFAULT_ACCOUNTS) を、
+ * 青色申告決算書 (KOA210) の経費科目カラムに対応させる。
  *
  * e-Tax 固定の経費区分:
  *   租税公課 / 荷造運賃 / 水道光熱費 / 旅費交通費 / 通信費 /
  *   広告宣伝費 / 接待交際費 / 損害保険料 / 修繕費 / 消耗品費 /
  *   減価償却費 / 福利厚生費 / 給料賃金 / 外注工賃 / 利子割引料 /
  *   地代家賃 / 貸倒金 / 雑費
+ *
+ * 以前のこの表は、科目表を作り直す前の古いコード体系 (611=消耗品費、
+ * 621=旅費交通費、622=通信費、…、629=減価償却費) のままだった。そのため
+ *   - 減価償却費 (611) が「消耗品費」に、会議費 (621) が「旅費交通費」に、
+ *     支払手数料 (622) が「通信費」に、車両費 (623) が「水道光熱費」に、
+ *     研修費 (624) が「接待交際費」に計上され、
+ *   - 租税公課〜消耗品費 (601〜610) と 612〜617 は全て「雑費」に落ち、
+ *   - 決算書の「減価償却費」欄は常に空
+ * になっていた (合計は合うが、科目別の内訳が全部間違っている)。
+ * mapping.test.ts が科目表と突き合わせて検査するので、科目を足したらここも更新する。
  */
 const EXPENSE_CODE_MAP: Record<string, keyof BlueReturnData> = {
-  // 消耗品費
-  "611": "shomohin",
-  // 通信費
-  "622": "tsushin",
-  // 水道光熱費
-  "623": "suidokonetsu",
-  // 旅費交通費
-  "621": "ryohikotsu",
-  // 接待交際費
-  "624": "settai",
-  // 広告宣伝費
-  "625": "kokoku",
-  // 地代家賃
-  "626": "chidai_yachin",
-  // 給料賃金
-  "627": "kyuryo_chinkin",
-  // 外注工賃
-  "628": "gaichu_kochin",
-  // 減価償却費
-  "629": "genka_shokyaku",
-  // 福利厚生費
-  "630": "fukuri_kosei",
-  // 租税公課
-  "631": "sozeikoka",
-  // 損害保険料
-  "632": "songai_hoken",
-  // 修繕費
-  "633": "shuzen",
-  // 荷造運賃
-  "634": "nitsukuriunchin",
-  // 利子割引料
-  "641": "rishi_waribiki",
-  // 貸倒金
-  "636": "kashidaore",
+  "601": "sozeikoka", // 租税公課
+  "602": "nitsukuriunchin", // 荷造運賃
+  "603": "suidokonetsu", // 水道光熱費
+  "604": "ryohikotsu", // 旅費交通費
+  "605": "tsushin", // 通信費
+  "606": "kokoku", // 広告宣伝費
+  "607": "settai", // 接待交際費
+  "608": "songai_hoken", // 損害保険料
+  "609": "shuzen", // 修繕費
+  "610": "shomohin", // 消耗品費
+  "611": "genka_shokyaku", // 減価償却費
+  "612": "fukuri_kosei", // 福利厚生費
+  "613": "kyuryo_chinkin", // 給料賃金
+  "614": "gaichu_kochin", // 外注工賃
+  "615": "rishi_waribiki", // 利子割引料
+  "616": "chidai_yachin", // 地代家賃
+  "617": "kashidaore", // 貸倒金
+  // 620 新聞図書費 / 621 会議費 / 622 支払手数料 / 623 車両費 / 624 研修費 / 699 雑費 と
+  // 利用者が追加した経費科目は、決算書に専用の欄が無いので「雑費」に合算する。
 };
 
 /**
- * コードから経費キーを解決。該当なしなら "zappi" (雑費) に寄せる。
+ * コードから経費キーを解決。専用の欄が無い経費は "zappi" (雑費) に寄せる。
+ * 完全一致のみ (前方一致で別の科目に寄せると、桁数の違うコードが誤って入る)。
  */
-function resolveExpenseKey(accountCode: string): keyof BlueReturnData {
-  // 完全一致 → 前方一致
-  if (EXPENSE_CODE_MAP[accountCode]) return EXPENSE_CODE_MAP[accountCode];
-  for (const prefix of Object.keys(EXPENSE_CODE_MAP)) {
-    if (accountCode.startsWith(prefix)) return EXPENSE_CODE_MAP[prefix];
-  }
-  return "zappi";
+export function resolveExpenseKey(accountCode: string): keyof BlueReturnData {
+  return EXPENSE_CODE_MAP[accountCode] ?? "zappi";
 }
 
 // ──────────────────────────────────────────────────────────
@@ -132,6 +128,8 @@ export function taxReturnToIncomeReturnData(
 
   // 所得税等の額 (= incomeTax + reconstructionTax)
   const shotokuzeiNoGaku = tr.income_tax + tr.reconstruction_tax;
+  // 事業所得 = 売上 − 経費 − 青色申告特別控除 (控除は所得を上限とする)
+  const businessIncome = tr.income_total - Math.min(blueSpecial, Math.max(0, tr.income_total));
 
   return {
     shinkoku_shurui: tr.return_type === "blue" ? "青色" : "白色",
@@ -140,9 +138,11 @@ export function taxReturnToIncomeReturnData(
     // 収入金額等
     eigyo_income: tr.revenue_total,
 
-    // 所得金額等
-    eigyo_shotoku: tr.income_total,
-    goukei_shotoku: tr.income_total,
+    // 所得金額等。tax_returns.income_total は「売上 − 経費」(青色申告特別控除前) なので、
+    // 申告書の所得金額 (①・⑫) には控除後の金額を入れる。控除前のままだと
+    // 決算書の所得金額と一致せず、⑫ − 所得控除 ≠ 課税される所得金額 になる。
+    eigyo_shotoku: businessIncome,
+    goukei_shotoku: businessIncome,
 
     // 所得控除
     iryo_kojo: tr.medical_deduction,
@@ -191,8 +191,11 @@ export function aggregateBlueReturnData(
   opts?: {
     aoiroTokubetsuKojo?: number;
     senjushaKyuyo?: number;
+    /** コード → 区分。利用者が追加した科目も分類したい時に渡す (省略時は既定の科目表) */
+    categories?: AccountCategoryMap;
   }
 ): BlueReturnData {
+  const categories = opts?.categories ?? DEFAULT_CATEGORY_MAP;
   // 月別売上・仕入集計
   const monthly: MonthlyAmount[] = Array.from({ length: 12 }, () => ({
     income: 0,
@@ -206,29 +209,28 @@ export function aggregateBlueReturnData(
   let shiire = 0;
 
   for (const j of journals) {
-    const month = new Date(j.date).getMonth(); // 0-11
+    // "YYYY-MM-DD" の月をそのまま読む (new Date() だと UTC 解釈でタイムゾーンによっては前月になる)
+    const month = Number(j.date.slice(5, 7)) - 1; // 0-11
     for (const l of j.lines || []) {
       const code = l.account_code;
-      if (code.startsWith("4")) {
-        // 売上
+      // 区分は科目表から引く。コードの先頭桁で判定すると、取込で付いた 999 (未分類) を
+      // 黙って捨てたり、桁の合う別体系のコードを誤って拾ったりする。
+      const kind = classifyAccountCode(code, categories);
+      if (kind === "revenue") {
+        // 売上 (雑収入等を含む)
         const amount = l.credit_amount - l.debit_amount;
         uriage += amount;
         if (monthly[month]) monthly[month].income! += amount;
-      } else if (code.startsWith("5")) {
+      } else if (kind === "cogs") {
         // 売上原価 (仕入)
         const amount = l.debit_amount - l.credit_amount;
         shiire += amount;
         if (monthly[month]) monthly[month].cost! += amount;
-      } else if (code.startsWith("6")) {
+      } else if (kind === "expense") {
         // 経費
         const amount = l.debit_amount - l.credit_amount;
         const key = resolveExpenseKey(code);
         expenseByKey[key] = (expenseByKey[key] || 0) + amount;
-      } else if (code.startsWith("7")) {
-        // 営業外費用 (利子割引料等)
-        const amount = l.debit_amount - l.credit_amount;
-        expenseByKey["rishi_waribiki"] =
-          (expenseByKey["rishi_waribiki"] || 0) + amount;
       }
     }
   }
@@ -383,30 +385,48 @@ function bsKeyFromAccountCode(code: string): {
   side: "asset" | "liability";
   base: string;
 } | null {
-  const p2 = code.slice(0, 3);
-  if (p2 === "111") return { side: "asset", base: "genkin" };
-  if (p2 === "112") return { side: "asset", base: "sonota_yokin" };
-  if (p2 === "113") return { side: "asset", base: "teiki" };
-  if (p2 === "114") return { side: "asset", base: "urikake" };
-  if (p2 === "115") return { side: "asset", base: "tanaoroshi" };
-  if (p2 === "116") return { side: "asset", base: "maebarai" };
-  if (p2 === "117") return { side: "asset", base: "kashitsuke" };
-  if (p2 === "131") return { side: "asset", base: "tatemono" };
-  if (p2 === "132") return { side: "asset", base: "tatemono_fuzoku" };
-  if (p2 === "133") return { side: "asset", base: "kikai" };
-  if (p2 === "134") return { side: "asset", base: "sharyo" };
-  if (p2 === "135") return { side: "asset", base: "kogu" };
-  if (p2 === "136") return { side: "asset", base: "tochi" };
-  if (p2 === "211") return { side: "liability", base: "shiharai_tegata" };
-  if (p2 === "212") return { side: "liability", base: "kaikake" };
-  if (p2 === "213") return { side: "liability", base: "kariirekin" };
-  if (p2 === "214") return { side: "liability", base: "miharaikin" };
-  if (p2 === "215") return { side: "liability", base: "maeuke" };
-  if (p2 === "216") return { side: "liability", base: "azukari" };
-  if (p2 === "218") return { side: "liability", base: "kashidaore_hikiate" };
-  if (p2 === "311") return { side: "liability", base: "motoire" };
-  return null;
+  return BS_CODE_MAP[code] ?? null;
 }
+
+/**
+ * アプリの勘定科目コード → 貸借対照表 (KOA210) の欄。
+ *
+ * 以前は上のコメントにある古いコード体系 (111=現金、112=普通預金、311=元入金…) を
+ * 前提にしていたため、現在の科目表 (100=現金、110=普通預金、300=元入金…) では
+ * ほぼ全ての残高がどの欄にも入らず、貸借対照表が日付だけになっていた。
+ * 一致してしまう一部のコードは逆に別の欄へ入っていた (111 当座預金 → 現金 など)。
+ *
+ * 決算書に専用の欄が無い科目 (未収入金・仮払金・仮払/仮受消費税・ソフトウェア・
+ * 未払消費税・仮受金) は対応させていない。これらに残高がある場合、貸借の合計は
+ * 手で空欄に書き足す必要がある。
+ */
+const BS_CODE_MAP: Record<string, { side: "asset" | "liability"; base: string }> = {
+  "100": { side: "asset", base: "genkin" }, // 現金
+  "101": { side: "asset", base: "genkin" }, // 小口現金
+  "110": { side: "asset", base: "sonota_yokin" }, // 普通預金 →「その他の預金」
+  "111": { side: "asset", base: "toza" }, // 当座預金
+  "112": { side: "asset", base: "teiki" }, // 定期預金
+  "120": { side: "asset", base: "urikake" }, // 売掛金
+  "121": { side: "asset", base: "uketori_tegata" }, // 受取手形
+  "130": { side: "asset", base: "maebarai" }, // 前払金
+  "131": { side: "asset", base: "maebarai" }, // 前払費用
+  "140": { side: "asset", base: "tanaoroshi" }, // 棚卸資産
+  "160": { side: "asset", base: "tatemono" }, // 建物
+  "161": { side: "asset", base: "tatemono_fuzoku" }, // 建物附属設備
+  "162": { side: "asset", base: "sharyo" }, // 車両運搬具
+  "163": { side: "asset", base: "kogu" }, // 工具器具備品
+  "164": { side: "asset", base: "tochi" }, // 土地
+  "200": { side: "liability", base: "kaikake" }, // 買掛金
+  "201": { side: "liability", base: "shiharai_tegata" }, // 支払手形
+  "210": { side: "liability", base: "miharaikin" }, // 未払金
+  "211": { side: "liability", base: "miharaikin" }, // 未払費用
+  "220": { side: "liability", base: "azukari" }, // 預り金
+  "221": { side: "liability", base: "azukari" }, // 源泉所得税預り
+  "230": { side: "liability", base: "maeuke" }, // 前受金
+  "240": { side: "liability", base: "kariirekin" }, // 短期借入金
+  "241": { side: "liability", base: "kariirekin" }, // 長期借入金
+  "300": { side: "liability", base: "motoire" }, // 元入金
+};
 
 /**
  * 仕訳全行から BalanceSheetData を集計する。
@@ -427,7 +447,7 @@ export function aggregateBalanceSheet(
   const kimatsuBalance: Record<string, number> = {};
 
   for (const j of allJournals) {
-    const jYear = new Date(j.date).getFullYear();
+    const jYear = Number(j.date.slice(0, 4)); // 文字列の年をそのまま読む (タイムゾーン非依存)
     if (jYear > year) continue; // 未来年の仕訳は無視
     const isKishu = jYear < year; // 前年以前なら期首のみ
     for (const l of j.lines || []) {
@@ -452,8 +472,10 @@ export function aggregateBalanceSheet(
   // 資産側
   const assetFields: Array<[string, keyof BalanceSheetData, keyof BalanceSheetData]> = [
     ["genkin", "genkin_kishu", "genkin_kimatsu"],
+    ["toza", "toza_kishu", "toza_kimatsu"],
     ["sonota_yokin", "sonota_yokin_kishu", "sonota_yokin_kimatsu"],
     ["teiki", "teiki_kishu", "teiki_kimatsu"],
+    ["uketori_tegata", "uketori_tegata_kishu", "uketori_tegata_kimatsu"],
     ["urikake", "urikake_kishu", "urikake_kimatsu"],
     ["tanaoroshi", "tanaoroshi_kishu", "tanaoroshi_kimatsu"],
     ["maebarai", "maebarai_kishu", "maebarai_kimatsu"],

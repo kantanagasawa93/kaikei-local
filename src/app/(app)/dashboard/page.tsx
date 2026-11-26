@@ -25,6 +25,7 @@ import {
 import { toast } from "@/lib/toast";
 import { CheckCircle2, AlertCircle, Repeat } from "lucide-react";
 
+import { todayLocal } from "@/lib/date-utils";
 interface Stats {
   receiptCount: number;
   journalCount: number;
@@ -596,7 +597,7 @@ export default function DashboardPage() {
                 );
                 downloadCsv(
                   csv,
-                  `kaikei_monthly_summary_FY${chartYear}_${new Date().toISOString().slice(0, 10)}.csv`,
+                  `kaikei_monthly_summary_FY${chartYear}_${todayLocal()}.csv`,
                 );
                 toast.success("月次集計を CSV でダウンロードしました");
               }}

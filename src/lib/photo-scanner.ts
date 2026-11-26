@@ -15,6 +15,7 @@
  *   7. photo_scan_log に行を作って結果を記録
  */
 
+import { parseSqliteDate } from "@/lib/date-utils";
 import { db } from "@/lib/localDb";
 import { classifyReceipt, classifyReceiptWithSignals, shouldAutoDismiss, explainAutoDismiss } from "@/lib/receipt-classifier";
 
@@ -116,7 +117,10 @@ const SETTING_LAST_SCAN_SUMMARY = "last_scan_summary";
  * 静かに dismissed へ移す。
  *
  * - 起動時に呼ぶ (boot.tsx 想定) が、24 時間に 1 回しか実行しない
- * - state='candidate' AND last_viewed_at IS NULL AND taken_at < 30日前 が対象
+ * - state='candidate' AND last_viewed_at IS NULL で、**その状態になってから** 30 日
+ *   経ったものが対象 (state_changed_at。無い古い行は detected_at)。
+ *   以前は写真の撮影日 (taken_at) で数えていたため、久しぶりのスキャンで取り込んだ
+ *   古い写真が、利用者が一度も見ないうちに破棄されていた。
  * - auto_dismissed_reason に { reason: "expired_30d", ... } を JSON で残す
  *   (受信箱「破棄」タブから後で確認できる)
  *
@@ -137,19 +141,17 @@ export async function expireOldCandidates(): Promise<{ swept: number }> {
     // 未設定なら走らせる
   }
 
-  const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-  const { data: targets } = await db
+  const cutoffMs = Date.now() - 30 * 24 * 3600 * 1000;
+  const { data: targets, error: targetsError } = await db
     .from("photo_inbox")
-    .select("id, taken_at, last_viewed_at")
-    .eq("state", "candidate")
-    .lt("taken_at", cutoff);
+    .select("id, taken_at, detected_at, state_changed_at, last_viewed_at")
+    .eq("state", "candidate");
+  if (targetsError) return { swept: 0 }; // 読めない時は何も片付けない (次回また試す)
 
   // last_viewed_at IS NULL は localDb の query builder では表現できないので JS で
-  const rows = (
-    (targets as
-      | { id: string; taken_at: string; last_viewed_at: string | null }[]
-      | null) ?? []
-  ).filter((r) => !r.last_viewed_at);
+  const rows = ((targets as AgedInboxRow[] | null) ?? []).filter(
+    (r) => !r.last_viewed_at && isOlderThan(r, cutoffMs),
+  );
   let swept = 0;
   for (const row of rows) {
     const reason = JSON.stringify({
@@ -157,15 +159,13 @@ export async function expireOldCandidates(): Promise<{ swept: number }> {
       swept_at: new Date().toISOString(),
       taken_at: row.taken_at,
     });
-    try {
-      await db
-        .from("photo_inbox")
-        .update({ state: "dismissed", auto_dismissed_reason: reason })
-        .eq("id", row.id);
-      swept++;
-    } catch (e) {
-      console.warn(`expireOldCandidates: ${row.id} failed:`, e);
-    }
+    const { error } = await db
+      .from("photo_inbox")
+      .update({ state: "dismissed", auto_dismissed_reason: reason })
+      .eq("id", row.id)
+      .eq("state", "candidate"); // 読んだ後に利用者が判定した行は触らない
+    if (error) console.warn(`expireOldCandidates: ${row.id} failed:`, error);
+    else swept++;
   }
 
   await upsertSetting(SETTING_LAST_EXPIRE_SWEEP, String(now));
@@ -180,14 +180,15 @@ export async function expireOldCandidates(): Promise<{ swept: number }> {
   // 受信箱から押し下げる (auto_dismissed_reason: stale_failure)
   let staleSwept = 0;
   try {
-    const cutoffFail = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-    const { data: fails } = await db
+    const { data: fails, error: failsError } = await db
       .from("photo_inbox")
-      .select("id, taken_at, last_error")
-      .eq("state", "receipt_failed")
-      .lt("taken_at", cutoffFail);
-    const failRows =
-      (fails as { id: string; taken_at: string; last_error: string | null }[] | null) ?? [];
+      .select("id, taken_at, detected_at, state_changed_at, last_error")
+      .eq("state", "receipt_failed");
+    if (failsError) throw failsError;
+    // 「失敗」になってから 30 日 (撮影日ではなく) 経ったものだけ
+    const failRows = ((fails as (AgedInboxRow & { last_error: string | null })[] | null) ?? []).filter(
+      (r) => isOlderThan(r, cutoffMs),
+    );
     for (const row of failRows) {
       const reason = JSON.stringify({
         reason: "stale_failure",
@@ -195,15 +196,13 @@ export async function expireOldCandidates(): Promise<{ swept: number }> {
         taken_at: row.taken_at,
         last_error: row.last_error?.slice(0, 200) ?? null,
       });
-      try {
-        await db
-          .from("photo_inbox")
-          .update({ state: "dismissed", auto_dismissed_reason: reason })
-          .eq("id", row.id);
-        staleSwept++;
-      } catch (e) {
-        console.warn(`stale_failure expire: ${row.id} failed:`, e);
-      }
+      const { error } = await db
+        .from("photo_inbox")
+        .update({ state: "dismissed", auto_dismissed_reason: reason })
+        .eq("id", row.id)
+        .eq("state", "receipt_failed");
+      if (error) console.warn(`stale_failure expire: ${row.id} failed:`, error);
+      else staleSwept++;
     }
     if (staleSwept > 0) {
       console.info(
@@ -309,11 +308,14 @@ export async function getLastPurgeUnix(): Promise<number | null> {
 const SETTING_LAST_PURGE_SWEEP = "inbox_last_purge_sweep_unix";
 
 /**
- * Round 25 ⓕ: 90 日経過した dismissed を物理削除する.
+ * Round 25 ⓕ: 破棄してから 90 日経過した写真を物理削除する.
  *
  * 大量の家族写真を取り込んだあと dismissed に流したケースで、
  * inbox/ ディレクトリに jpg ファイルが溜まり続けるのを抑制。
- * - state='dismissed' AND taken_at < 90 日前 → SQL DELETE + jpg 削除
+ * - state='dismissed' で、**破棄されてから** 90 日経ったもの → SQL DELETE + jpg 削除
+ *   (state_changed_at。以前は撮影日で数えていたため、撮影日の古い写真は破棄した
+ *    次の起動で即座に消え、「破棄タブから戻せる」猶予が無かった)
+ * - 領収書が参照している画像は、状態に関わらず絶対に消さない
  * - 1 日 1 回まで sweep (boot.tsx 起動時)
  * - 関連 ai_ocr_log は ON DELETE CASCADE で自動連動 (migration v3 で定義済み)
  */
@@ -331,41 +333,81 @@ export async function purgeOldDismissed(): Promise<{ purged: number }> {
     // 未設定なら走る
   }
 
-  const cutoff = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
-  const { data: targets } = await db
+  const cutoffMs = Date.now() - 90 * 24 * 3600 * 1000;
+  const { data: targets, error: targetsError } = await db
     .from("photo_inbox")
-    .select("id, file_path")
-    .eq("state", "dismissed")
-    .lt("taken_at", cutoff);
+    .select("id, file_path, imported_receipt_id, taken_at, detected_at, state_changed_at")
+    .eq("state", "dismissed");
+  // 領収書が参照している画像の一覧。これが読めない時は 1 枚も消さない。
+  const { data: receiptRows, error: receiptsError } = await db
+    .from("receipts")
+    .select("image_url");
+  if (targetsError || receiptsError) return { purged: 0 };
+  const referenced = new Set(
+    ((receiptRows as { image_url: string | null }[] | null) ?? [])
+      .map((r) => r.image_url)
+      .filter((u): u is string => !!u),
+  );
 
-  const rows = (targets as { id: string; file_path: string | null }[] | null) ?? [];
+  const rows = (
+    (targets as
+      | (AgedInboxRow & { file_path: string | null; imported_receipt_id: string | null })[]
+      | null) ?? []
+  ).filter(
+    (r) =>
+      isOlderThan(r, cutoffMs) &&
+      !r.imported_receipt_id &&
+      !(r.file_path && referenced.has(`file://${r.file_path}`)),
+  );
   let purged = 0;
   for (const row of rows) {
-    try {
-      // 1) jpg ファイル削除 (失敗しても DB は消す方針 — file 不整合は致命的ではない)
-      if (row.file_path) {
-        try {
-          const { remove } = await import("@tauri-apps/plugin-fs");
-          await remove(row.file_path);
-        } catch {
-          /* file が既に無い等は無視 */
-        }
-      }
-      // 2) DB から削除
-      await db.from("photo_inbox").delete().eq("id", row.id);
-      purged++;
-    } catch (e) {
-      console.warn(`purgeOldDismissed: ${row.id} failed:`, e);
+    // 先に DB 行を消す (失敗した時にファイルだけ消えて「画像の無いカード」が残らないように)
+    const { error } = await db
+      .from("photo_inbox")
+      .delete()
+      .eq("id", row.id)
+      .eq("state", "dismissed");
+    if (error) {
+      console.warn(`purgeOldDismissed: ${row.id} failed:`, error);
+      continue;
     }
+    if (row.file_path) {
+      try {
+        const { remove } = await import("@tauri-apps/plugin-fs");
+        await remove(row.file_path);
+      } catch {
+        /* file が既に無い等は無視 */
+      }
+    }
+    purged++;
   }
 
   await upsertSetting(SETTING_LAST_PURGE_SWEEP, String(now));
   if (purged > 0) {
     console.info(
-      `[inbox] 90 日経過の dismissed ${purged} 件を物理削除 (jpg + DB 行)`,
+      `[inbox] 破棄から 90 日経過の ${purged} 件を物理削除 (jpg + DB 行)`,
     );
   }
   return { purged };
+}
+
+/** 自動整理の経過日数判定に使う列。 */
+interface AgedInboxRow {
+  id: string;
+  taken_at: string;
+  detected_at: string | null;
+  state_changed_at: string | null;
+  last_viewed_at?: string | null;
+}
+
+/**
+ * その行が「いまの状態になってから」cutoff より前か。
+ * state_changed_at (v14 で追加) を使い、無ければ受信箱に入った時刻 (detected_at)。
+ * どちらも読めない行は「古くない」扱いにして、自動では片付けない。
+ */
+function isOlderThan(row: AgedInboxRow, cutoffMs: number): boolean {
+  const since = parseSqliteDate(row.state_changed_at) ?? parseSqliteDate(row.detected_at);
+  return since !== null && since.getTime() < cutoffMs;
 }
 
 export interface ScanResult {
@@ -455,11 +497,18 @@ export async function scanNow(
   // Round 7 ㊑ 自動破棄ルール: ユーザーが過去に dismissed / not_receipt と
   // マークしたテキスト集合を取り、新規 candidate と類似していれば直接 dismissed。
   // 大量ライブラリでも速いように 1 回だけ取得して in-memory で照合。
+  // 学習元は「利用者が自分で」破棄 / 違う と判定したものだけ (auto_dismissed_reason が空)。
+  // 自動破棄された写真まで学習元に入れると、自動破棄が次の自動破棄を呼ぶ連鎖になり、
+  // 一度の誤判定が似た写真すべてに広がる。
   const { data: dismissedRows } = await db
     .from("photo_inbox")
-    .select("ocr_text")
+    .select("ocr_text, auto_dismissed_reason")
     .in("state", ["dismissed", "not_receipt"]);
-  const dismissedTexts = ((dismissedRows as { ocr_text: string | null }[] | null) ?? [])
+  const dismissedTexts = (
+    (dismissedRows as { ocr_text: string | null; auto_dismissed_reason: string | null }[] | null) ??
+    []
+  )
+    .filter((r) => !r.auto_dismissed_reason)
     .map((r) => r.ocr_text)
     .filter((t): t is string => !!t);
 
@@ -488,6 +537,11 @@ export async function scanNow(
   let duplicateCount = 0;
   let processed = 0;
   let cancelled = false;
+  // 取り込みに失敗した写真の撮影時刻 (次回スキャンの起点をその手前で止めるため)
+  const failedTakenAts: number[] = [];
+  // 撮影時刻の古い順に処理する。途中でキャンセルされても「ここまでは処理済み」と
+  // 言える位置までしかカーソルを進めないため。
+  scanned.sort((a, b) => a.taken_at - b.taken_at);
   for (const photo of scanned) {
     // ㊅ Round 17: 各 photo 開始時に AbortSignal をチェック。
     // 既に処理中の photo は最後まで完走させ、その後ループを抜ける。
@@ -503,7 +557,9 @@ export async function scanNow(
         .select("id")
         .eq("source_asset_id", photo.asset_id)
         .single();
-      if (existing) continue;
+      if (existing) {
+        continue;
+      }
 
       // Vision OCR + 領収書スコアリング (完全ローカル)
       // Round 10 ㉡ + Round 11 ㉦: customWords + ヒット数のレポート
@@ -512,6 +568,8 @@ export async function scanNow(
       let score: number | null = null;
       let initialState: "candidate" | "receipt" | "not_receipt" | "dismissed" = "candidate";
       let scoreSignalsJson: string | null = null;
+      // OCR 自体が失敗したか。失敗と「文字が無い写真」は別物として扱う。
+      let ocrFailed = false;
       try {
         const visionRes = await invoke<{
           lines: string[];
@@ -544,6 +602,7 @@ export async function scanNow(
         }
       } catch (e) {
         console.warn(`vision OCR failed for ${photo.asset_id}:`, e);
+        ocrFailed = true;
       }
 
       // Round 7 ㊑ + Round 8 ㊗: classify 結果が receipt になっていない場合のみ、
@@ -613,28 +672,38 @@ export async function scanNow(
         }
       }
 
-      // 2) OCR テキスト先頭一致 (file_hash で見つからなかった場合)
+      // 2) OCR テキスト一致 (file_hash で見つからなかった場合)
+      //    同じレシートを 2 回撮ったケースを拾う。判定は「読み取った文字が全文一致」のみ。
+      //    以前は先頭 60 文字の一致だけで重複扱いにしていたが、レシートの先頭は
+      //    店名・支店・住所・電話・登録番号で埋まるので、同じ店で別の日に買った
+      //    レシートが「重複」として自動破棄され、経費の計上漏れになっていた。
       if (
         !duplicateOf &&
         ocrText &&
         ocrText.trim().length >= 30 &&
         initialState !== "dismissed"
       ) {
+        const normalized = normalizeOcrForDedupe(ocrText);
         const fp = ocrText.trim().slice(0, 60).replace(/[%_]/g, " ");
         const cutoff90d = new Date(
           Date.now() - 90 * 24 * 3600 * 1000,
         ).toISOString();
         try {
+          // 先頭一致は候補の絞り込みにだけ使い、最終判定は全文で行う
           const { data: dupes } = await db
             .from("photo_inbox")
-            .select("id, state")
+            .select("id, state, ocr_text")
             .in("state", ["receipt", "imported"])
             .gte("taken_at", cutoff90d)
             .like("ocr_text", `${fp}%`)
-            .limit(1);
-          const arr = (dupes as { id: string; state: string }[] | null) ?? [];
-          if (arr.length > 0) {
-            duplicateOf = arr[0].id;
+            .limit(50);
+          const arr =
+            (dupes as { id: string; state: string; ocr_text: string | null }[] | null) ?? [];
+          const same = arr.find(
+            (d) => d.ocr_text && normalizeOcrForDedupe(d.ocr_text) === normalized,
+          );
+          if (same) {
+            duplicateOf = same.id;
             duplicateMatchKind = "ocr_text";
           }
         } catch (e) {
@@ -662,7 +731,10 @@ export async function scanNow(
       ) {
         const ocrEmpty = !ocrText || ocrText.trim().length === 0;
         const zeroScore = score === null || score < 0.001;
-        if (ocrEmpty || zeroScore) {
+        // OCR が失敗しただけの写真は「対象外」と決めつけない。ここで捨てると、
+        // カーソルが先へ進んで二度とスキャンされなくなる。未判定として残し、
+        // 受信箱の「再 OCR」でやり直せるようにする。
+        if (!ocrFailed && (ocrEmpty || zeroScore)) {
           // file_path に保存した jpg は inbox/ ディレクトリのストレージを食うので削除
           try {
             const { remove } = await import("@tauri-apps/plugin-fs");
@@ -687,7 +759,7 @@ export async function scanNow(
         }
       }
 
-      await db.from("photo_inbox").insert({
+      const { error: insertError } = await db.from("photo_inbox").insert({
         id: crypto.randomUUID(),
         source_asset_id: photo.asset_id,
         taken_at: new Date(photo.taken_at * 1000).toISOString(),
@@ -701,6 +773,15 @@ export async function scanNow(
         auto_dismissed_reason: autoDismissedReason,
         score_signals_json: scoreSignalsJson,
       });
+      if (insertError) {
+        // 同じ写真を別のスキャン (定時スキャン等) が先に登録した場合は正常扱い。
+        // それ以外は「取り込めなかった」として記録し、カーソルは進めない
+        // (次回のスキャンでもう一度拾えるように)。
+        if (/UNIQUE constraint failed/i.test(insertError.message ?? "")) {
+          continue;
+        }
+        throw insertError;
+      }
       newPhotos++;
       if (initialState === "receipt") receiptCount++;
 
@@ -728,6 +809,7 @@ export async function scanNow(
       }
     } catch (e) {
       errors.push(`${photo.asset_id}: ${(e as Error).message}`);
+      failedTakenAts.push(photo.taken_at);
       if (onProgress) {
         try {
           onProgress(processed, scanned.length, {
@@ -743,13 +825,21 @@ export async function scanNow(
     }
   }
 
-  // 完了したスキャン時刻を記録 (最新の写真の撮影時刻 or 現在時刻)
-  const latestTaken = scanned.length > 0 ? Math.max(...scanned.map((p) => p.taken_at)) : 0;
-  if (latestTaken > since) {
-    await setLastScanUnix(latestTaken);
-  } else {
-    // 写真が無くても次回 since を進めて再スキャンを軽量化
-    await setLastScanUnix(Math.floor(Date.now() / 1000));
+  // 次回スキャンの起点 (カーソル) を進める。
+  //   - 進めるのは「実際に処理し終えた写真」の撮影時刻まで。以前は取得した全写真の
+  //     最大値まで進めていたため、途中でキャンセルすると未処理の写真が二度と
+  //     スキャンされなかった。エラーで取り込めなかった写真より先にも進めない。
+  //   - 新しい写真が無かった時に「現在時刻」へ進めることもしない。iCloud の同期が
+  //     遅れて後から届く写真 (撮影時刻は過去) を取りこぼすため。
+  const cursor = nextScanCursor(
+    since,
+    scanned.map((p) => p.taken_at),
+    // キャンセルで抜けた時、processed は「ループに入った枚数」(最後の 1 枚は完走済み)
+    processed,
+    failedTakenAts,
+  );
+  if (cursor > since) {
+    await setLastScanUnix(cursor);
   }
 
   await db
@@ -861,6 +951,53 @@ export async function markInboxAllViewed(ids: string[]): Promise<number> {
   return count;
 }
 
+/** "YYYY-MM-DD" (ローカル日付) の始まり / 終わりを UTC の ISO 文字列にする。 */
+export function localDayBoundaryIso(
+  date: string | undefined,
+  edge: "start" | "end",
+): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date ?? "");
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+  const dt =
+    edge === "start" ? new Date(y, mo, d, 0, 0, 0, 0) : new Date(y, mo, d, 23, 59, 59, 999);
+  return isNaN(dt.getTime()) ? null : dt.toISOString();
+}
+
+/** 重複判定用に OCR テキストを正規化する (空白・改行の揺れを無視)。 */
+export function normalizeOcrForDedupe(text: string): string {
+  return text.normalize("NFKC").replace(/\s+/g, "");
+}
+
+/**
+ * 次回スキャンの起点 (カーソル) を決める。純関数 (テスト用に切り出し)。
+ *
+ * 写真は撮影時刻の古い順に処理する前提。カーソルは「ここより前は全部処理済み」と
+ * 言える位置までしか進めない (Rust 側の取得条件は「撮影時刻 > 起点」)。
+ *
+ * @param since 今回のスキャンの起点
+ * @param takenAts 今回取得した写真の撮影時刻 (unix 秒)。順不同でよい
+ * @param processedCount 古い順に何枚目までループに入ったか (キャンセル時は全数より少ない)
+ * @param failedTakenAts 取り込みに失敗した写真の撮影時刻
+ */
+export function nextScanCursor(
+  since: number,
+  takenAts: number[],
+  processedCount: number,
+  failedTakenAts: number[] = [],
+): number {
+  if (takenAts.length === 0 || processedCount <= 0) return since;
+  const sorted = [...takenAts].sort((a, b) => a - b);
+  const n = Math.min(processedCount, sorted.length);
+  // 処理済みの最大
+  let cursor = sorted[n - 1];
+  // 未処理 (キャンセルで残った) の最古の手前まで
+  if (n < sorted.length) cursor = Math.min(cursor, sorted[n] - 1);
+  // 失敗した写真の最古の手前まで (次回もう一度拾えるように)
+  if (failedTakenAts.length > 0) cursor = Math.min(cursor, Math.min(...failedTakenAts) - 1);
+  return Math.max(since, cursor);
+}
+
 /**
  * Round 9 ㉞ で拡張: state に加えて検索クエリ + 撮影日範囲を受ける。
  * - q: ocr_text に対する LIKE %q% (大文字小文字は SQLite の LIKE 仕様に従う)
@@ -875,22 +1012,72 @@ export async function listInbox(
   if (opts.q && opts.q.trim().length > 0) {
     query = query.like("ocr_text", `%${opts.q.trim()}%`);
   }
-  if (opts.fromDate) {
-    query = query.gte("taken_at", opts.fromDate);
-  }
-  if (opts.toDate) {
-    // 終日の 23:59:59 まで含めるため日付末尾の "T23:59:59" を補う
-    query = query.lte("taken_at", `${opts.toDate}T23:59:59`);
-  }
+  // taken_at は UTC の ISO 文字列で入っている。画面の日付はローカル (日本時間) なので、
+  // 「その日の 0:00〜23:59:59」を UTC に直してから比べる。そのまま文字列比較すると
+  // 日本時間 0:00〜8:59 に撮った写真が前日扱いになる。
+  const fromIso = localDayBoundaryIso(opts.fromDate, "start");
+  const toIso = localDayBoundaryIso(opts.toDate, "end");
+  if (fromIso) query = query.gte("taken_at", fromIso);
+  if (toIso) query = query.lte("taken_at", toIso);
   const { data } = await query;
   return (data as InboxRow[] | null) ?? [];
 }
 
+/**
+ * 受信箱の写真の判定 (未判定 / 領収書 / 違う / 破棄) を変える。
+ *
+ * 「取り込み済み」(imported) の写真はここでは変えない。取り込み済みの写真には
+ * 領収書と仕訳が紐付いており、
+ *   - 「破棄」にすると、後の自動削除で領収書が参照している画像ファイルが消える
+ *   - 「領収書」に戻すと、次の一括自動仕訳で同じ写真がもう 1 回仕訳化される
+ * ため。戻したい時は仕訳帳の「受信箱に戻す」(仕訳と領収書も一緒に取り消す) を使う。
+ *
+ * @returns 変更できた件数
+ */
+export async function setInboxStates(
+  ids: string[],
+  state: Exclude<InboxRow["state"], "imported">,
+): Promise<{ changed: number; skippedImported: number }> {
+  if (ids.length === 0) return { changed: 0, skippedImported: 0 };
+  const targets: string[] = [];
+  let skippedImported = 0;
+  for (let i = 0; i < ids.length; i += 400) {
+    const { data, error } = await db
+      .from("photo_inbox")
+      .select("id, state")
+      .in("id", ids.slice(i, i + 400));
+    if (error) throw error;
+    for (const row of (data as { id: string; state: string }[] | null) ?? []) {
+      if (row.state === "imported") skippedImported++;
+      else targets.push(row.id);
+    }
+  }
+  const patch: Record<string, unknown> = { state };
+  if (state === "candidate") {
+    // 「未判定に戻す」= 利用者がいま見て判断を保留した、ということ。
+    // 既読時刻を付けないと、古い写真は次の日次整理で「30 日未確認」として
+    // すぐ自動破棄に戻されてしまう。
+    patch.last_viewed_at = new Date().toISOString();
+    patch.auto_dismissed_reason = null;
+  }
+  for (let i = 0; i < targets.length; i += 400) {
+    const { error } = await db
+      .from("photo_inbox")
+      .update(patch)
+      .in("id", targets.slice(i, i + 400))
+      .neq("state", "imported"); // 読んだ後に取り込み済みになった行も守る
+    if (error) throw error;
+  }
+  return { changed: targets.length, skippedImported };
+}
+
+/** 1 件版。取り込み済みで変更できなかった時は false。 */
 export async function setInboxState(
   id: string,
-  state: InboxRow["state"]
-): Promise<void> {
-  await db.from("photo_inbox").update({ state }).eq("id", id);
+  state: Exclude<InboxRow["state"], "imported">,
+): Promise<boolean> {
+  const r = await setInboxStates([id], state);
+  return r.changed > 0;
 }
 
 /**
@@ -905,12 +1092,13 @@ export async function updateInboxClaudeResult(
     amount?: number | null;
     date?: string | null;
   },
-): Promise<void> {
-  const { data } = await db
+): Promise<Record<string, unknown>> {
+  const { data, error: selectError } = await db
     .from("photo_inbox")
     .select("claude_result_json")
     .eq("id", inboxId)
     .single();
+  if (selectError) throw selectError;
   let parsed: Record<string, unknown> = {};
   const raw = (data as { claude_result_json: string | null } | null)?.claude_result_json;
   if (raw) {
@@ -924,10 +1112,13 @@ export async function updateInboxClaudeResult(
   if (patch.vendor_name !== undefined) parsed.vendor_name = patch.vendor_name;
   if (patch.amount !== undefined) parsed.amount = patch.amount;
   if (patch.date !== undefined) parsed.date = patch.date;
-  await db
+  const { error: updateError } = await db
     .from("photo_inbox")
     .update({ claude_result_json: JSON.stringify(parsed) })
     .eq("id", inboxId);
+  if (updateError) throw updateError;
+  // 更新後の内容を返す (「保存して再仕訳化」がこの値で仕訳を作り直す)
+  return parsed;
 }
 
 /**
@@ -993,8 +1184,10 @@ export async function reocrInboxRow(
         })
       : null;
 
-  // state は「現状から悪化させない」方針: 既に dismissed/imported なら触らない、
-  // candidate / receipt / receipt_failed のみ classify 結果で上書き
+  // state は「現状から悪化させない」方針: 既に dismissed/imported なら触らない。
+  // 「領収書」は利用者 (または高スコア) の判定なので、再 OCR の結果では格下げしない。
+  // (以前は領収書と確定済みの写真が再 OCR で未判定に戻り、30 日後の自動破棄の対象に
+  //  なっていた)。未判定は上書き、失敗は「領収書」に上がる時だけ変える。
   const { data: cur } = await db
     .from("photo_inbox")
     .select("state")
@@ -1006,7 +1199,7 @@ export async function reocrInboxRow(
     receipt_score: cls.score,
     score_signals_json: signalsJson,
   };
-  if (curState === "candidate" || curState === "receipt" || curState === "receipt_failed") {
+  if (curState === "candidate") {
     update.state = cls.state;
   }
   await db.from("photo_inbox").update(update).eq("id", inboxId);

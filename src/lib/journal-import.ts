@@ -300,12 +300,15 @@ function parseMoneyForward(rows: string[][]): ParseResult {
       memo: memo || null,
     };
 
-    const existing = grouped.get(txNo);
-    if (existing && existing.date === date) {
+    // 伝票番号だけをキーにすると、番号が月ごと・年ごとに振り直される CSV で
+    // 「同じ番号・別の日付」の仕訳が後勝ちで上書きされて消える。日付も合わせて束ねる。
+    const groupKey = `${txNo}\u0000${date}`;
+    const existing = grouped.get(groupKey);
+    if (existing) {
       if (debit.account_name) existing.lines.push(debit);
       if (credit.account_name) existing.lines.push(credit);
     } else {
-      grouped.set(txNo, {
+      grouped.set(groupKey, {
         external_id: txNo.startsWith("__auto_") ? null : txNo,
         date,
         description: memo || debit.partner || credit.partner || "",
@@ -519,12 +522,15 @@ function parseFreee(rows: string[][]): ParseResult {
       memo: creditMemo || description || null,
     };
 
-    const existing = grouped.get(shiwakeId);
-    if (existing && existing.date === date) {
+    // 伝票番号だけをキーにすると、番号が月ごと・年ごとに振り直される CSV で
+    // 「同じ番号・別の日付」の仕訳が後勝ちで上書きされて消える。日付も合わせて束ねる。
+    const groupKey = `${shiwakeId}\u0000${date}`;
+    const existing = grouped.get(groupKey);
+    if (existing) {
       if (debitAccount) existing.lines.push(debit);
       if (creditAccount) existing.lines.push(credit);
     } else {
-      grouped.set(shiwakeId, {
+      grouped.set(groupKey, {
         external_id: shiwakeId.startsWith("__auto_") ? null : shiwakeId,
         date,
         description: description || debit.partner || credit.partner || "",
@@ -620,12 +626,15 @@ function parseByColumnMap(
       memo: memo || null,
     };
 
-    const existing = grouped.get(no);
-    if (existing && existing.date === date) {
+    // 伝票番号だけをキーにすると、番号が月ごと・年ごとに振り直される CSV で
+    // 「同じ番号・別の日付」の仕訳が後勝ちで上書きされて消える。日付も合わせて束ねる。
+    const groupKey = `${no}\u0000${date}`;
+    const existing = grouped.get(groupKey);
+    if (existing) {
       if (debitAcct) existing.lines.push(debit);
       if (creditAcct) existing.lines.push(credit);
     } else {
-      grouped.set(no, {
+      grouped.set(groupKey, {
         external_id: no.startsWith("__auto_") ? null : no,
         date,
         description: memo || debit.partner || credit.partner || "",

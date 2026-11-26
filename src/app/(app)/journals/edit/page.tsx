@@ -10,9 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Sparkles, Wand2, Image as ImageIcon, X, ExternalLink } from "lucide-react";
 import Link from "next/link";
-import { rejournalize } from "@/lib/auto-journal";
+import { receiptIdsFromInbox, rejournalize } from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
 import { confirmDialog } from "@/lib/confirm";
+import { replaceJournal } from "@/lib/journal-save";
 
 /** 編集画面で参照する、元領収書の軽量ビュー。 */
 type ReceiptLite = {
@@ -45,8 +46,11 @@ function EditInner() {
     description: string;
     lines: JournalLineInput[];
   } | null>(null);
-  // ㉭ Round 12: 受信箱由来 (receipt_id 紐付き) の仕訳のみ「再仕訳化」を出す
+  // 領収書が紐付いているか (右側に写真を出す)
   const [hasReceipt, setHasReceipt] = useState(false);
+  // ㉭ Round 12: 受信箱の写真から作られた仕訳にだけ「再仕訳化」を出す。
+  // 領収書登録ページから作った仕訳にも receipt_id は付くが、戻す先の写真が無い。
+  const [fromInbox, setFromInbox] = useState(false);
   // 元領収書 (写真を見ながら入力・保存できるように編集画面へ表示する)
   const [receipt, setReceipt] = useState<ReceiptLite | null>(null);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
@@ -56,8 +60,9 @@ function EditInner() {
   async function handleRejournalize() {
     if (!id || rejournalizing) return;
     const ok = await confirmDialog(
-      "現在の仕訳と領収書を削除し、写真を受信箱に戻して AI OCR で再度仕訳化します。\n\n" +
-        "(誤操作の場合は、仕訳帳の「直近の差し戻しを取り消す」で復元できます)\n\n" +
+      "写真をもう一度 AI OCR で読み取り、その結果でこの仕訳を作り直します。\n\n" +
+        "・ここで手で直した科目や金額は、読み取り結果で置き換わります\n" +
+        "・読み取りに失敗した場合、今の仕訳はそのまま残ります\n\n" +
         "続行しますか?",
     );
     if (!ok) return;
@@ -111,6 +116,14 @@ function EditInner() {
         })),
       });
       setHasReceipt(!!journal.receipt_id);
+      if (journal.receipt_id) {
+        try {
+          const linked = await receiptIdsFromInbox([journal.receipt_id]);
+          if (!cancelled) setFromInbox(linked.has(journal.receipt_id));
+        } catch {
+          /* 判定できない時はボタンを出さないだけ */
+        }
+      }
 
       // 元領収書 (画像 + OCR 参考値) を読み込む
       if (journal.receipt_id) {
@@ -146,29 +159,9 @@ function EditInner() {
     lines: JournalLineInput[];
   }) => {
     if (!id) return;
-
-    // ヘッダー更新
-    await supabase
-      .from("journals")
-      .update({ date: data.date, description: data.description })
-      .eq("id", id);
-
-    // 既存明細を削除して再挿入
-    await supabase.from("journal_lines").delete().eq("journal_id", id);
-
-    const lineRecords = data.lines.map((line) => ({
-      journal_id: id,
-      account_code: line.account_code,
-      account_name: line.account_name,
-      debit_amount: line.debit_amount,
-      credit_amount: line.credit_amount,
-      tax_code: line.tax_code,
-      tax_amount: line.tax_amount,
-      partner_id: line.partner_id,
-      memo: line.memo,
-    }));
-
-    await supabase.from("journal_lines").insert(lineRecords);
+    // 新しい明細を入れてから古い明細を消す (失敗しても元の明細が残る)。
+    // 失敗時は例外になり、フォームがエラーを表示する。
+    await replaceJournal(id, data);
     router.push("/journals");
   };
 
@@ -193,14 +186,14 @@ function EditInner() {
         {/* ㉭ Round 12: 受信箱由来の仕訳のみに「AI OCR で再仕訳化」を出す.
             押すと journal+receipt 削除 → photo_inbox を receipt 状態に戻し →
             autoJournalizeOne で再仕訳。誤操作の救済は仕訳帳の Undo で。 */}
-        {hasReceipt && (
+        {fromInbox && (
           <Button
             variant="outline"
             size="sm"
             onClick={handleRejournalize}
             disabled={rejournalizing}
             className="ml-auto"
-            title="現在の仕訳を破棄して、AI OCR で再度仕訳化する"
+            title="写真を AI OCR で読み直して、この仕訳を作り直す"
           >
             <Wand2 className={`h-4 w-4 mr-1 ${rejournalizing ? "animate-pulse" : ""}`} />
             {rejournalizing ? "再仕訳化中..." : "AI OCR で再仕訳化"}

@@ -20,6 +20,9 @@ const eslintConfig = defineConfig([
     "docs/**",
     "scripts/**",
     "*.mjs",
+    // pdf.js の配布物 (minify 済み worker / cmaps / fonts)。自分のコードではない
+    "public/pdf.worker.min.mjs",
+    "public/pdfjs/**",
   ]),
 ]);
 

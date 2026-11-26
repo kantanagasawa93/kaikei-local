@@ -3,6 +3,7 @@ import {
   getLicense,
   incrementUsage,
   isLicenseValid,
+  refundUsage,
 } from "@/lib/license";
 
 // 約30秒タイムアウト
@@ -135,7 +136,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const license = await getLicense(licenseKey);
+  // ライセンス台帳 (Upstash Redis) に到達できない時は例外になる。未処理のまま
+  // 500 を返すと利用者には原因が分からないので、503 で明示する。
+  let license: Awaited<ReturnType<typeof getLicense>>;
+  try {
+    license = await getLicense(licenseKey);
+  } catch (e) {
+    console.error("license lookup failed:", e);
+    return NextResponse.json(
+      { error: "ライセンスを確認できませんでした。時間をおいて再試行してください。" },
+      { status: 503, headers: corsHeaders() }
+    );
+  }
   if (!license) {
     return NextResponse.json(
       { error: "ライセンスキーが無効です" },
@@ -149,16 +161,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const usage = await incrementUsage(licenseKey);
-  if (!usage.ok) {
-    return NextResponse.json(
-      {
-        error: `今月の利用上限 ${usage.limit} 枚に達しました。来月までお待ちいただくか、上位プランをご検討ください。`,
-      },
-      { status: 429, headers: corsHeaders() }
-    );
-  }
-
+  // リクエスト自体が不正・サーバ設定不備の場合に月次枠を消費しないよう、
+  // 枠のカウントアップは「これから実際に Gemini を呼ぶ」直前まで遅らせる。
   let body: { image?: string; media_type?: string };
   try {
     body = await req.json();
@@ -180,6 +184,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "サーバ設定エラー（APIキー未設定）" },
       { status: 500, headers: corsHeaders() }
+    );
+  }
+
+  const usage = await incrementUsage(licenseKey);
+  if (!usage.ok) {
+    return NextResponse.json(
+      {
+        error: `今月の利用上限 ${usage.limit} 枚に達しました。来月までお待ちいただくか、上位プランをご検討ください。`,
+      },
+      { status: 429, headers: corsHeaders() }
     );
   }
 
@@ -230,6 +244,8 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (e) {
+    // 結果を返せなかったので、消費した 1 枚分を戻す
+    await refundUsage(licenseKey);
     if (e instanceof GeminiUpstreamError) {
       return NextResponse.json(
         { error: e.message },

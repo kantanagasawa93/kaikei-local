@@ -18,6 +18,8 @@ import { Plus, BookOpen, Trash2, Pencil, Image as ImageIcon, Undo2, RotateCcw, D
 import { Badge } from "@/components/ui/badge";
 import {
   reverseJournalToInbox,
+  receiptIdsFromInbox,
+  NotFromInboxError,
   undoLastReverse,
   getReverseUndoCount,
   bulkDeleteJournals,
@@ -44,6 +46,7 @@ import { toast } from "@/lib/toast";
 import type { Journal, JournalLine } from "@/types";
 import { confirmDialog } from "@/lib/confirm";
 
+import { todayLocal } from "@/lib/date-utils";
 interface JournalWithLines extends Journal {
   journal_lines: JournalLine[];
   // receipt_id は Journal 側で string | null と宣言されている前提。
@@ -52,11 +55,34 @@ interface JournalWithLines extends Journal {
 
 const PAGE_SIZE = 50;
 
+/**
+ * 一覧に出す明細行。明細が 1 行も無い仕訳 (保存途中の失敗などで残ったもの) は、
+ * 行を描かないと一覧から完全に見えなくなり、編集も削除もできなくなる。
+ * 「(明細なし)」の行を 1 つ出して、開いて直す・削除する入口を残す。
+ */
+function displayLines(journal: JournalWithLines): JournalLine[] {
+  if (journal.journal_lines && journal.journal_lines.length > 0) return journal.journal_lines;
+  return [
+    {
+      id: "__no_lines__",
+      journal_id: journal.id,
+      account_code: "",
+      account_name: "(明細なし)",
+      debit_amount: 0,
+      credit_amount: 0,
+    } as JournalLine,
+  ];
+}
+
 export default function JournalsPage() {
   // Round 22 ⓓ: ?month=YYYY-MM クエリで dashboard ドリルダウンから飛んで来た時の初期値.
   // Next 16 static export では useSearchParams() に Suspense boundary が要るため
   // window.location.search を直接読む (Tauri の static export ではこれで十分).
   const [journals, setJournals] = useState<JournalWithLines[]>([]);
+  // 受信箱の写真から作られた領収書の ID。「受信箱に戻す」はこれに当たる仕訳だけに出す。
+  // (領収書登録ページから作った仕訳にも receipt_id は付くので、receipt_id の有無だけで
+  //  判定してはいけない)
+  const [inboxReceiptIds, setInboxReceiptIds] = useState<Set<string>>(new Set());
   const [monthFilter, setMonthFilter] = useState("");
   // Round 25 ⓒ: from/to レンジを URL クエリで受ける (dashboard ドリルダウン用)
   const [dateFrom, setDateFrom] = useState("");
@@ -185,20 +211,32 @@ export default function JournalsPage() {
       ))
     )
       return;
-    const deleted = await bulkDeleteJournals(ids);
-    setJournals((prev) => prev.filter((j) => !selectedIds.has(j.id)));
-    setSelectedIds(new Set());
-    setBulkUndoCount(await getBulkDeleteUndoCount());
-    toast.success(`${deleted} 件の仕訳を削除しました (取消可能)`);
+    try {
+      const deleted = await bulkDeleteJournals(ids);
+      setSelectedIds(new Set());
+      await loadJournals(); // 消せなかった仕訳が画面から消えたように見えないよう、実際の状態を読み直す
+      setBulkUndoCount(await getBulkDeleteUndoCount());
+      if (deleted === ids.length) {
+        toast.success(`${deleted} 件の仕訳を削除しました (取消可能)`);
+      } else {
+        toast.error(`${ids.length} 件中 ${deleted} 件を削除しました (${ids.length - deleted} 件は削除できませんでした)`);
+      }
+    } catch (e) {
+      toast.error(`削除に失敗しました: ${(e as Error).message}`);
+    }
   }
 
   async function handleUndoBulkDelete() {
-    const r = await undoBulkDelete();
-    if (r.restored === 0) {
-      toast.info("取り消せる削除がありません");
-    } else {
-      toast.success(`${r.restored} 件の仕訳を復元しました`);
+    try {
+      const r = await undoBulkDelete();
+      if (r.restored === 0) {
+        toast.info("取り消せる削除がありません");
+      } else {
+        toast.success(`${r.restored} 件の仕訳を復元しました`);
+      }
       await loadJournals();
+    } catch (e) {
+      toast.error(`取り消しに失敗しました: ${(e as Error).message}`);
     }
     setBulkUndoCount(await getBulkDeleteUndoCount());
   }
@@ -239,11 +277,20 @@ export default function JournalsPage() {
   }, [journals]);
 
   async function loadJournals() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("journals")
       .select("*, journal_lines(*)")
       .order("date", { ascending: false });
-    if (data) setJournals(data);
+    if (error || !data) return; // 読み込み失敗時は今の表示を残す (エラーは localDb がトースト済み)
+    const rows = data as JournalWithLines[];
+    setJournals(rows);
+    try {
+      setInboxReceiptIds(
+        await receiptIdsFromInbox(rows.map((j) => j.receipt_id).filter((x): x is string => !!x)),
+      );
+    } catch {
+      /* 判定できない時はボタンを出さないだけ */
+    }
   }
 
   // ㊒ Round 7: 仕訳 CSV エクスポート (画像 URL コラム + 受信箱由来フラグ込み)
@@ -263,9 +310,15 @@ export default function JournalsPage() {
         const last = new Date(y, m, 0).getDate();
         to = `${monthFilter}-${String(last).padStart(2, "0")}`;
         suffix = `_${monthFilter}`;
+      } else if (dateFrom || dateTo) {
+        // 画面で期間を絞っている時は、書き出しも同じ期間にする
+        // (以前は期間指定を無視して全期間を書き出していた)
+        from = dateFrom || null;
+        to = dateTo || null;
+        suffix = `_${dateFrom || "start"}_${dateTo || "end"}`;
       }
       const csv = await buildJournalsCsv({ fromDate: from, toDate: to });
-      const fname = `kaikei_journals${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
+      const fname = `kaikei_journals${suffix}_${todayLocal()}.csv`;
       downloadCsv(csv, fname);
       toast.success(`CSV を書き出しました (${fname})`);
     } catch (e) {
@@ -285,13 +338,17 @@ export default function JournalsPage() {
         const last = new Date(y, m, 0).getDate();
         to = `${monthFilter}-${String(last).padStart(2, "0")}`;
         suffix = `_${monthFilter}`;
+      } else if (dateFrom || dateTo) {
+        from = dateFrom || null;
+        to = dateTo || null;
+        suffix = `_${dateFrom || "start"}_${dateTo || "end"}`;
       }
       const csv =
         vendor === "freee"
           ? await buildFreeeJournalsCsv({ fromDate: from, toDate: to })
           : await buildMoneyForwardJournalsCsv({ fromDate: from, toDate: to });
       const label = vendor === "freee" ? "freee" : "moneyforward";
-      const fname = `kaikei_journals_${label}${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
+      const fname = `kaikei_journals_${label}${suffix}_${todayLocal()}.csv`;
       downloadCsv(csv, fname);
       toast.success(`${vendor === "freee" ? "freee" : "マネーフォワード"} 形式で書き出しました (${fname})`);
     } catch (e) {
@@ -327,9 +384,33 @@ export default function JournalsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!(await confirmDialog("この仕訳を削除しますか？"))) return;
-    await supabase.from("journals").delete().eq("id", id);
-    setJournals((prev) => prev.filter((j) => j.id !== id));
+    const target = journals.find((j) => j.id === id);
+    const fromInbox = !!target?.receipt_id && inboxReceiptIds.has(target.receipt_id);
+    if (
+      !(await confirmDialog(
+        "この仕訳を削除しますか？\n" +
+          (fromInbox
+            ? "受信箱の写真から作った仕訳なので、写真は「未判定」として受信箱に戻ります。\n"
+            : "") +
+          "(直後なら「直近の一括削除を取り消す」で復元できます)",
+      ))
+    )
+      return;
+    try {
+      // 以前は journals を直接 DELETE していたため、明細取込の行が「仕訳済」のまま
+      // 操作不能になる・減価償却の年が二度と仕訳化できなくなる・受信箱の写真が
+      // 「取り込み済み」のまま取り残される、といった不整合が残っていた。
+      const deleted = await bulkDeleteJournals([id]);
+      if (deleted === 0) {
+        toast.error("仕訳を削除できませんでした");
+      } else {
+        toast.success("仕訳を削除しました (取消可能)");
+      }
+      await loadJournals();
+      setBulkUndoCount(await getBulkDeleteUndoCount());
+    } catch (e) {
+      toast.error(`削除に失敗しました: ${(e as Error).message}`);
+    }
   }
 
   // Round 4 ㊂ 差し戻し:
@@ -346,16 +427,17 @@ export default function JournalsPage() {
     );
     if (!ok) return;
     try {
-      const inboxId = await reverseJournalToInbox(id);
-      if (inboxId) {
-        toast.success("仕訳を取り消して受信箱に戻しました");
-      } else {
-        toast.info("仕訳と領収書を削除しました (受信箱由来ではないので戻し先なし)");
-      }
+      await reverseJournalToInbox(id);
+      toast.success("仕訳を取り消して受信箱に戻しました");
       setJournals((prev) => prev.filter((j) => j.id !== id));
       setUndoCount(await getReverseUndoCount());
     } catch (e) {
-      toast.error(`差し戻しに失敗: ${(e as Error).message}`);
+      if (e instanceof NotFromInboxError) {
+        // 何も削除されていない
+        toast.info(e.message);
+      } else {
+        toast.error(`差し戻しに失敗: ${(e as Error).message}`);
+      }
     }
   }
 
@@ -429,10 +511,13 @@ export default function JournalsPage() {
     return Array.from(set).sort();
   })();
   const totalPages = Math.ceil(filteredJournals.length / PAGE_SIZE);
-  const pagedJournals = filteredJournals.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-
-  // フィルタ変更時にページをリセット
-  useEffect(() => { setPage(0); }, [monthFilter]);
+  // 検索・タグ・金額・要確認などで件数が減った時、開いていたページが範囲外になると
+  // 「仕訳がありません」と表示されページ送りも消えていた。表示は常に範囲内へ丸める。
+  const currentPage = Math.min(page, Math.max(0, totalPages - 1));
+  const pagedJournals = filteredJournals.slice(
+    currentPage * PAGE_SIZE,
+    (currentPage + 1) * PAGE_SIZE,
+  );
 
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat("ja-JP").format(amount);
@@ -554,7 +639,7 @@ export default function JournalsPage() {
                       const bytes = await exportFiscalYearSummaryPdf(summary);
                       downloadBlob(
                         bytes,
-                        `kaikei_summary_FY${y}_${new Date().toISOString().slice(0, 10)}.pdf`,
+                        `kaikei_summary_FY${y}_${todayLocal()}.pdf`,
                       );
                       toast.success(`FY${y} のサマリ PDF を生成しました`);
                     } catch (err) {
@@ -845,7 +930,7 @@ export default function JournalsPage() {
               </TableHeader>
               <TableBody>
                 {pagedJournals.map((journal) =>
-                  journal.journal_lines.map((line, lineIndex) => (
+                  displayLines(journal).map((line, lineIndex) => (
                     <TableRow
                       key={`${journal.id}-${line.id}`}
                       className={selectedIds.has(journal.id) ? "bg-blue-50/50" : undefined}
@@ -854,7 +939,7 @@ export default function JournalsPage() {
                         <>
                           {/* Round 22 ㊛: bulk select checkbox */}
                           <TableCell
-                            rowSpan={journal.journal_lines.length}
+                            rowSpan={displayLines(journal).length}
                             className="align-top"
                           >
                             <button
@@ -871,13 +956,13 @@ export default function JournalsPage() {
                             </button>
                           </TableCell>
                           <TableCell
-                            rowSpan={journal.journal_lines.length}
+                            rowSpan={displayLines(journal).length}
                             className="align-top font-medium"
                           >
                             {journal.date}
                           </TableCell>
                           <TableCell
-                            rowSpan={journal.journal_lines.length}
+                            rowSpan={displayLines(journal).length}
                             className="align-top"
                           >
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -893,19 +978,22 @@ export default function JournalsPage() {
                                 </Badge>
                               )}
                               {journal.receipt_id && (
-                                // 受信箱由来の自動仕訳である目印。
-                                // Phase 4 (auto-journal) で receipts.id が必ず紐付く。
+                                // 領収書が紐付いている目印。受信箱の写真から作られたものは「受信箱」。
                                 <Link
                                   href={`/receipts`}
                                   className="inline-flex"
-                                  title="写真受信箱から自動仕訳された行 — 領収書一覧で原本を確認できます"
+                                  title={
+                                    inboxReceiptIds.has(journal.receipt_id)
+                                      ? "写真受信箱から仕訳化された行 — 領収書一覧で原本を確認できます"
+                                      : "領収書が紐付いた仕訳 — 領収書一覧で原本を確認できます"
+                                  }
                                 >
                                   <Badge
                                     variant="secondary"
                                     className="text-[10px] gap-1 cursor-pointer hover:bg-secondary/80"
                                   >
                                     <ImageIcon className="h-3 w-3" />
-                                    受信箱
+                                    {inboxReceiptIds.has(journal.receipt_id) ? "受信箱" : "領収書"}
                                   </Badge>
                                 </Link>
                               )}
@@ -951,7 +1039,7 @@ export default function JournalsPage() {
                       </TableCell>
                       {lineIndex === 0 ? (
                         <TableCell
-                          rowSpan={journal.journal_lines.length}
+                          rowSpan={displayLines(journal).length}
                           className="align-top"
                         >
                           <div className="flex gap-1">
@@ -968,7 +1056,7 @@ export default function JournalsPage() {
                                 単純削除と違って imported_receipt_id を逆引いて
                                 photo_inbox を candidate に戻すため、誤仕訳の
                                 やり直しがここから 1 クリックで完結する。 */}
-                            {journal.receipt_id && (
+                            {journal.receipt_id && inboxReceiptIds.has(journal.receipt_id) && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1002,22 +1090,22 @@ export default function JournalsPage() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
-            {filteredJournals.length}件中 {page * PAGE_SIZE + 1}〜{Math.min((page + 1) * PAGE_SIZE, filteredJournals.length)}件
+            {filteredJournals.length}件中 {currentPage * PAGE_SIZE + 1}〜{Math.min((currentPage + 1) * PAGE_SIZE, filteredJournals.length)}件
           </p>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage(Math.max(0, page - 1))}
-              disabled={page === 0}
+              onClick={() => setPage(Math.max(0, currentPage - 1))}
+              disabled={currentPage === 0}
             >
               前へ
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
-              disabled={page >= totalPages - 1}
+              onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
+              disabled={currentPage >= totalPages - 1}
             >
               次へ
             </Button>

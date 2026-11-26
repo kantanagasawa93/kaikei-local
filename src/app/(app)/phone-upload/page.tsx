@@ -1,55 +1,132 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Smartphone, Wifi, RefreshCw, Check, Info } from "lucide-react";
-import { db } from "@/lib/localDb";
+import { Smartphone, Wifi, RefreshCw, Check, Info, Trash2, Loader2 } from "lucide-react";
+import {
+  discardPhoneUpload,
+  findRegisteredReceiptFiles,
+  registerPhoneUpload,
+} from "@/lib/receipts";
+import { confirmDialog } from "@/lib/confirm";
+import { toast } from "@/lib/toast";
 
 type LanInfo = { url: string; qr_svg: string; token: string };
 type PendingUpload = { filename: string; relative_path: string; received_at: string };
+
+function errText(e: unknown): string {
+  if (typeof e === "string") return e;
+  return (e as Error)?.message || String(e);
+}
+
+function formatReceivedAt(secs: string): string {
+  const n = Number(secs);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return new Date(n * 1000).toLocaleString("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export default function PhoneUploadPage() {
   const [info, setInfo] = useState<LanInfo | null>(null);
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const [loading, setLoading] = useState(true);
   const [isTauri, setIsTauri] = useState(false);
+  // 処理中のファイル (二重クリックで同じ写真を 2 回登録しないため)
+  const [working, setWorking] = useState<Set<string>>(new Set());
+  const workingRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        setIsTauri(true);
-        const i = (await invoke("get_lan_upload_info")) as LanInfo | null;
-        setInfo(i);
-      } catch {
-        setIsTauri(false);
-      } finally {
-        setLoading(false);
-      }
-    })();
-
-    const t = setInterval(async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const p = (await invoke("list_pending_lan_uploads")) as PendingUpload[];
-        if (p.length > 0) setPending((prev) => [...prev, ...p]);
-      } catch {}
-    }, 3000);
-    return () => clearInterval(t);
+  /**
+   * 受信済みで未登録のファイル一覧を取り直す。
+   *
+   * 一覧は receipts/ フォルダの実ファイルから毎回組み立てる (Rust 側) ので、
+   * このページを離れても・アプリを再起動しても消えない。
+   * 以前はメモリ上のキューを「読んだら消す」方式で取り出して React の state に
+   * 置いていたため、登録前にページを離れると受信した写真が一覧から消えていた。
+   */
+  const refresh = useCallback(async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const all = (await invoke("list_pending_lan_uploads")) as PendingUpload[];
+      const registered = await findRegisteredReceiptFiles(all.map((p) => p.relative_path));
+      setPending(all.filter((p) => !registered.has(p.relative_path)));
+    } catch {
+      /* Tauri 外 / 一時的な DB エラー: 次の更新でまた取り直す */
+    }
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        // LAN サーバはこのページを開いた時に初めて起動する
+        const i = (await invoke("get_lan_upload_info")) as LanInfo | null;
+        if (cancelled) return;
+        setIsTauri(true);
+        setInfo(i);
+        await refresh();
+      } catch {
+        if (!cancelled) setIsTauri(false);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    const t = setInterval(() => void refresh(), 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [refresh]);
+
+  const begin = (rel: string): boolean => {
+    if (workingRef.current.has(rel)) return false;
+    workingRef.current.add(rel);
+    setWorking(new Set(workingRef.current));
+    return true;
+  };
+  const end = (rel: string) => {
+    workingRef.current.delete(rel);
+    setWorking(new Set(workingRef.current));
+  };
+
   async function handleRegister(up: PendingUpload) {
-    await db.from("receipts").insert({
-      image_url: `local://${up.relative_path}`,
-      vendor_name: null,
-      amount: null,
-      date: new Date().toISOString().split("T")[0],
-      status: "pending",
-      doc_type: "receipt",
-    });
-    setPending((prev) => prev.filter((p) => p.relative_path !== up.relative_path));
+    if (!begin(up.relative_path)) return;
+    try {
+      const outcome = await registerPhoneUpload(up.relative_path);
+      if (outcome === "duplicate") {
+        toast.info("同じ画像が登録済みだったため、重複として片付けました");
+      } else if (outcome === "added_pdf_unrendered") {
+        toast.info("PDF を画像化できなかったため、PDF のまま登録しました");
+      } else {
+        toast.success("領収書として登録しました");
+      }
+      await refresh();
+    } catch (e) {
+      toast.error(`登録に失敗しました: ${errText(e)}`);
+    } finally {
+      end(up.relative_path);
+    }
+  }
+
+  async function handleDiscard(up: PendingUpload) {
+    if (!(await confirmDialog("この受信画像を破棄します。元に戻せません。よろしいですか？", "破棄"))) {
+      return;
+    }
+    if (!begin(up.relative_path)) return;
+    try {
+      await discardPhoneUpload(up.relative_path);
+      await refresh();
+    } catch (e) {
+      toast.error(`破棄に失敗しました: ${errText(e)}`);
+    } finally {
+      end(up.relative_path);
+    }
   }
 
   if (loading) {
@@ -99,6 +176,10 @@ export default function PhoneUploadPage() {
                   <Wifi className="h-3 w-3" />
                   データはLAN内のみ。インターネットには出ません。
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  受け付けはこのページを最初に開いた時に始まり、アプリを終了すると止まります。
+                  QR の URL を知っている端末だけが送信できます。
+                </p>
               </div>
             </div>
           ) : (
@@ -123,19 +204,9 @@ export default function PhoneUploadPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
-            受信した画像
+            受信した画像（未登録）
             <Badge variant="secondary">{pending.length}件</Badge>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={async () => {
-                try {
-                  const { invoke } = await import("@tauri-apps/api/core");
-                  const p = (await invoke("list_pending_lan_uploads")) as PendingUpload[];
-                  if (p.length > 0) setPending((prev) => [...prev, ...p]);
-                } catch {}
-              }}
-            >
+            <Button size="sm" variant="ghost" onClick={() => void refresh()} title="更新">
               <RefreshCw className="h-4 w-4" />
             </Button>
           </CardTitle>
@@ -147,19 +218,42 @@ export default function PhoneUploadPage() {
             </p>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              {pending.map((p) => (
-                <div key={p.relative_path} className="border rounded-lg p-3 space-y-2">
-                  <div className="text-xs truncate">{p.filename}</div>
-                  <Button
-                    size="sm"
-                    className="w-full"
-                    onClick={() => handleRegister(p)}
-                  >
-                    <Check className="h-3 w-3 mr-1" />
-                    領収書として登録
-                  </Button>
-                </div>
-              ))}
+              {pending.map((p) => {
+                const busy = working.has(p.relative_path);
+                return (
+                  <div key={p.relative_path} className="border rounded-lg p-3 space-y-2">
+                    <div className="text-xs truncate" title={p.filename}>
+                      {p.filename}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {formatReceivedAt(p.received_at)}
+                    </div>
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      disabled={busy}
+                      onClick={() => handleRegister(p)}
+                    >
+                      {busy ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <Check className="h-3 w-3 mr-1" />
+                      )}
+                      領収書として登録
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="w-full text-muted-foreground"
+                      disabled={busy}
+                      onClick={() => handleDiscard(p)}
+                    >
+                      <Trash2 className="h-3 w-3 mr-1" />
+                      破棄
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>

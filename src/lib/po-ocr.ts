@@ -5,10 +5,12 @@
  * /api/ocr/purchase-order エンドポイントを叩き、{ partner_name, items[], ... } を返す。
  */
 
-import { getApiKey } from "@/lib/ai-ocr";
+import { assertAiOcrConsent, getApiKey } from "@/lib/ai-ocr";
 import { db } from "@/lib/localDb";
+import { lineAmount } from "@/lib/invoice-save";
 import { findOrCreatePartner } from "@/lib/partner-cleanup";
 
+import { todayLocal, addDaysToDateString } from "@/lib/date-utils";
 export interface PurchaseOrderItem {
   description: string;
   quantity: number;
@@ -62,6 +64,8 @@ export async function ocrPurchaseOrder(
   imageBase64: string,
   mediaType: string,
 ): Promise<PurchaseOrderResult> {
+  // 発注書の画像も外部サーバへ送るので、領収書と同じく同意を必須にする
+  await assertAiOcrConsent();
   const apiKey = await getApiKey();
   if (!apiKey) {
     throw new Error("ライセンスキーが未設定です。設定 → AI OCR から登録してください。");
@@ -78,7 +82,8 @@ export async function ocrPurchaseOrder(
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     // Round 28: 429 = Gemini Free Tier 上限超過 → app_settings に記録してバナー表示
-    if (res.status === 429) {
+    // ライセンスの月次上限 (「今月の利用上限…」) は当日枠切れのバナー対象にしない
+    if (res.status === 429 && !/今月|月次|monthly/i.test(err.error ?? "")) {
       try {
         const { markQuotaExhausted } = await import("./ai-ocr-quota");
         await markQuotaExhausted();
@@ -166,7 +171,7 @@ export async function createInvoiceFromPo(
   po: PurchaseOrderResult,
 ): Promise<string> {
   const invoiceId = crypto.randomUUID();
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayLocal();
   const issueDate = po.issue_date || todayIso;
 
   // 支払期限: PO の due_date があればそれ、なければ issuer_settings の default 日数を足す
@@ -181,9 +186,7 @@ export async function createInvoiceFromPo(
       const days = (iss as { default_payment_terms_days?: number } | null)
         ?.default_payment_terms_days;
       if (days && days > 0) {
-        const dt = new Date(issueDate);
-        dt.setDate(dt.getDate() + days);
-        dueDate = dt.toISOString().slice(0, 10);
+        dueDate = addDaysToDateString(issueDate, days);
       }
     } catch {
       /* silent */
@@ -215,7 +218,7 @@ export async function createInvoiceFromPo(
       ? po.total
       : subtotal + taxAmount - withholdingTax;
 
-  await db.from("invoices").insert({
+  const { error: headerError } = await db.from("invoices").insert({
     id: invoiceId,
     invoice_number: invoiceNumber,
     issue_date: issueDate,
@@ -231,13 +234,19 @@ export async function createInvoiceFromPo(
     status: "draft",
     notes: po.po_number ? `発注書番号: ${po.po_number}` : null,
   });
+  // 失敗を見ないと、存在しない請求書の編集画面へ飛ばしてしまう
+  if (headerError) throw headerError;
 
   // 明細行
   for (let i = 0; i < po.items.length; i++) {
     const it = po.items[i];
     const amount =
-      it.amount ?? (it.unit_price != null ? it.unit_price * it.quantity : 0);
-    await db.from("invoice_items").insert({
+      it.amount != null
+        ? Math.round(it.amount)
+        : it.unit_price != null
+          ? lineAmount(it.quantity, it.unit_price)
+          : 0;
+    const { error: itemError } = await db.from("invoice_items").insert({
       id: crypto.randomUUID(),
       invoice_id: invoiceId,
       sort_order: i,
@@ -249,6 +258,11 @@ export async function createInvoiceFromPo(
       tax_code: "S10", // 標準税率 10% を既定 (ユーザは編集画面で変更可能)
       tax_amount: 0,
     });
+    if (itemError) {
+      // 明細が欠けた請求書を残さない (invoice_items は ON DELETE CASCADE)
+      await db.from("invoices").delete().eq("id", invoiceId);
+      throw itemError;
+    }
   }
 
   return invoiceId;

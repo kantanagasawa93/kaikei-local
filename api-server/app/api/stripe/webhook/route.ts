@@ -75,10 +75,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No signature" }, { status: 400 });
   }
 
+  // secret 未設定のまま検証すると「空の鍵での HMAC」になり、誰でも署名を
+  // 偽造できてしまう。設定不備は必ず拒否する (fail-closed)。
+  const webhookSecret = getWebhookSecret();
+  if (!webhookSecret) {
+    console.error("STRIPE_WEBHOOK_SECRET is not set — rejecting webhook");
+    return NextResponse.json({ error: "webhook not configured" }, { status: 500 });
+  }
+
   let event: Stripe.Event;
   const stripe = getStripe();
   try {
-    event = stripe.webhooks.constructEvent(body, sig, getWebhookSecret());
+    event = stripe.webhooks.constructEvent(body, sig, webhookSecret);
   } catch (err) {
     console.error("Webhook signature verification failed:", err);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });

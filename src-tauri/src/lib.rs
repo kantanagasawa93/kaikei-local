@@ -16,18 +16,37 @@ mod scanner;
 #[cfg(target_os = "macos")]
 mod launchd;
 
+#[cfg(target_os = "macos")]
+mod backup;
+
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+/// スマホ取込用の LAN サーバを (未起動なら) 起動して接続情報を返す。
+///
+/// 以前はアプリ起動のたびに全インターフェースの 17777 番で待ち受けを開始していた。
+/// スマホ取込を使わない人の Mac でもポートが開きっぱなしになり、ファイアウォール
+/// 有効時は初回起動で「受信接続を許可しますか」が出ていた。待ち受けは
+/// スマホ取込ページを開いた時 (= このコマンドが呼ばれた時) に初めて始める。
 #[tauri::command]
-fn get_lan_upload_info() -> Option<lan_server::LanInfo> {
+fn get_lan_upload_info(app: tauri::AppHandle) -> Option<lan_server::LanInfo> {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let receipts_dir = dir.join("receipts");
+        let _ = std::fs::create_dir_all(&receipts_dir);
+        lan_server::start(receipts_dir); // 起動済みなら何もしない
+    }
     lan_server::current_info()
 }
 
+/// スマホから受信して receipts/ に保存済みのファイル一覧。
+/// 読んでも消えない (登録済みかどうかの判定は画面側が DB と突き合わせて行う)。
 #[tauri::command]
-fn list_pending_lan_uploads() -> Vec<lan_server::PendingUpload> {
-    lan_server::drain_pending()
+fn list_pending_lan_uploads(app: tauri::AppHandle) -> Vec<lan_server::PendingUpload> {
+    match app.path().app_data_dir() {
+        Ok(dir) => lan_server::list_pending(&dir.join("receipts")),
+        Err(_) => Vec::new(),
+    }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -143,7 +162,11 @@ async fn db_repair_migration_checksum(
         let result = tokio::task::spawn_blocking(move || -> Result<String, String> {
             let ts = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
             let backup = db_path.with_file_name(format!("kaikei.db.bak-{}", ts));
-            std::fs::copy(&db_path, &backup).map_err(|e| format!("backup: {}", e))?;
+            // WAL に残っているコミットも含めて退避する。DB が壊れていて VACUUM INTO が
+            // 通らない時だけ、従来どおりファイルコピーにフォールバック。
+            if backup::snapshot_db(&db_path, &backup).is_err() {
+                std::fs::copy(&db_path, &backup).map_err(|e| format!("backup: {}", e))?;
+            }
 
             let conn = rusqlite::Connection::open(&db_path)
                 .map_err(|e| format!("open db: {}", e))?;
@@ -180,6 +203,158 @@ async fn db_repair_migration_checksum(
     {
         let _ = app;
         Err("db_repair_migration_checksum is only supported on macOS".into())
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// バックアップ / 復元 (backup.rs)
+//
+// kaikei.db は WAL モードなので、WebView 側からファイルを直接読み書きしては
+// いけない (直近の入力が欠ける / 復元した DB が終了時に壊れる)。必ずここを通す。
+// ────────────────────────────────────────────────────────────
+
+/// 一貫スナップショット + receipts/ + inbox/ を ZIP に書き出す。
+#[tauri::command]
+async fn backup_create(
+    app: tauri::AppHandle,
+    dest_path: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        let version = app.package_info().version.to_string();
+        let summary = tokio::task::spawn_blocking(move || {
+            backup::create_backup(&app_data, std::path::Path::new(&dest_path), &version)
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))??;
+        Ok(serde_json::to_value(summary).unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, dest_path);
+        Err("backup is only supported on macOS".into())
+    }
+}
+
+/// バックアップを検証してステージング領域に展開する (今のデータには触れない)。
+/// 実際の差し替えは次回起動時に行われる。
+#[tauri::command]
+async fn restore_stage(
+    app: tauri::AppHandle,
+    src_path: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        let max_schema = sql_migrations().len() as i64;
+        let staged = tokio::task::spawn_blocking(move || {
+            backup::stage_restore(&app_data, std::path::Path::new(&src_path), max_schema)
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))??;
+        Ok(serde_json::to_value(staged).unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, src_path);
+        Err("restore is only supported on macOS".into())
+    }
+}
+
+/// 復元の予約を取り消す。
+#[tauri::command]
+async fn restore_cancel(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        backup::cancel_staged_restore(&app_data)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+/// 予約済みの復元 (再起動待ち) があればその概要を返す。
+#[tauri::command]
+async fn restore_pending(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        Ok(serde_json::to_value(backup::pending_restore(&app_data))
+            .unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// 起動時に適用された復元の結果を 1 度だけ返す (UI での結果表示用)。
+#[tauri::command]
+async fn restore_take_result(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        Ok(serde_json::to_value(backup::take_restore_result(&app_data))
+            .unwrap_or(serde_json::Value::Null))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(serde_json::Value::Null)
+    }
+}
+
+/// 日次スナップショット用: `snapshots/<name>` に一貫スナップショットを作る。
+/// name はファイル名のみ許可 (パス区切りを含むものは拒否)。
+#[tauri::command]
+async fn db_snapshot(app: tauri::AppHandle, name: String) -> Result<u64, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if name.is_empty()
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains("..")
+            || !name.ends_with(".db")
+        {
+            return Err(format!("invalid snapshot name: {}", name));
+        }
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        tokio::task::spawn_blocking(move || {
+            backup::snapshot_db(
+                &app_data.join(backup::DB_FILE),
+                &app_data.join("snapshots").join(name),
+            )
+        })
+        .await
+        .map_err(|e| format!("join: {}", e))?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, name);
+        Err("snapshot is only supported on macOS".into())
     }
 }
 
@@ -497,6 +672,49 @@ fn open_in_finder(path: &std::path::Path) {
             "xdg-open"
         };
         let _ = std::process::Command::new(cmd).arg(path).spawn();
+    }
+}
+
+/// アプリのデータ関連フォルダを Finder で開く。
+///
+/// 画面側は以前 `plugin:shell|open` にパスを渡していたが、tauri-plugin-shell の
+/// 既定の検証 (mailto / tel / http(s) のみ許可) で必ず拒否され、ボタンを押しても
+/// 何も起きなかった。任意パスを開けるようにはせず、開けるフォルダを名前で限定する。
+#[tauri::command]
+async fn open_app_folder(app: tauri::AppHandle, which: String) -> Result<(), String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {}", e))?;
+    let target = match which.as_str() {
+        "data" => base,
+        "receipts" => base.join("receipts"),
+        "inbox" => base.join("inbox"),
+        "snapshots" => base.join("snapshots"),
+        "logs" => app
+            .path()
+            .app_log_dir()
+            .map_err(|e| format!("log dir: {}", e))?,
+        other => return Err(format!("unknown folder: {}", other)),
+    };
+    open_in_finder(&target);
+    Ok(())
+}
+
+/// システム設定の「プライバシーとセキュリティ → 写真」を開く。
+#[tauri::command]
+async fn open_photos_privacy_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open: {}", e))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("only supported on macOS".into())
     }
 }
 
@@ -936,6 +1154,99 @@ fn run_tail_app_log_and_exit(n: usize, errors_only: bool) -> ! {
     std::process::exit(0);
 }
 
+/// DB マイグレーション一覧 (バージョン昇順)。
+///
+/// 追加する時は migrations.rs に SQL 定数を足し、ここの末尾に 1 件追加する。
+/// 既存バージョンの SQL は絶対に書き換えないこと (sqlx の checksum 不一致で起動不能になる)。
+fn sql_migrations() -> Vec<Migration> {
+    vec![
+        Migration {
+            version: 1,
+            description: "initial_schema",
+            sql: migrations::SCHEMA_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "invoices_and_settings",
+            sql: migrations::SCHEMA_V2_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "photo_inbox_and_scan_log",
+            sql: migrations::SCHEMA_V3_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "photo_inbox_claude_result_and_retry",
+            sql: migrations::SCHEMA_V4_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 5,
+            description: "photo_inbox_v4_cleanup",
+            sql: migrations::SCHEMA_V5_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "photo_inbox_auto_dismissed_reason",
+            sql: migrations::SCHEMA_V6_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "photo_inbox_score_signals_json",
+            sql: migrations::SCHEMA_V7_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "photo_inbox_last_viewed_at",
+            sql: migrations::SCHEMA_V8_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "journals_tags",
+            sql: migrations::SCHEMA_V9_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 10,
+            description: "invoices_withholding_tax",
+            sql: migrations::SCHEMA_V10_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 11,
+            description: "partners_postal_code",
+            sql: migrations::SCHEMA_V11_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 12,
+            description: "invoices_doc_type",
+            sql: migrations::SCHEMA_V12_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 13,
+            description: "invoices_tax_inclusive_and_withholding_mode",
+            sql: migrations::SCHEMA_V13_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 14,
+            description: "photo_inbox_state_changed_at",
+            sql: migrations::SCHEMA_V14_SQL,
+            kind: MigrationKind::Up,
+        },
+    ]
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // CLI/LaunchAgent 経由で `--auto-scan` が来た場合は GUI を立ち上げず即スキャン
@@ -1207,86 +1518,32 @@ pub fn run() {
         }
     }
 
-    let sql_migrations: Vec<Migration> = vec![
-        Migration {
-            version: 1,
-            description: "initial_schema",
-            sql: migrations::SCHEMA_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "invoices_and_settings",
-            sql: migrations::SCHEMA_V2_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "photo_inbox_and_scan_log",
-            sql: migrations::SCHEMA_V3_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "photo_inbox_claude_result_and_retry",
-            sql: migrations::SCHEMA_V4_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "photo_inbox_v4_cleanup",
-            sql: migrations::SCHEMA_V5_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "photo_inbox_auto_dismissed_reason",
-            sql: migrations::SCHEMA_V6_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 7,
-            description: "photo_inbox_score_signals_json",
-            sql: migrations::SCHEMA_V7_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 8,
-            description: "photo_inbox_last_viewed_at",
-            sql: migrations::SCHEMA_V8_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 9,
-            description: "journals_tags",
-            sql: migrations::SCHEMA_V9_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 10,
-            description: "invoices_withholding_tax",
-            sql: migrations::SCHEMA_V10_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 11,
-            description: "partners_postal_code",
-            sql: migrations::SCHEMA_V11_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 12,
-            description: "invoices_doc_type",
-            sql: migrations::SCHEMA_V12_SQL,
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 13,
-            description: "invoices_tax_inclusive_and_withholding_mode",
-            sql: migrations::SCHEMA_V13_SQL,
-            kind: MigrationKind::Up,
-        },
-    ];
+    // GUI 起動時、SQL プラグインが DB を開く前にやっておくこと。
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = verify_app_data_dir();
+        // (1) 設定画面で予約された復元を適用 (WAL/SHM ごと差し替え)
+        if let Some(result) = backup::apply_pending_restore(&app_data) {
+            if result.ok {
+                eprintln!(
+                    "[restore] applied: journals={} receipts={} files={}",
+                    result.journals, result.receipts, result.file_count
+                );
+            } else {
+                eprintln!("[restore] failed: {}", result.error.unwrap_or_default());
+            }
+        }
+        // (2) DB 内の絶対パスをこの Mac のデータフォルダ基準に揃える。
+        //     データフォルダを別の Mac / 別ユーザーへ手でコピーした場合の救済。
+        //     既に揃っていれば何も書き換えない。
+        match backup::rebase_stored_paths(&app_data.join(backup::DB_FILE), &app_data) {
+            Ok(n) if n > 0 => eprintln!("[paths] rebased {} stored path(s) to {}", n, app_data.display()),
+            Ok(_) => {}
+            Err(e) => eprintln!("[paths] rebase skipped: {}", e),
+        }
+    }
+
+    let sql_migrations = sql_migrations();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -1320,7 +1577,7 @@ pub fn run() {
             if let Some(dir) = app_data_dir {
                 let receipts_dir = dir.join("receipts");
                 let _ = std::fs::create_dir_all(&receipts_dir);
-                lan_server::start(receipts_dir);
+                // LAN サーバはここでは起動しない (get_lan_upload_info で必要時に起動)
             }
 
             // ── メニューバー ──
@@ -1464,6 +1721,14 @@ pub fn run() {
             wipe_app_data,
             migrations_status,
             pdf_to_png_base64,
+            backup_create,
+            restore_stage,
+            restore_cancel,
+            restore_pending,
+            restore_take_result,
+            db_snapshot,
+            open_app_folder,
+            open_photos_privacy_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

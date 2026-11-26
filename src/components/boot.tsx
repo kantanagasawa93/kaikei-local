@@ -14,6 +14,33 @@ import { checkPartnerCleanup } from "@/lib/partner-cleanup";
 export function Boot() {
   useEffect(() => {
     installErrorReporter();
+    // 設定画面で予約した「復元」は、この起動の最初 (DB を開く前) に Rust 側で適用済み。
+    // 結果を 1 度だけ受け取って知らせる。
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const r = (await invoke("restore_take_result")) as {
+          ok: boolean;
+          error?: string | null;
+          journals: number;
+          receipts: number;
+          file_count: number;
+        } | null;
+        if (!r) return;
+        const { toast } = await import("@/lib/toast");
+        if (r.ok) {
+          toast.success(
+            `バックアップを復元しました（仕訳 ${r.journals}件 / 領収書 ${r.receipts}件 / 画像 ${r.file_count}枚）`,
+          );
+        } else {
+          toast.error(
+            `復元できませんでした: ${r.error ?? "不明なエラー"}（データは復元前のままです）`,
+          );
+        }
+      } catch {
+        /* Tauri 外 (ブラウザ実行) では何もしない */
+      }
+    })();
     // 日次ローリングバックアップ (失敗しても静かに無視)
     runAutoBackup();
     // 新バージョンチェック (起動時 1 回、10 秒遅延でネットが落ち着いてから)

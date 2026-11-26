@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { db } from "@/lib/localDb";
@@ -24,17 +24,22 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ArrowLeft, Plus, Trash2, FileDown, Send, CheckCircle2 } from "lucide-react";
+import { TAX_CLASSES } from "@/lib/tax-classes";
 import {
-  TAX_CLASSES,
-  calculateTax,
-  extractTaxFromIncluded,
-  calcWithholdingTax,
-} from "@/lib/tax-classes";
+  computeInvoiceTotals,
+  isInvoiceNumberTaken,
+  lineAmount,
+  lineTaxAmount,
+  nextInvoiceNumber,
+  saveInvoice,
+} from "@/lib/invoice-save";
+import { toast } from "@/lib/toast";
 import { exportInvoicePdf } from "@/lib/invoice-pdf";
 import { downloadBlob } from "@/lib/pdf-export";
 import type { Invoice, InvoiceItem, IssuerSettings, Partner } from "@/types";
 import { confirmDialog } from "@/lib/confirm";
 
+import { todayLocal, addDaysToDateString } from "@/lib/date-utils";
 type ItemInput = {
   id?: string;
   description: string;
@@ -64,7 +69,7 @@ function EditInner() {
   const [issuer, setIssuer] = useState<IssuerSettings | null>(null);
 
   const [invoiceNumber, setInvoiceNumber] = useState("");
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().split("T")[0]);
+  const [issueDate, setIssueDate] = useState(todayLocal());
   const [dueDate, setDueDate] = useState("");
   const [partnerId, setPartnerId] = useState<string>("");
   const [partnerName, setPartnerName] = useState("");
@@ -80,6 +85,12 @@ function EditInner() {
   const [whMode, setWhMode] = useState<Invoice["withholding_mode"]>("deduct");
   const [whAuto, setWhAuto] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  // 送付日・入金日は最初に記録した時刻を保つ (保存のたびに「いま」で上書きしない)
+  const stampsRef = useRef<{ sent_at: string | null; paid_at: string | null }>({
+    sent_at: null,
+    paid_at: null,
+  });
 
   useEffect(() => {
     (async () => {
@@ -107,6 +118,7 @@ function EditInner() {
           setWithholding(i.withholding_tax ?? 0);
           setTaxInclusive(!!i.tax_inclusive);
           setWhMode(i.withholding_mode === "note" ? "note" : "deduct");
+          stampsRef.current = { sent_at: i.sent_at ?? null, paid_at: i.paid_at ?? null };
         }
         const { data: itemRows } = await db
           .from("invoice_items")
@@ -126,27 +138,16 @@ function EditInner() {
           );
         }
       } else {
-        // 自動採番: INV-YYYYMMDD-XXX (領収書は RCP-)。連番は同じ種別の最新から継続
+        // 自動採番: INV-YYYYMMDD-XXX (領収書は RCP-)。連番は同じ種別の最大 + 1
         const wantReceipt = params.get("type") === "receipt";
-        const today = new Date().toISOString().replace(/-/g, "").slice(0, 8);
-        const { data: existing } = await db
-          .from("invoices")
-          .select("invoice_number")
-          .eq("doc_type", wantReceipt ? "receipt" : "invoice")
-          .order("issue_date", { ascending: false })
-          .limit(1);
-        let seq = 1;
-        if (existing && existing.length > 0) {
-          const last = existing[0].invoice_number as string;
-          const m = last.match(/(\d+)$/);
-          if (m) seq = parseInt(m[1], 10) + 1;
+        try {
+          setInvoiceNumber(await nextInvoiceNumber(wantReceipt ? "receipt" : "invoice", todayLocal()));
+        } catch {
+          setInvoiceNumber(`${wantReceipt ? "RCP" : "INV"}-${todayLocal().replace(/-/g, "")}-001`);
         }
-        setInvoiceNumber(`${wantReceipt ? "RCP" : "INV"}-${today}-${String(seq).padStart(3, "0")}`);
 
         if (!wantReceipt && iRes.data?.default_payment_terms_days) {
-          const d = new Date();
-          d.setDate(d.getDate() + iRes.data.default_payment_terms_days);
-          setDueDate(d.toISOString().split("T")[0]);
+          setDueDate(addDaysToDateString(todayLocal(), iRes.data.default_payment_terms_days));
         }
       }
       setLoading(false);
@@ -157,27 +158,20 @@ function EditInner() {
   // 税込入力時は subtotal = 税込合計、tax = 内税で逆算した消費税 (加算しない)。
   // 源泉徴収は whAuto で税抜報酬額から段階税率 (10.21% / 100万円超 20.42%) を自動計算。
   // total は whMode='deduct' なら 税込合計 − 源泉徴収、'note' なら 税込合計のまま。
-  const totals = useMemo(() => {
-    let subtotal = 0;
-    let tax = 0;
-    for (const it of items) {
-      const amt = Math.floor(it.quantity * it.unit_price);
-      subtotal += amt;
-      tax += taxInclusive
-        ? extractTaxFromIncluded(amt, it.tax_code)
-        : calculateTax(amt, it.tax_code);
-    }
-    const gross = taxInclusive ? subtotal : subtotal + tax;
-    const whBase = taxInclusive ? subtotal - tax : subtotal;
-    const wh = whAuto ? calcWithholdingTax(whBase) : withholding;
-    return {
-      subtotal,
-      tax,
-      gross,
-      wh,
-      total: whMode === "deduct" ? gross - wh : gross,
-    };
-  }, [items, withholding, taxInclusive, whMode, whAuto]);
+  const totals = useMemo(
+    () =>
+      computeInvoiceTotals(items, {
+        taxInclusive,
+        whMode: whMode === "note" ? "note" : "deduct",
+        whAuto,
+        withholding,
+      }),
+    [items, withholding, taxInclusive, whMode, whAuto],
+  );
+
+  // 明細行ごとの税額 (invoice_items.tax_amount 用の参考値)。請求書としての税額は
+  // 税区分ごとに 1 回の端数処理 (totals.tax) が正なので、行の合算とは数円ずれ得る。
+  const lineTax = (amount: number, taxCode: string) => lineTaxAmount(amount, taxCode, taxInclusive);
 
   const updateItem = (idx: number, patch: Partial<ItemInput>) => {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -200,63 +194,73 @@ function EditInner() {
   );
 
   const handleSave = async (newStatus?: Invoice["status"]) => {
-    if (!invoiceNumber || !partnerName || items.length === 0) return;
-    setSaving(true);
-    const saveStatus = newStatus || status;
-    const payload = {
-      doc_type: docType,
-      invoice_number: invoiceNumber,
-      issue_date: issueDate,
-      due_date: isReceipt ? null : dueDate || null,
-      partner_id: partnerId || null,
-      partner_name: partnerName,
-      partner_address: partnerAddress || null,
-      subject: subject || null,
-      subtotal: totals.subtotal,
-      tax_amount: totals.tax,
-      tax_inclusive: taxInclusive ? 1 : 0,
-      withholding_tax: totals.wh,
-      withholding_mode: whMode,
-      total_amount: totals.total,
-      status: saveStatus,
-      notes: notes || null,
-      updated_at: new Date().toISOString(),
-      sent_at: saveStatus === "sent" || saveStatus === "paid" ? new Date().toISOString() : null,
-      paid_at: saveStatus === "paid" ? new Date().toISOString() : null,
-    };
-
-    let savedId = id;
-    if (id) {
-      await db.from("invoices").update(payload).eq("id", id);
-    } else {
-      const ins = await db.from("invoices").insert(payload);
-      savedId = (ins.data as { id: string }[])?.[0]?.id ?? null;
+    if (savingRef.current) return;
+    const missing: string[] = [];
+    if (!invoiceNumber.trim()) missing.push(`${docLabel}番号`);
+    if (!partnerName.trim()) missing.push("宛名（取引先名）");
+    if (items.length === 0) missing.push("明細");
+    if (missing.length > 0) {
+      toast.error(`未入力の項目があります: ${missing.join("、")}`);
+      return;
     }
-
-    if (savedId) {
-      await db.from("invoice_items").delete().eq("invoice_id", savedId);
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        const amount = Math.floor(it.quantity * it.unit_price);
-        await db.from("invoice_items").insert({
-          invoice_id: savedId,
-          sort_order: i,
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (await isInvoiceNumberTaken(invoiceNumber, id)) {
+        const ok = await confirmDialog(
+          `${docLabel}番号「${invoiceNumber}」は別の文書で既に使われています。同じ番号のまま保存しますか？`,
+          "このまま保存",
+        );
+        if (!ok) return;
+      }
+      const saveStatus = newStatus || status;
+      const now = new Date().toISOString();
+      const sentAt =
+        saveStatus === "sent" || saveStatus === "paid" ? (stampsRef.current.sent_at ?? now) : null;
+      const paidAt = saveStatus === "paid" ? (stampsRef.current.paid_at ?? now) : null;
+      const payload = {
+        doc_type: docType,
+        invoice_number: invoiceNumber,
+        issue_date: issueDate,
+        due_date: isReceipt ? null : dueDate || null,
+        partner_id: partnerId || null,
+        partner_name: partnerName,
+        partner_address: partnerAddress || null,
+        subject: subject || null,
+        subtotal: totals.subtotal,
+        tax_amount: totals.tax,
+        tax_inclusive: taxInclusive ? 1 : 0,
+        withholding_tax: totals.wh,
+        withholding_mode: whMode,
+        total_amount: totals.total,
+        status: saveStatus,
+        notes: notes || null,
+        updated_at: now,
+        sent_at: sentAt,
+        paid_at: paidAt,
+      };
+      const savedId = await saveInvoice(
+        id,
+        payload,
+        items.map((it, i) => ({
           description: it.description,
           quantity: it.quantity,
           unit: it.unit || null,
           unit_price: it.unit_price,
-          amount,
+          amount: totals.amounts[i],
           tax_code: it.tax_code,
-          tax_amount: taxInclusive
-            ? extractTaxFromIncluded(amount, it.tax_code)
-            : calculateTax(amount, it.tax_code),
-        });
-      }
-    }
-    setSaving(false);
-    setStatus(saveStatus);
-    if (!id && savedId) {
-      router.replace(`/invoices/edit/?id=${savedId}`);
+          tax_amount: lineTax(totals.amounts[i], it.tax_code),
+        })),
+      );
+      stampsRef.current = { sent_at: sentAt, paid_at: paidAt };
+      setStatus(saveStatus);
+      toast.success(`${docLabel}を保存しました`);
+      if (!id) router.replace(`/invoices/edit/?id=${savedId}`);
+    } catch (e) {
+      toast.error(`保存に失敗しました: ${(e as Error)?.message || String(e)}`);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
 
@@ -273,7 +277,7 @@ function EditInner() {
         `次の項目が「発行者情報」に未登録です:\n  ・ ${missing.join("\n  ・ ")}\n\n` +
           `このまま PDF を出すと、振込先などが空欄のままになります。\n` +
           `先に「発行者情報」を登録しますか?\n\n` +
-          `[OK] 設定画面へ移動\n[Cancel] このまま PDF を出す`,
+          `[OK] 設定画面へ移動\n[キャンセル] このまま PDF を出す`,
       );
       if (ok) {
         router.push("/invoices/settings/");
@@ -305,7 +309,7 @@ function EditInner() {
       updated_at: "",
     };
     const itemRows: InvoiceItem[] = items.map((it, idx) => {
-      const amount = Math.floor(it.quantity * it.unit_price);
+      const amount = lineAmount(it.quantity, it.unit_price);
       return {
         id: it.id || `tmp-${idx}`,
         invoice_id: id || "tmp",
@@ -316,9 +320,7 @@ function EditInner() {
         unit_price: it.unit_price,
         amount,
         tax_code: it.tax_code,
-        tax_amount: taxInclusive
-          ? extractTaxFromIncluded(amount, it.tax_code)
-          : calculateTax(amount, it.tax_code),
+        tax_amount: lineTax(amount, it.tax_code),
       };
     });
     const bytes = await exportInvoicePdf(invoice, itemRows, issuer);
@@ -489,7 +491,7 @@ function EditInner() {
             </TableHeader>
             <TableBody>
               {items.map((it, idx) => {
-                const amount = Math.floor(it.quantity * it.unit_price);
+                const amount = lineAmount(it.quantity, it.unit_price);
                 return (
                   <TableRow key={idx}>
                     <TableCell>

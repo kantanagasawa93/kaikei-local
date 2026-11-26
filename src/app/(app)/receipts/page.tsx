@@ -22,6 +22,7 @@ import { downloadCsv } from "@/lib/journal-export";
 import { toast } from "@/lib/toast";
 import { confirmDialog } from "@/lib/confirm";
 
+import { todayLocal } from "@/lib/date-utils";
 export default function ReceiptsPage() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [search, setSearch] = useState("");
@@ -120,7 +121,7 @@ export default function ReceiptsPage() {
     const csv = "﻿" + lines.join("\r\n") + "\r\n";
     downloadCsv(
       csv,
-      `kaikei_receipts_${new Date().toISOString().slice(0, 10)}.csv`,
+      `kaikei_receipts_${todayLocal()}.csv`,
     );
     toast.success(`${targets.length} 件を CSV で書き出しました`);
   }

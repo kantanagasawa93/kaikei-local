@@ -12,26 +12,23 @@ import { decodeCsvBytes, parseCsvLines } from "@/lib/journal-import";
 // -------------------------------------------------------------
 
 export async function ensureAccountsSeeded(): Promise<number> {
-  try {
-    const { data } = await db.from("accounts").select("code");
-    const existing = (data as { code: string }[] | null) || [];
-    if (existing.length > 0) return existing.length;
+  const { data, error } = await db.from("accounts").select("code");
+  if (error) throw error;
+  const existing = (data as { code: string }[] | null) || [];
+  if (existing.length > 0) return existing.length;
 
-    // 空なら DEFAULT_ACCOUNTS から挿入
-    for (const a of DEFAULT_ACCOUNTS) {
-      await db.from("accounts").insert({
-        code: a.code,
-        name: a.name,
-        category: a.category,
-        name_en: (a as { name_en?: string }).name_en || null,
-        is_default: (a as { is_default?: boolean }).is_default ? 1 : 0,
-      });
-    }
-    return DEFAULT_ACCOUNTS.length;
-  } catch (e) {
-    console.error("ensureAccountsSeeded failed:", e);
-    return 0;
+  // 空なら DEFAULT_ACCOUNTS から挿入
+  for (const a of DEFAULT_ACCOUNTS) {
+    const { error: insertError } = await db.from("accounts").insert({
+      code: a.code,
+      name: a.name,
+      category: a.category,
+      name_en: (a as { name_en?: string }).name_en || null,
+      is_default: 1,
+    });
+    if (insertError) throw insertError;
   }
+  return DEFAULT_ACCOUNTS.length;
 }
 
 // -------------------------------------------------------------
@@ -40,6 +37,14 @@ export async function ensureAccountsSeeded(): Promise<number> {
 //     収入取引相手方勘定科目, 支出取引相手方勘定科目, 税区分,
 //     ショートカット1, ショートカット2, 入力候補, 補助科目優先タグ
 // -------------------------------------------------------------
+
+/** 取込結果。failed は DB への保存に失敗した件数 (0 でなければ利用者に見せる)。 */
+export interface ImportCounts {
+  added: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+}
 
 export interface ParsedAccount {
   name: string;                 // 勘定科目
@@ -53,10 +58,12 @@ export interface ParsedAccount {
   category: "asset" | "liability" | "equity" | "revenue" | "expense" | "other";
 }
 
-function categoryFromFreee(dai: string): ParsedAccount["category"] {
+export function categoryFromFreee(dai: string): ParsedAccount["category"] {
+  // 「純資産」は「資産」を含むので、必ず先に判定する
+  // (逆順だと事業主貸・元入金などが資産として取り込まれる)
+  if (dai.includes("純資産") || dai.includes("資本")) return "equity";
   if (dai.includes("資産")) return "asset";
   if (dai.includes("負債")) return "liability";
-  if (dai.includes("純資産") || dai.includes("資本")) return "equity";
   if (dai.includes("収益") || dai.includes("収入") || dai.includes("売上")) return "revenue";
   if (dai.includes("費用") || dai.includes("経費")) return "expense";
   return "other";
@@ -106,10 +113,11 @@ export function parseFreeeAccountsCsv(rows: string[][]): ParsedAccount[] {
 export async function commitAccounts(
   parsed: ParsedAccount[],
   opts: { updateExisting?: boolean } = {}
-): Promise<{ added: number; updated: number; skipped: number }> {
+): Promise<ImportCounts> {
   await ensureAccountsSeeded(); // 既存がない場合はデフォルトを入れておく
 
-  const { data: existing } = await db.from("accounts").select("code,name");
+  const { data: existing, error: existingError } = await db.from("accounts").select("code,name");
+  if (existingError) throw existingError;
   const existingRows = (existing as { code: string; name: string }[] | null) || [];
   const byName = new Map(existingRows.map((a) => [a.name, a.code]));
   const allCodes = new Set(existingRows.map((a) => a.code));
@@ -122,30 +130,31 @@ export async function commitAccounts(
     return c;
   };
 
-  let added = 0, updated = 0, skipped = 0;
+  let added = 0, updated = 0, skipped = 0, failed = 0;
+  const defaultCodes = new Set(DEFAULT_ACCOUNTS.map((a) => a.code));
 
   for (const p of parsed) {
     const existingCode = byName.get(p.name);
     if (existingCode) {
       if (opts.updateExisting) {
-        await db
-          .from("accounts")
-          .update({
-            display_name: p.display_name,
-            sub_category: p.sub_category,
-            parent_category: p.parent_category,
-            short_cut_1: p.shortcut1,
-            short_cut_2: p.shortcut2,
-            category: p.category,
-          })
-          .eq("code", existingCode);
-        updated++;
+        const patch: Record<string, unknown> = {
+          display_name: p.display_name,
+          sub_category: p.sub_category,
+          parent_category: p.parent_category,
+          short_cut_1: p.shortcut1,
+          short_cut_2: p.shortcut2,
+        };
+        // 既定科目の区分 (資産/費用など) は集計の基準なので CSV では書き換えない
+        if (!defaultCodes.has(existingCode)) patch.category = p.category;
+        const { error } = await db.from("accounts").update(patch).eq("code", existingCode);
+        if (error) failed++;
+        else updated++;
       } else {
         skipped++;
       }
     } else {
       const code = nextCode();
-      await db.from("accounts").insert({
+      const { error } = await db.from("accounts").insert({
         code,
         name: p.name,
         category: p.category,
@@ -157,11 +166,15 @@ export async function commitAccounts(
         default_tax_code: p.tax_code,
         is_default: 0,
       });
+      if (error) {
+        failed++;
+        continue;
+      }
       added++;
       byName.set(p.name, code);
     }
   }
-  return { added, updated, skipped };
+  return { added, updated, skipped, failed };
 }
 
 // -------------------------------------------------------------
@@ -230,18 +243,19 @@ export function parseFreeePartnersCsv(rows: string[][]): ParsedPartner[] {
 export async function commitPartners(
   parsed: ParsedPartner[],
   opts: { updateExisting?: boolean } = {}
-): Promise<{ added: number; updated: number; skipped: number }> {
-  const { data: existing } = await db.from("partners").select("id,name");
+): Promise<ImportCounts> {
+  const { data: existing, error: existingError } = await db.from("partners").select("id,name");
+  if (existingError) throw existingError;
   const existingRows = (existing as { id: string; name: string }[] | null) || [];
   const byName = new Map(existingRows.map((p) => [p.name, p.id]));
 
-  let added = 0, updated = 0, skipped = 0;
+  let added = 0, updated = 0, skipped = 0, failed = 0;
 
   for (const p of parsed) {
     const existingId = byName.get(p.name);
     if (existingId) {
       if (opts.updateExisting) {
-        await db
+        const { error } = await db
           .from("partners")
           .update({
             name_kana: p.name_kana,
@@ -253,12 +267,13 @@ export async function commitPartners(
             address: p.address,
           })
           .eq("id", existingId);
-        updated++;
+        if (error) failed++;
+        else updated++;
       } else {
         skipped++;
       }
     } else {
-      await db.from("partners").insert({
+      const { data: inserted, error } = await db.from("partners").insert({
         name: p.name,
         name_kana: p.name_kana,
         registered_number: p.registered_number,
@@ -269,10 +284,17 @@ export async function commitPartners(
         address: p.address,
         notes: p.notes,
       });
+      if (error) {
+        failed++;
+        continue;
+      }
       added++;
+      // 同じ CSV に同名の行が 2 回あっても二重登録しない
+      const newId = (inserted as { id?: string }[] | null)?.[0]?.id;
+      if (newId) byName.set(p.name, newId);
     }
   }
-  return { added, updated, skipped };
+  return { added, updated, skipped, failed };
 }
 
 // -------------------------------------------------------------

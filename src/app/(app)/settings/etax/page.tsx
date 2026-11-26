@@ -58,7 +58,7 @@ import {
 import { confirmDialog } from "@/lib/confirm";
 
 /**
- * 動作確認用プリセット (scripts/gen_real_xtx.mjs と同値)。
+ * 動作確認用プリセット (scripts/etax_sample.ts と同系統の架空データ)。
  * 実在の個人情報は絶対に入れないこと (このリポジトリは公開されている)。
  */
 const SAMPLE_TAXPAYER: TaxpayerInfo = {
@@ -72,7 +72,7 @@ const SAMPLE_TAXPAYER: TaxpayerInfo = {
   phone: "09012345678",
   yago: "サンプル商店",
   shokugyo: "個人事業主",
-  jigyo_naiyo: "飲食",
+  jigyo_naiyo: "小売",
   riyosha_shikibetsu_bango: "1234567890123456",
 };
 
@@ -247,7 +247,7 @@ export default function EtaxSettingsPage() {
   const handleLoadSample = async () => {
     if (
       !(await confirmDialog(
-        "入力中の内容を破棄して、開発者サンプル (サンプル商店 / 山田太郎) を読み込みます。よろしいですか？"
+        "入力中の内容を破棄して、架空のサンプルデータ (山田太郎 / サンプル商店) を読み込みます。よろしいですか？"
       ))
     ) {
       return;
@@ -277,7 +277,7 @@ export default function EtaxSettingsPage() {
               variant="outline"
               size="sm"
               onClick={handleLoadSample}
-              title="開発者サンプル (サンプル商店) を読み込む [開発ビルドのみ]"
+              title="架空のサンプルデータを読み込む [開発ビルドのみ]"
             >
               <FlaskConical className="h-4 w-4 mr-1" />
               サンプル

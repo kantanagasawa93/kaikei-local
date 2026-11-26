@@ -21,6 +21,8 @@
 import { db } from "@/lib/localDb";
 import { ocrWithClaude, getApiKey, hasAiOcrConsent } from "@/lib/ai-ocr";
 import { suggestAccount, suggestAccountForVendor } from "@/lib/accounts";
+import { defaultTaxCodeForAccountCode, extractTaxFromIncluded } from "@/lib/tax-classes";
+import { toLocalDateString, todayLocal } from "@/lib/date-utils";
 import type { OcrResult } from "@/types";
 
 const BATCH_SIZE = 100;
@@ -249,16 +251,62 @@ export async function learnVendorAsPartner(
   });
 }
 
+type OcrOutcome = OcrResult & {
+  usage?: { used: number; limit: number };
+  fallback?: "vision";
+};
+
+/** 既に仕訳化済みの写真をもう一度仕訳化しようとした時のエラー。 */
+export class AlreadyJournalizedError extends Error {
+  constructor() {
+    super("この写真は既に仕訳化されています");
+    this.name = "AlreadyJournalizedError";
+  }
+}
+
 /**
- * 1 件の photo_inbox 行を仕訳化する。
- * @returns 作成された receipt_id か null (失敗時)
- *
- * 失敗時は呼び出し側 (autoJournalizeAllReceipts) が photo_inbox を
- * state='receipt_failed' に更新する。本関数は throw して呼び出し元に伝える。
+ * 同じ写真の仕訳化が同時に 2 本走らないようにするための、このウィンドウ内のロック。
+ * (一括仕訳の実行中にカードの「いますぐ仕訳化」を押す、Enter を連打する、等)
  */
-export async function autoJournalizeOne(
-  inboxRow: { id: string; file_path: string | null; ocr_text: string | null; attempts?: number | null }
-): Promise<string | null> {
+const journalizingInbox = new Set<string>();
+
+/**
+ * AI が返した日付を "YYYY-MM-DD" に正規化する。読めない・あり得ない日付は null。
+ * 形式の崩れた文字列をそのまま仕訳の日付にすると、期間で絞る全ての集計から
+ * その仕訳が消える (文字列比較で範囲外になる) ので、必ずここを通す。
+ */
+export function normalizeOcrDate(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const t = raw.normalize("NFKC").trim();
+  const m =
+    /^(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?$/.exec(t) ?? /^(\d{4})(\d{2})(\d{2})$/.exec(t);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null; // 2/30 等
+  return toLocalDateString(dt);
+}
+
+/** photo_inbox.taken_at (ISO / SQLite 形式どちらも) → ローカル日付。読めなければ null。 */
+function takenDateLocal(takenAt: string | null | undefined): string | null {
+  if (!takenAt) return null;
+  const iso = takenAt.includes("T") ? takenAt : takenAt.replace(" ", "T") + "Z";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : toLocalDateString(d);
+}
+
+/**
+ * 受信箱の写真を AI OCR にかける (同意・ライセンスの確認込み)。
+ * 上流の当日枠切れの時だけ、Vision OCR のテキストからの簡易抽出にフォールバックする。
+ */
+async function runOcrForInbox(inboxRow: {
+  id: string;
+  file_path: string | null;
+  ocr_text: string | null;
+}): Promise<{ ocr: OcrOutcome; bytesSent: number }> {
   const consent = await hasAiOcrConsent();
   if (!consent) {
     throw new Error("AI OCR への同意が必要です");
@@ -274,9 +322,8 @@ export async function autoJournalizeOne(
   const { base64, mediaType } = await readFileAsBase64(inboxRow.file_path);
   const bytesSent = Math.floor((base64.length * 3) / 4);
 
-  let ocr: OcrResult & { usage?: { used: number; limit: number }; fallback?: "vision" };
   try {
-    ocr = await ocrWithClaude(base64, mediaType, apiKey);
+    return { ocr: await ocrWithClaude(base64, mediaType, apiKey), bytesSent };
   } catch (e) {
     await logAiOcr({
       inboxId: inboxRow.id,
@@ -290,114 +337,190 @@ export async function autoJournalizeOne(
     if (isQuotaError(e) && inboxRow.ocr_text) {
       const fb = buildFallbackOcrResult(inboxRow.ocr_text);
       // notes 等で「Vision フォールバックで作成」と判別できるよう fallback フラグを付ける
-      ocr = { ...fb, fallback: "vision" };
-    } else {
-      throw e;
+      return { ocr: { ...fb, fallback: "vision" }, bytesSent };
     }
+    throw e;
+  }
+}
+
+/**
+ * 1 件の photo_inbox 行を仕訳化する。
+ * @returns 作成された receipt_id
+ *
+ * @param opts.presetOcr 既に手元にある読み取り結果 (利用者が受信箱で修正した値など)。
+ *   渡された時は AI OCR を呼ばず、この値で領収書と仕訳を作る。
+ *
+ * 失敗時は throw する。呼び出し側 (autoJournalizeAllReceipts / quickConfirmOne) が
+ * photo_inbox を state='receipt_failed' に更新する。
+ * 途中まで作った領収書・仕訳は片付けてから throw するので、半端な状態は残さない。
+ */
+export async function autoJournalizeOne(
+  inboxRow: { id: string; file_path: string | null; ocr_text: string | null; attempts?: number | null },
+  opts: { presetOcr?: OcrOutcome } = {},
+): Promise<string | null> {
+  if (journalizingInbox.has(inboxRow.id)) {
+    throw new Error("この写真は処理中です。完了までお待ちください");
+  }
+  journalizingInbox.add(inboxRow.id);
+  try {
+    return await journalizeLocked(inboxRow, opts);
+  } finally {
+    journalizingInbox.delete(inboxRow.id);
+  }
+}
+
+async function journalizeLocked(
+  inboxRow: { id: string; file_path: string | null; ocr_text: string | null },
+  opts: { presetOcr?: OcrOutcome },
+): Promise<string> {
+  // 渡された行は一覧取得時点のもの。その後に別の経路 (領収書登録ページ・一括仕訳・
+  // カードのボタン) で仕訳化済みになっていないか、最新の状態で確かめる。
+  const { data: freshData, error: freshError } = await db
+    .from("photo_inbox")
+    .select("id, state, imported_receipt_id, file_path, ocr_text, taken_at")
+    .eq("id", inboxRow.id)
+    .single();
+  if (freshError) throw freshError;
+  const fresh = freshData as {
+    id: string;
+    state: string;
+    imported_receipt_id: string | null;
+    file_path: string | null;
+    ocr_text: string | null;
+    taken_at: string | null;
+  } | null;
+  if (!fresh) throw new Error("対象の写真が見つかりません");
+  if (fresh.state === "imported" || fresh.imported_receipt_id) {
+    throw new AlreadyJournalizedError();
   }
 
-  // receipts 行
-  const receiptId = crypto.randomUUID();
-  // Round 24 ㊞: partners.default_account_code を優先 (ユーザが取引先ごとに
-  // 決めた既定科目があればそれを使う)。なければ既存のキーワード抽出にフォール
-  // バック。AI OCR が suggested_account_* を返してた場合はさらに優先する。
-  const suggested = await suggestAccountForVendor(
-    ocr.vendor_name,
-    ocr.raw_text || "",
-  );
-  const accountCode = ocr.suggested_account_code || suggested?.code || "699";
-  const accountName = ocr.suggested_account_name || suggested?.name || "雑費";
+  let ocr: OcrOutcome;
+  let bytesSent = 0;
+  if (opts.presetOcr) {
+    ocr = opts.presetOcr;
+  } else {
+    const r = await runOcrForInbox(fresh);
+    ocr = r.ocr;
+    bytesSent = r.bytesSent;
+  }
+
+  const filePath = fresh.file_path ?? inboxRow.file_path;
+  if (!filePath) throw new Error("file_path がありません");
+
+  // 勘定科目: 取引先ごとに利用者が決めた既定科目 (suggestAccountForVendor が partners
+  // から引く) を最優先にする。AI OCR 側の suggested_account_* は店名や本文の
+  // キーワード一致にすぎないので、その次。
+  const suggested = await suggestAccountForVendor(ocr.vendor_name, ocr.raw_text || "");
+  const accountCode = suggested?.code || ocr.suggested_account_code || "699";
+  const accountName = suggested?.name || ocr.suggested_account_name || "雑費";
 
   // Round 21 ⓕ: vendor_name が partners に無ければ自動学習として新規登録。
-  // 「[auto-learned] ...」の notes を付けて、ユーザが取引先一覧で後から見直せる。
-  // partner_id を receipts/journal_lines に紐付けるので、次回以降は同じ vendor が
-  // 再度 OCR された時に履歴を辿れる。
-  const partnerId = await learnVendorAsPartner(
-    ocr.vendor_name ?? null,
-    accountCode,
-  );
+  const partnerId = await learnVendorAsPartner(ocr.vendor_name ?? null, accountCode);
 
-  await db.from("receipts").insert({
-    id: receiptId,
-    image_url: `file://${inboxRow.file_path}`,
-    ocr_text: ocr.raw_text || inboxRow.ocr_text || null,
-    vendor_name: ocr.vendor_name || null,
-    amount: ocr.amount ?? null,
-    date: ocr.date || null,
-    account_code: accountCode,
-    account_name: accountName,
-    // Vision フォールバック経由なら "confirmed" ではなく "pending" にして
-    // 領収書一覧で「要確認」として目立たせる
-    status: ocr.fallback === "vision" ? "pending" : "confirmed",
-    doc_type: "receipt",
-    partner_id: partnerId,
-  });
+  const ocrDate = normalizeOcrDate(ocr.date);
+  // 日付が読めない時は「今日」ではなく、まず写真の撮影日を使う
+  // (月末に溜めて処理すると、今日の日付では月も年度もずれる)
+  const journalDate = ocrDate || takenDateLocal(fresh.taken_at) || todayLocal();
+  const amount = ocr.amount != null && Number.isFinite(ocr.amount) ? Math.round(ocr.amount) : 0;
+  // 金額か日付が読めていないもの・Vision フォールバックは「要確認」として残す
+  const needsReview = ocr.fallback === "vision" || ocr.amount == null || !ocrDate;
 
-  // journals 行 + journal_lines (借方: 経費 / 貸方: 現金)
-  // Round 7 ㊐: items[] が複数の異なる勘定科目候補を含む時は、勘定科目ごとに
-  // 別 journal_line に分割する (品目数で按分。価格までは取れていない)。
-  // 1 グループ (品目なし or 全部同じ科目) なら従来通り単一 line。
-  const journalDate = ocr.date || new Date().toISOString().slice(0, 10);
-  const amount = ocr.amount ?? 0;
+  const receiptId = crypto.randomUUID();
   const journalId = crypto.randomUUID();
-  await db.from("journals").insert({
-    id: journalId,
-    date: journalDate,
-    description:
-      `${ocr.vendor_name || "不明"} - ${accountName}` +
-      (ocr.fallback === "vision" ? " [Vision 仮]" : ""),
-    receipt_id: receiptId,
-  });
+  let receiptInserted = false;
+  let journalInserted = false;
 
-  // 借方分割: items を suggestAccount でグループ化
-  const debitGroups = splitDebitByItems(ocr.items ?? [], accountCode, accountName, amount);
-  for (const g of debitGroups) {
-    const taxAmount = Math.floor((g.amount * 10) / 110);
-    await db.from("journal_lines").insert({
+  try {
+    const { error: receiptError } = await db.from("receipts").insert({
+      id: receiptId,
+      image_url: `file://${filePath}`,
+      ocr_text: ocr.raw_text || fresh.ocr_text || null,
+      vendor_name: ocr.vendor_name || null,
+      amount: ocr.amount ?? null,
+      date: ocrDate,
+      account_code: accountCode,
+      account_name: accountName,
+      status: needsReview ? "pending" : "confirmed",
+      doc_type: "receipt",
+      partner_id: partnerId,
+    });
+    if (receiptError) throw receiptError;
+    receiptInserted = true;
+
+    const { error: journalError } = await db.from("journals").insert({
+      id: journalId,
+      date: journalDate,
+      description:
+        `${ocr.vendor_name || "不明"} - ${accountName}` +
+        (ocr.fallback === "vision" ? " [Vision 仮]" : ""),
+      receipt_id: receiptId,
+    });
+    if (journalError) throw journalError;
+    journalInserted = true;
+
+    // 借方分割: items を suggestAccount でグループ化
+    // (items[] が複数の異なる勘定科目候補を含む時は、勘定科目ごとに別行にする)
+    const debitGroups = splitDebitByItems(ocr.items ?? [], accountCode, accountName, amount);
+    const lineRows: Record<string, unknown>[] = debitGroups.map((g) => {
+      // 税区分は科目から決める (租税公課・保険料などに一律 10% の仕入税額を立てない)
+      const taxCode = defaultTaxCodeForAccountCode(g.account_code);
+      return {
+        id: crypto.randomUUID(),
+        journal_id: journalId,
+        account_code: g.account_code,
+        account_name: g.account_name,
+        debit_amount: g.amount,
+        credit_amount: 0,
+        tax_code: taxCode,
+        tax_amount: extractTaxFromIncluded(g.amount, taxCode),
+        partner_id: partnerId,
+        memo: g.memo ?? null,
+      };
+    });
+    // 貸方は合計を 1 行で
+    lineRows.push({
       id: crypto.randomUUID(),
       journal_id: journalId,
-      account_code: g.account_code,
-      account_name: g.account_name,
-      debit_amount: g.amount,
-      credit_amount: 0,
-      tax_code: "P10",
-      tax_amount: taxAmount,
-      partner_id: partnerId,
-      memo: g.memo ?? null,
+      account_code: "100",
+      account_name: "現金",
+      debit_amount: 0,
+      credit_amount: amount,
+      tax_code: "OUT",
+      tax_amount: 0,
+    });
+    const { error: linesError } = await db.from("journal_lines").insert(lineRows);
+    if (linesError) throw linesError;
+
+    // photo_inbox を imported に更新 + 読み取り結果を保存 + エラー履歴クリア
+    // claude_result_json は再仕訳・監査用。
+    const { error: inboxError } = await db
+      .from("photo_inbox")
+      .update({
+        state: "imported",
+        imported_receipt_id: receiptId,
+        imported_at: new Date().toISOString(),
+        claude_result_json: JSON.stringify(ocr),
+        last_error: null,
+      })
+      .eq("id", fresh.id);
+    if (inboxError) throw inboxError;
+  } catch (e) {
+    // 途中まで作ったものを片付ける (仕訳は明細ごと、領収書も消す)。
+    // 残すと「明細の無い仕訳」「仕訳の無い確定済み領収書」になり、次の実行で二重に作られる。
+    if (journalInserted) await db.from("journals").delete().eq("id", journalId);
+    if (receiptInserted) await db.from("receipts").delete().eq("id", receiptId);
+    throw e;
+  }
+
+  if (!opts.presetOcr) {
+    await logAiOcr({
+      inboxId: fresh.id,
+      receiptId,
+      endpoint: "/api/ocr",
+      bytesSent,
+      resultSummary: `${ocr.vendor_name ?? "?"} ${ocr.amount ?? "?"}円`,
     });
   }
-  // 貸方は合計を 1 行で
-  await db.from("journal_lines").insert({
-    id: crypto.randomUUID(),
-    journal_id: journalId,
-    account_code: "100",
-    account_name: "現金",
-    debit_amount: 0,
-    credit_amount: amount,
-    tax_code: "OUT",
-    tax_amount: 0,
-  });
-
-  // photo_inbox を imported に更新 + AI OCR 結果を完全保存 + エラー履歴クリア
-  // claude_result_json は再仕訳・監査用。雑費自動付与のロジック復元元になる。
-  await db
-    .from("photo_inbox")
-    .update({
-      state: "imported",
-      imported_receipt_id: receiptId,
-      imported_at: new Date().toISOString(),
-      claude_result_json: JSON.stringify(ocr),
-      last_error: null,
-    })
-    .eq("id", inboxRow.id);
-
-  await logAiOcr({
-    inboxId: inboxRow.id,
-    receiptId,
-    endpoint: "/api/ocr",
-    bytesSent,
-    resultSummary: `${ocr.vendor_name ?? "?"} ${ocr.amount ?? "?"}円`,
-  });
 
   return receiptId;
 }
@@ -650,10 +773,15 @@ export async function autoJournalizeAllReceipts(
         amount,
       };
     } catch (e) {
-      result.failed++;
       const msg = (e as Error).message;
-      result.errors.push(`${row.id}: ${msg}`);
-      try {
+      if (e instanceof AlreadyJournalizedError || journalizingInbox.has(row.id)) {
+        // 一覧を取った後に別の経路で仕訳化された / いま別の操作で処理中。
+        // 失敗ではないので状態は触らず、件数からも外す。
+        result.total--;
+        lastItem = { inboxId: row.id, ok: true };
+      } else {
+        result.failed++;
+        result.errors.push(`${row.id}: ${msg}`);
         await db
           .from("photo_inbox")
           .update({
@@ -662,10 +790,8 @@ export async function autoJournalizeAllReceipts(
             attempts,
           })
           .eq("id", row.id);
-      } catch {
-        /* silent */
+        lastItem = { inboxId: row.id, ok: false, error: msg };
       }
-      lastItem = { inboxId: row.id, ok: false, error: msg };
     }
     if (onProgress) onProgress(i + 1, rows.length, lastItem);
   }
@@ -735,9 +861,12 @@ export async function quickConfirmOne(inboxId: string): Promise<string> {
       }
     | null;
   if (!row) throw new Error("対象の写真が見つかりません");
+  // 取り込み済みの写真をもう一度仕訳化しない (以前はここを素通りして、
+  // 同じ写真から領収書と仕訳がもう 1 組作られていた)
+  if (row.state === "imported") throw new AlreadyJournalizedError();
 
   // state を 'receipt' に上げる (candidate / receipt_failed どちらでも OK)
-  if (row.state !== "receipt" && row.state !== "imported") {
+  if (row.state !== "receipt") {
     await db
       .from("photo_inbox")
       .update({ state: "receipt", last_error: null })
@@ -751,6 +880,9 @@ export async function quickConfirmOne(inboxId: string): Promise<string> {
     }
     return receiptId;
   } catch (e) {
+    // 「処理中」「既に仕訳化済み」は失敗ではない。状態を receipt_failed に落とすと
+    // 仕訳化済みの写真が「失敗」タブに出てしまうので、そのまま呼び出し元へ返す
+    if (e instanceof AlreadyJournalizedError || journalizingInbox.has(inboxId)) throw e;
     const msg = (e as Error).message;
     // autoJournalizeAllReceipts と同じ永続化ロジック
     try {
@@ -837,73 +969,112 @@ export async function getReverseUndoCount(): Promise<number> {
   return (await getUndoStack()).length;
 }
 
+type InboxLink = {
+  id: string;
+  state: string;
+  imported_receipt_id: string | null;
+  imported_at: string | null;
+  last_error: string | null;
+  attempts: number | null;
+};
+
+/** 受信箱由来ではない仕訳を受信箱に戻そうとした時のエラー。 */
+export class NotFromInboxError extends Error {
+  constructor() {
+    super("受信箱の写真から作られた仕訳ではないため、受信箱には戻せません");
+    this.name = "NotFromInboxError";
+  }
+}
+
+/** 領収書を「取り込み済み」として指している受信箱行を引く (無ければ null)。 */
+async function findInboxByReceipt(receiptId: string): Promise<InboxLink | null> {
+  const { data, error } = await db
+    .from("photo_inbox")
+    .select("id, state, imported_receipt_id, imported_at, last_error, attempts")
+    .eq("imported_receipt_id", receiptId)
+    .single();
+  if (error) throw error;
+  return (data as InboxLink | null) ?? null;
+}
+
+/**
+ * 与えた領収書 ID のうち、受信箱の写真から作られたもの (= 「受信箱に戻す」
+ * 「AI OCR で再仕訳化」が意味を持つもの) を返す。一覧画面のボタン表示判定用。
+ */
+export async function receiptIdsFromInbox(receiptIds: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  const ids = Array.from(new Set(receiptIds.filter(Boolean)));
+  for (let i = 0; i < ids.length; i += 400) {
+    const { data, error } = await db
+      .from("photo_inbox")
+      .select("imported_receipt_id")
+      .in("imported_receipt_id", ids.slice(i, i + 400));
+    if (error) throw error;
+    for (const row of (data as { imported_receipt_id: string | null }[] | null) ?? []) {
+      if (row.imported_receipt_id) out.add(row.imported_receipt_id);
+    }
+  }
+  return out;
+}
+
 /**
  * 仕訳を取り消して、紐付いていた受信箱行を「未判定」に戻す
  * (Round 4 ㊂ "差し戻し" フロー、Round 6 ㊍ で undo スタック対応)。
  *
  * 流れ:
- *   1. 削除対象 (journal / journal_lines / receipt / photo_inbox prev) を
+ *   1. 受信箱由来の仕訳か確かめる (違えば **何も消さずに** NotFromInboxError)
+ *   2. 削除対象 (journal / journal_lines / receipt / photo_inbox prev) を
  *      スナップショットで取得 → undo stack に push
- *   2. journal_lines → journals → receipts の順で削除
- *   3. photo_inbox を candidate に戻し imported_receipt_id / imported_at を null
- *      (claude_result_json は保持 — 同じ画像なら再 OCR せずに使い回せる将来拡張用)
+ *   3. journal_lines → journals → receipts の順で削除
+ *   4. photo_inbox を candidate に戻し imported_receipt_id / imported_at を null
+ *      (claude_result_json は保持 — 利用者が修正した値の再利用に使う)
  *
- * @returns 戻された inbox_id か null (受信箱由来でない仕訳)
+ * 以前は 1 の確認が削除の **後** にあったため、領収書登録ページから作った仕訳
+ * (受信箱とは無関係) でこのボタンを押すと、仕訳と領収書が消えた上で
+ * 「受信箱由来ではありません」というエラーだけが出ていた。
+ *
+ * @returns 戻された inbox_id
  */
-export async function reverseJournalToInbox(journalId: string): Promise<string | null> {
+export async function reverseJournalToInbox(journalId: string): Promise<string> {
   // 1. 削除対象を全部取得 (snapshot)
-  const { data: jdata } = await db
+  const { data: jdata, error: journalError } = await db
     .from("journals")
     .select("*")
     .eq("id", journalId)
     .single();
+  if (journalError) throw journalError;
   const journal = jdata as Record<string, unknown> | null;
   if (!journal) throw new Error("対象の仕訳が見つかりません");
   const receiptId = (journal.receipt_id as string | null) ?? null;
+  if (!receiptId) throw new NotFromInboxError();
 
-  const { data: lines } = await db
+  const inboxRow = await findInboxByReceipt(receiptId);
+  if (!inboxRow) throw new NotFromInboxError();
+
+  const { data: lines, error: linesError } = await db
     .from("journal_lines")
     .select("*")
     .eq("journal_id", journalId);
+  if (linesError) throw linesError;
   const journalLines = (lines as Record<string, unknown>[] | null) ?? [];
 
-  let receipt: Record<string, unknown> | null = null;
-  let inboxId: string | null = null;
-  let inboxPrev: ReverseUndoSnapshot["inboxPrev"] = null;
-  if (receiptId) {
-    const { data: rdata } = await db
-      .from("receipts")
-      .select("*")
-      .eq("id", receiptId)
-      .single();
-    receipt = rdata as Record<string, unknown> | null;
+  const { data: rdata, error: receiptError } = await db
+    .from("receipts")
+    .select("*")
+    .eq("id", receiptId)
+    .single();
+  if (receiptError) throw receiptError;
+  const receipt = rdata as Record<string, unknown> | null;
 
-    const { data: idata } = await db
-      .from("photo_inbox")
-      .select("id, state, imported_receipt_id, imported_at, last_error, attempts")
-      .eq("imported_receipt_id", receiptId)
-      .single();
-    const inboxRow = idata as
-      | {
-          id: string;
-          state: string;
-          imported_receipt_id: string | null;
-          imported_at: string | null;
-          last_error: string | null;
-          attempts: number | null;
-        }
-      | null;
-    if (inboxRow) {
-      inboxId = inboxRow.id;
-      inboxPrev = {
-        state: inboxRow.state,
-        imported_receipt_id: inboxRow.imported_receipt_id,
-        imported_at: inboxRow.imported_at,
-        last_error: inboxRow.last_error,
-        attempts: inboxRow.attempts,
-      };
-    }
-  }
+  // 同じ領収書を別の仕訳も参照している場合、領収書は消さない (証憑の再マッチングで
+  // 1 枚の領収書が 2 つの仕訳に付くことがある。消すともう片方の仕訳の証憑が失われる)
+  const { data: others, error: othersError } = await db
+    .from("journals")
+    .select("id")
+    .eq("receipt_id", receiptId)
+    .neq("id", journalId);
+  if (othersError) throw othersError;
+  const receiptShared = ((others as unknown[] | null) ?? []).length > 0;
 
   // 2. undo stack に push (size 上限超は古い順に捨てる)
   const stack = await getUndoStack();
@@ -911,72 +1082,136 @@ export async function reverseJournalToInbox(journalId: string): Promise<string |
     ts: new Date().toISOString(),
     journal,
     journalLines,
-    receipt,
-    inboxId,
-    inboxPrev,
+    receipt: receiptShared ? null : receipt,
+    inboxId: inboxRow.id,
+    inboxPrev: {
+      state: inboxRow.state,
+      imported_receipt_id: inboxRow.imported_receipt_id,
+      imported_at: inboxRow.imported_at,
+      last_error: inboxRow.last_error,
+      attempts: inboxRow.attempts,
+    },
   });
   while (stack.length > UNDO_MAX) stack.pop();
   await setUndoStack(stack);
 
-  // 3. 関連レコードを順番に削除 (journal_lines は journal_id の FK で残るので明示)
+  // 3. 仕訳を削除 (journal_lines は ON DELETE CASCADE だが明示的に先に消す)
   await db.from("journal_lines").delete().eq("journal_id", journalId);
-  await db.from("journals").delete().eq("id", journalId);
-  if (receiptId) {
+  const { error: deleteError } = await db.from("journals").delete().eq("id", journalId);
+  if (deleteError) {
+    // 仕訳が消せていないのにスナップショットだけ残すと、取り消しで二重になる
+    await dropUndoSnapshotFor(journalId);
+    throw deleteError;
+  }
+
+  // 4. 受信箱行を candidate に復帰 → 領収書を削除
+  //    (先に受信箱の参照を外す。順序が逆だと FK の SET NULL 任せになり state が imported のまま残る)
+  await db
+    .from("photo_inbox")
+    .update({
+      state: "candidate",
+      imported_receipt_id: null,
+      imported_at: null,
+      last_error: null,
+      attempts: 0,
+    })
+    .eq("id", inboxRow.id);
+  if (!receiptShared) {
     await db.from("receipts").delete().eq("id", receiptId);
   }
 
-  // 4. 受信箱行を candidate に復帰 (受信箱由来でなければスキップ)
-  if (inboxId) {
-    await db
-      .from("photo_inbox")
-      .update({
-        state: "candidate",
-        imported_receipt_id: null,
-        imported_at: null,
-        last_error: null,
-        attempts: 0,
-      })
-      .eq("id", inboxId);
-  }
+  return inboxRow.id;
+}
 
-  return inboxId;
+/** undo stack から、指定した仕訳のスナップショットを取り除く。 */
+async function dropUndoSnapshotFor(journalId: string): Promise<void> {
+  const stack = await getUndoStack();
+  const next = stack.filter((snap) => snap.journal.id !== journalId);
+  if (next.length !== stack.length) await setUndoStack(next);
 }
 
 /**
  * Round 12 ㉭: 仕訳編集画面から「AI OCR で再仕訳化」を 1 クリックで。
  *
- * 流れ:
- *   1. reverseJournalToInbox(journalId) で受信箱に戻す (undo stack に記録される)
- *   2. 戻した photo_inbox 行を 'receipt' に上げる
- *   3. autoJournalizeOne を呼んで AI OCR + 仕訳作成
- *   4. 新しい receipt_id を返す (UI で /journals に戻れる)
+ * 流れ (元の仕訳を消すのは、新しい読み取り結果が手に入ってから):
+ *   1. 受信箱由来の仕訳か確かめる (違えば何も変えずにエラー)
+ *   2. presetOcr が無ければ AI OCR を実行する (同意・ライセンス・通信の失敗は
+ *      ここで止まり、元の仕訳はそのまま残る)
+ *   3. 元の仕訳を受信箱に戻す → 読み取り結果から新しい領収書・仕訳を作る
+ *   4. 3 で失敗したら元の仕訳を復元する
  *
- * 失敗ケース:
- *   - 受信箱由来でない仕訳 (photo_inbox に紐付かない) → エラー throw
- *   - AI OCR 失敗 → photo_inbox は state='receipt_failed' に落ちる
- *     (autoJournalizeOne で永続化済み)、呼出元に throw
+ * 以前は「先に消してから OCR」だったため、オフライン・枠切れ・同意なし等で OCR に
+ * 失敗すると、仕訳と領収書が消えただけで終わっていた。
+ *
+ * @param opts.presetOcr 利用者が受信箱カードで修正した値。渡すと AI OCR を呼ばずに
+ *   その値で作り直す (修正が新しい OCR 結果で上書きされない)。
+ * @returns 新しい receipt_id
  */
-export async function rejournalize(journalId: string): Promise<string> {
-  const inboxId = await reverseJournalToInbox(journalId);
-  if (!inboxId) {
-    throw new Error("受信箱由来でない仕訳のため再仕訳化できません");
-  }
-  // photo_inbox を 'receipt' 状態に上げてから autoJournalizeOne
-  await db
-    .from("photo_inbox")
-    .update({ state: "receipt", last_error: null })
-    .eq("id", inboxId);
-  const { data } = await db
+export async function rejournalize(
+  journalId: string,
+  opts: { presetOcr?: OcrOutcome } = {},
+): Promise<string> {
+  const { data: jdata, error: journalError } = await db
+    .from("journals")
+    .select("id, receipt_id")
+    .eq("id", journalId)
+    .single();
+  if (journalError) throw journalError;
+  const journal = jdata as { id: string; receipt_id: string | null } | null;
+  if (!journal) throw new Error("対象の仕訳が見つかりません");
+  if (!journal.receipt_id) throw new NotFromInboxError();
+  const link = await findInboxByReceipt(journal.receipt_id);
+  if (!link) throw new NotFromInboxError();
+
+  const { data: rowData, error: rowError } = await db
     .from("photo_inbox")
     .select("id, file_path, ocr_text, attempts")
-    .eq("id", inboxId)
+    .eq("id", link.id)
     .single();
-  const row = data as
+  if (rowError) throw rowError;
+  const row = rowData as
     | { id: string; file_path: string | null; ocr_text: string | null; attempts: number | null }
     | null;
   if (!row) throw new Error("受信箱行が見つかりません");
-  const newReceiptId = await autoJournalizeOne(row);
-  if (!newReceiptId) throw new Error("再仕訳化が空の結果を返しました");
+
+  // 元の仕訳を消す前に、新しい読み取り結果を確保する
+  let ocr = opts.presetOcr;
+  let bytesSent = 0;
+  if (!ocr) {
+    const r = await runOcrForInbox(row);
+    ocr = r.ocr;
+    bytesSent = r.bytesSent;
+  }
+
+  await reverseJournalToInbox(journalId);
+  let newReceiptId: string | null;
+  try {
+    newReceiptId = await autoJournalizeOne(row, { presetOcr: ocr });
+    if (!newReceiptId) throw new Error("再仕訳化が空の結果を返しました");
+  } catch (e) {
+    // 新しい仕訳を作れなかった → 元の仕訳を戻す
+    try {
+      await undoLastReverse();
+    } catch (undoError) {
+      console.error("[rejournalize] 元の仕訳の復元に失敗:", undoError);
+    }
+    throw e;
+  }
+
+  // 作り直しに成功したので、元の仕訳のスナップショットは捨てる。
+  // 残しておくと「直近の差し戻しを取り消す」で古い仕訳が新しい仕訳の隣に復活し、
+  // 同じ経費が 2 回計上される。
+  await dropUndoSnapshotFor(journalId);
+
+  if (!opts.presetOcr) {
+    await logAiOcr({
+      inboxId: row.id,
+      receiptId: newReceiptId,
+      endpoint: "/api/ocr",
+      bytesSent,
+      resultSummary: `${ocr.vendor_name ?? "?"} ${ocr.amount ?? "?"}円 (再仕訳化)`,
+    });
+  }
   return newReceiptId;
 }
 
@@ -984,38 +1219,89 @@ export async function rejournalize(journalId: string): Promise<string> {
  * 直近の差し戻しを取り消して、journal/lines/receipt/photo_inbox を全部
  * 元に戻す (Round 6 ㊍).
  *
+ * 差し戻した写真がその後もう一度仕訳化されている場合は復元しない (同じ写真の
+ * 仕訳が 2 本になるため)。その時はスタックを消費せずにエラーを投げる。
+ *
  * @returns { restored: true, journalId } もしくは { restored: false } (stack 空)
  */
 export async function undoLastReverse(): Promise<
   { restored: true; journalId: string } | { restored: false }
 > {
   const stack = await getUndoStack();
-  const snap = stack.shift();
+  const snap = stack[0];
   if (!snap) return { restored: false };
-  await setUndoStack(stack);
+  const journalId = snap.journal.id as string;
+
+  // 既に同じ仕訳が存在する (二重実行など) なら、スナップショットだけ捨てる
+  const { data: existing, error: existingError } = await db
+    .from("journals")
+    .select("id")
+    .eq("id", journalId)
+    .single();
+  if (existingError) throw existingError;
+  if (existing) {
+    await setUndoStack(stack.slice(1));
+    return { restored: false };
+  }
+
+  if (snap.inboxId) {
+    const { data: inboxData, error: inboxError } = await db
+      .from("photo_inbox")
+      .select("id, state, imported_receipt_id")
+      .eq("id", snap.inboxId)
+      .single();
+    if (inboxError) throw inboxError;
+    const inbox = inboxData as
+      | { id: string; state: string; imported_receipt_id: string | null }
+      | null;
+    if (inbox && inbox.state === "imported" && inbox.imported_receipt_id) {
+      throw new Error(
+        "この写真は差し戻した後にもう一度仕訳化されています。取り消すと同じ写真の仕訳が 2 本になるため中止しました。" +
+          "古い仕訳に戻したい時は、先に新しい仕訳を「受信箱に戻す」してから取り消してください。",
+      );
+    }
+  }
 
   // 順番が大事: receipts 復元 → journals → journal_lines → photo_inbox
-  // (FK でくくられている方を先に作る)
-  if (snap.receipt) {
-    await db.from("receipts").insert(snap.receipt);
+  // (FK でくくられている方を先に作る)。途中で失敗したら作った分を消して例外にする。
+  let receiptInserted = false;
+  let journalInserted = false;
+  try {
+    if (snap.receipt) {
+      const { error } = await db.from("receipts").insert(snap.receipt);
+      if (error) throw error;
+      receiptInserted = true;
+    }
+    const { error: journalError } = await db.from("journals").insert(snap.journal);
+    if (journalError) throw journalError;
+    journalInserted = true;
+    if (snap.journalLines.length > 0) {
+      const { error: linesError } = await db.from("journal_lines").insert(snap.journalLines);
+      if (linesError) throw linesError;
+    }
+    if (snap.inboxId && snap.inboxPrev) {
+      const { error: inboxError } = await db
+        .from("photo_inbox")
+        .update({
+          state: snap.inboxPrev.state,
+          imported_receipt_id: snap.inboxPrev.imported_receipt_id,
+          imported_at: snap.inboxPrev.imported_at,
+          last_error: snap.inboxPrev.last_error,
+          attempts: snap.inboxPrev.attempts,
+        })
+        .eq("id", snap.inboxId);
+      if (inboxError) throw inboxError;
+    }
+  } catch (e) {
+    if (journalInserted) await db.from("journals").delete().eq("id", journalId);
+    if (receiptInserted && snap.receipt) {
+      await db.from("receipts").delete().eq("id", snap.receipt.id as string);
+    }
+    throw e;
   }
-  await db.from("journals").insert(snap.journal);
-  for (const line of snap.journalLines) {
-    await db.from("journal_lines").insert(line);
-  }
-  if (snap.inboxId && snap.inboxPrev) {
-    await db
-      .from("photo_inbox")
-      .update({
-        state: snap.inboxPrev.state,
-        imported_receipt_id: snap.inboxPrev.imported_receipt_id,
-        imported_at: snap.inboxPrev.imported_at,
-        last_error: snap.inboxPrev.last_error,
-        attempts: snap.inboxPrev.attempts,
-      })
-      .eq("id", snap.inboxId);
-  }
-  return { restored: true, journalId: snap.journal.id as string };
+
+  await setUndoStack(stack.slice(1));
+  return { restored: true, journalId };
 }
 
 /**
@@ -1091,10 +1377,38 @@ export async function setAutoJournalMode(enabled: boolean): Promise<void> {
 // reverse stack (UNDO_KEY) とは別の stack を使う (差し戻しと混ざらないため)。
 // ────────────────────────────────────────────────────────────
 
+type Row = Record<string, unknown>;
+
+/**
+ * 一括削除のスナップショット。
+ *
+ * 仕訳を消すと、それを参照している他のテーブルにも影響が出る (FK は SET NULL):
+ *   - 明細取込の行 (bank_transactions) は「仕訳済」のまま参照だけ外れ、操作不能になる
+ *   - 減価償却の記録 (fixed_asset_depreciations) が残り、その年を二度と仕訳化できなくなる
+ *   - 受信箱の写真は「取り込み済み」のまま、仕訳の無い領収書だけが残る
+ * そこで削除時にこれらを整合する状態へ直し、直す前の値をここに控えて、
+ * 取り消し (undo) で元通りに戻せるようにする。
+ *
+ * journals / journal_lines 以外は後から足した項目なので、古いスナップショットには無い。
+ */
 interface BulkDeleteSnapshot {
   ts: string; // ISO
-  journals: Record<string, unknown>[];
-  journal_lines: Record<string, unknown>[];
+  journals: Row[];
+  journal_lines: Row[];
+  /** 一緒に削除した領収書 (受信箱由来で、他の仕訳から参照されていないもの) */
+  receipts?: Row[];
+  /** 削除はせず status だけ戻した領収書の、元の status */
+  receiptStatus?: { id: string; status: string }[];
+  /** 受信箱行の、元の状態 */
+  inbox?: InboxLink[];
+  /** 明細取込行の、元の状態 */
+  bankTx?: { id: string; journal_id: string | null; status: string }[];
+  /** 一緒に削除した減価償却の記録 */
+  depreciations?: Row[];
+  /** 家事按分ルールの、元の generated_journal_id */
+  allocations?: { id: string; generated_journal_id: string | null }[];
+  /** 請求書の、元の journal_id */
+  invoices?: { id: string; journal_id: string | null }[];
 }
 
 async function getBulkDeleteUndoStack(): Promise<BulkDeleteSnapshot[]> {
@@ -1139,81 +1453,250 @@ export async function getBulkDeleteUndoCount(): Promise<number> {
 
 /**
  * 複数の仕訳を一括削除。事前にスナップショットを undo stack に push する。
+ * 仕訳を参照している明細取込・減価償却の記録・受信箱・領収書も整合する状態に直す。
  * @returns 実際に削除できた件数
  */
 export async function bulkDeleteJournals(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
-  // スナップショット採取
-  const journals: Record<string, unknown>[] = [];
-  const journalLines: Record<string, unknown>[] = [];
+
+  const snap: Required<BulkDeleteSnapshot> = {
+    ts: new Date().toISOString(),
+    journals: [],
+    journal_lines: [],
+    receipts: [],
+    receiptStatus: [],
+    inbox: [],
+    bankTx: [],
+    depreciations: [],
+    allocations: [],
+    invoices: [],
+  };
+
+  // ── スナップショット採取 (ここでは何も変更しない) ──
+  type Plan = {
+    id: string;
+    receiptId: string | null;
+    inbox: InboxLink | null;
+    /** 領収書を一緒に消すか (受信箱由来で、他の仕訳が参照していない時) */
+    deleteReceipt: boolean;
+    /** 領収書を残して status を戻すか (受信箱由来でなく、他の仕訳が参照していない時) */
+    resetReceiptStatus: boolean;
+  };
+  const plans: Plan[] = [];
+  const idSet = new Set(ids);
+
   for (const id of ids) {
-    try {
-      const { data: j } = await db
+    const { data: j, error: jError } = await db.from("journals").select("*").eq("id", id).single();
+    if (jError) throw jError;
+    if (!j) continue; // 既に無い
+    const journal = j as Row;
+    const { data: lns, error: lError } = await db
+      .from("journal_lines")
+      .select("*")
+      .eq("journal_id", id);
+    if (lError) throw lError;
+    snap.journals.push(journal);
+    snap.journal_lines.push(...((lns as Row[] | null) ?? []));
+
+    const plan: Plan = {
+      id,
+      receiptId: (journal.receipt_id as string | null) ?? null,
+      inbox: null,
+      deleteReceipt: false,
+      resetReceiptStatus: false,
+    };
+
+    if (plan.receiptId) {
+      // 今回消さない別の仕訳が同じ領収書を参照しているなら、領収書には触らない
+      const { data: others, error: oError } = await db
         .from("journals")
-        .select("*")
-        .eq("id", id)
-        .single();
-      if (j) journals.push(j as Record<string, unknown>);
-      const { data: lns } = await db
-        .from("journal_lines")
-        .select("*")
-        .eq("journal_id", id);
-      for (const ln of (lns as Record<string, unknown>[] | null) ?? []) {
-        journalLines.push(ln);
+        .select("id")
+        .eq("receipt_id", plan.receiptId);
+      if (oError) throw oError;
+      const sharedWithSurvivor = ((others as { id: string }[] | null) ?? []).some(
+        (o) => !idSet.has(o.id),
+      );
+      if (!sharedWithSurvivor) {
+        const { data: r, error: rError } = await db
+          .from("receipts")
+          .select("*")
+          .eq("id", plan.receiptId)
+          .single();
+        if (rError) throw rError;
+        const receipt = r as Row | null;
+        plan.inbox = await findInboxByReceipt(plan.receiptId);
+        if (receipt) {
+          const alreadyPlanned =
+            snap.receipts.some((x) => x.id === receipt.id) ||
+            snap.receiptStatus.some((x) => x.id === receipt.id);
+          if (plan.inbox) {
+            plan.deleteReceipt = true;
+            if (!alreadyPlanned) {
+              snap.receipts.push(receipt);
+              snap.inbox.push(plan.inbox);
+            }
+          } else if (receipt.status === "confirmed") {
+            plan.resetReceiptStatus = true;
+            if (!alreadyPlanned) {
+              snap.receiptStatus.push({ id: receipt.id as string, status: receipt.status as string });
+            }
+          }
+        }
       }
-    } catch (e) {
-      console.warn(`bulkDeleteJournals snapshot ${id} failed:`, e);
     }
+
+    const links = [
+      ["bank_transactions", "journal_id", "id, journal_id, status"],
+      ["fixed_asset_depreciations", "posted_journal_id", "*"],
+      ["biz_allocations", "generated_journal_id", "id, generated_journal_id"],
+      ["invoices", "journal_id", "id, journal_id"],
+    ] as const;
+    for (const [table, col, cols] of links) {
+      const { data, error } = await db.from(table).select(cols).eq(col, id);
+      if (error) throw error;
+      const rows = (data as Row[] | null) ?? [];
+      if (table === "bank_transactions") snap.bankTx.push(...(rows as Required<BulkDeleteSnapshot>["bankTx"]));
+      else if (table === "fixed_asset_depreciations") snap.depreciations.push(...rows);
+      else if (table === "biz_allocations") snap.allocations.push(...(rows as Required<BulkDeleteSnapshot>["allocations"]));
+      else snap.invoices.push(...(rows as Required<BulkDeleteSnapshot>["invoices"]));
+    }
+    plans.push(plan);
   }
+  if (plans.length === 0) return 0;
+
   // stack に push (古いものから捨てる)
   const stack = await getBulkDeleteUndoStack();
-  stack.unshift({
-    ts: new Date().toISOString(),
-    journals,
-    journal_lines: journalLines,
-  });
+  stack.unshift(snap);
   while (stack.length > BULK_DELETE_UNDO_MAX) stack.pop();
   await setBulkDeleteUndoStack(stack);
 
-  // 実削除 (lines → journals 順、ON DELETE CASCADE があるが明示的に)
+  // ── 実削除 ──
   let deleted = 0;
-  for (const id of ids) {
-    try {
-      await db.from("journal_lines").delete().eq("journal_id", id);
-      await db.from("journals").delete().eq("id", id);
-      deleted++;
-    } catch (e) {
-      console.warn(`bulkDeleteJournals delete ${id} failed:`, e);
+  for (const plan of plans) {
+    // 明細取込: 「未仕訳」に戻して、もう一度仕訳を作れるようにする
+    await db
+      .from("bank_transactions")
+      .update({ status: "unmatched", journal_id: null })
+      .eq("journal_id", plan.id);
+    // 減価償却の記録: 残すと「その年は仕訳化済み」と判定され続け、二度と計上できなくなる
+    await db.from("fixed_asset_depreciations").delete().eq("posted_journal_id", plan.id);
+
+    await db.from("journal_lines").delete().eq("journal_id", plan.id);
+    const { error } = await db.from("journals").delete().eq("id", plan.id);
+    if (error) {
+      console.warn(`bulkDeleteJournals delete ${plan.id} failed:`, error);
+      continue;
+    }
+    deleted++;
+
+    if (plan.receiptId && plan.deleteReceipt && plan.inbox) {
+      // 受信箱の写真から作った仕訳: 写真を「未判定」に戻し、領収書は消す。
+      // 「取り込み済み」のままにすると、仕訳が無いのに受信箱からは処理済みに見え、
+      // その領収書を仕訳化し直す手段が無くなる。
+      await db
+        .from("photo_inbox")
+        .update({
+          state: "candidate",
+          imported_receipt_id: null,
+          imported_at: null,
+          last_error: null,
+          attempts: 0,
+        })
+        .eq("id", plan.inbox.id);
+      await db.from("receipts").delete().eq("id", plan.receiptId);
+    } else if (plan.receiptId && plan.resetReceiptStatus) {
+      // 手動登録の領収書: 仕訳が無くなったので「確認済」から戻す
+      await db.from("receipts").update({ status: "processed" }).eq("id", plan.receiptId);
     }
   }
   return deleted;
 }
 
 /**
- * 直近の bulk delete を取り消して仕訳 + lines を復元する。
+ * 直近の bulk delete を取り消して、仕訳・明細と、削除時に直した関連データを元に戻す。
  * @returns 復元した仕訳件数 (0 なら stack 空)
  */
 export async function undoBulkDelete(): Promise<{ restored: number }> {
   const stack = await getBulkDeleteUndoStack();
   if (stack.length === 0) return { restored: 0 };
-  const snap = stack.shift()!;
-  await setBulkDeleteUndoStack(stack);
+  const snap = stack[0];
+
+  // 領収書 → 仕訳 → 明細 の順 (FK の親から)
+  const restoredReceipts = new Set<string>();
+  for (const r of snap.receipts ?? []) {
+    const { error } = await db.from("receipts").insert(r);
+    if (error) console.warn("undoBulkDelete receipts.insert failed:", error);
+    else restoredReceipts.add(r.id as string);
+  }
 
   let restored = 0;
+  const restoredJournals = new Set<string>();
   for (const j of snap.journals) {
-    try {
-      await db.from("journals").insert(j);
-      restored++;
-    } catch (e) {
-      console.warn(`undoBulkDelete journals.insert failed:`, e);
+    const { error } = await db.from("journals").insert(j);
+    if (error) {
+      console.warn("undoBulkDelete journals.insert failed:", error);
+      continue;
     }
+    restored++;
+    restoredJournals.add(j.id as string);
   }
   for (const ln of snap.journal_lines) {
-    try {
-      await db.from("journal_lines").insert(ln);
-    } catch (e) {
-      console.warn(`undoBulkDelete journal_lines.insert failed:`, e);
-    }
+    if (!restoredJournals.has(ln.journal_id as string)) continue;
+    const { error } = await db.from("journal_lines").insert(ln);
+    if (error) console.warn("undoBulkDelete journal_lines.insert failed:", error);
   }
+
+  // 関連データを削除前の状態へ (参照先の仕訳・領収書が戻せた行だけ)
+  for (const ib of snap.inbox ?? []) {
+    if (ib.imported_receipt_id && !restoredReceipts.has(ib.imported_receipt_id)) continue;
+    // 削除後にその写真がもう一度仕訳化されていたら上書きしない
+    const { data } = await db.from("photo_inbox").select("state").eq("id", ib.id).single();
+    if ((data as { state?: string } | null)?.state === "imported") continue;
+    await db
+      .from("photo_inbox")
+      .update({
+        state: ib.state,
+        imported_receipt_id: ib.imported_receipt_id,
+        imported_at: ib.imported_at,
+        last_error: ib.last_error,
+        attempts: ib.attempts,
+      })
+      .eq("id", ib.id);
+  }
+  for (const rs of snap.receiptStatus ?? []) {
+    await db.from("receipts").update({ status: rs.status }).eq("id", rs.id);
+  }
+  for (const tx of snap.bankTx ?? []) {
+    if (!tx.journal_id || !restoredJournals.has(tx.journal_id)) continue;
+    // 削除後に別の仕訳が作られている行は上書きしない
+    const { data } = await db
+      .from("bank_transactions")
+      .select("journal_id")
+      .eq("id", tx.id)
+      .single();
+    if ((data as { journal_id?: string | null } | null)?.journal_id) continue;
+    await db
+      .from("bank_transactions")
+      .update({ status: tx.status, journal_id: tx.journal_id })
+      .eq("id", tx.id);
+  }
+  for (const dep of snap.depreciations ?? []) {
+    if (dep.posted_journal_id && !restoredJournals.has(dep.posted_journal_id as string)) continue;
+    const { error } = await db.from("fixed_asset_depreciations").insert(dep);
+    if (error) console.warn("undoBulkDelete fixed_asset_depreciations.insert failed:", error);
+  }
+  for (const al of snap.allocations ?? []) {
+    if (!al.generated_journal_id || !restoredJournals.has(al.generated_journal_id)) continue;
+    await db
+      .from("biz_allocations")
+      .update({ generated_journal_id: al.generated_journal_id })
+      .eq("id", al.id);
+  }
+  for (const inv of snap.invoices ?? []) {
+    if (!inv.journal_id || !restoredJournals.has(inv.journal_id)) continue;
+    await db.from("invoices").update({ journal_id: inv.journal_id }).eq("id", inv.id);
+  }
+
+  await setBulkDeleteUndoStack(stack.slice(1));
   return { restored };
 }

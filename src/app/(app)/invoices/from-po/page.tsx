@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
+import { calcWithholdingTax } from "@/lib/tax-classes";
 import {
   fileToBase64,
   hasAiOcrConsent,
@@ -521,10 +522,11 @@ export default function FromPoPage() {
                 size="sm"
                 variant="ghost"
                 className="h-7 text-xs"
-                title="小計 × 10.21% で源泉徴収税を自動計算"
+                title="小計から源泉徴収税を自動計算 (100万円以下 10.21% / 超過分 20.42%)"
                 onClick={() => {
-                  const s = result.subtotal ?? 0;
-                  updateResult({ withholding_tax: Math.floor(s * 0.1021) });
+                  updateResult({
+                    withholding_tax: calcWithholdingTax(result.subtotal ?? 0),
+                  });
                 }}
               >
                 自動計算

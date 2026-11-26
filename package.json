@@ -3,7 +3,9 @@
   "version": "0.3.2",
   "private": true,
   "scripts": {
+    "predev": "node scripts/sync-pdfjs-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/sync-pdfjs-assets.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

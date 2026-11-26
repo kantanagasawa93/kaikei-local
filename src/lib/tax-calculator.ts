@@ -25,30 +25,52 @@ export function calculateReconstructionTax(incomeTax: number): number {
   return Math.floor(incomeTax * 0.021);
 }
 
-// 基礎控除の計算 (所得税)。
-// 令和7年度税制改正で 2025 年分以後の額が変わった:
-//   - 令和6年分まで: 48万 (合計所得 2,400万以下) / 32万 / 16万 / 0
-//   - 令和7年分以後: 58万を基本に低所得帯へ上乗せ (132万以下は 95万)。
-//     132万超〜655万以下への上乗せ (88/68/63万) は令和7・8年分限定。
+// 基礎控除の計算 (所得税)。国税庁タックスアンサー No.1199 (令和8年4月1日現在法令等)。
+//
+//   合計所得金額        〜令和6年分  令和7年分  令和8・9年分  令和10年分〜
+//   132万円以下            48万       95万       104万         99万
+//   132万超〜336万以下     48万       88万       104万         62万
+//   336万超〜489万以下     48万       68万       104万         62万
+//   489万超〜655万以下     48万       63万        67万         62万
+//   655万超〜2,350万以下   48万       58万        62万         62万
+//   2,350万超〜2,400万以下 48万 / 2,400万超〜2,450万以下 32万 /
+//   2,450万超〜2,500万以下 16万 / 2,500万超 0 (各年共通)
+//
+// income には「合計所得金額」を渡すこと。事業所得だけの人なら
+// 売上 − 経費 − 青色申告特別控除 (控除 **後**) の金額。
+// 控除前の金額で判定すると階層が 1 つ上にずれ、控除額が最大 20 万円少なくなる。
 export function calculateBasicDeduction(income: number, year?: number): number {
   const y = year ?? new Date().getFullYear();
-  if (y <= 2024) {
-    if (income <= 24000000) return 480000;
-    if (income <= 24500000) return 320000;
-    if (income <= 25000000) return 160000;
-    return 0;
-  }
-  if (income <= 1320000) return 950000;
-  if (y <= 2026) {
+  // 高所得側の逓減は各年共通
+  if (income > 25000000) return 0;
+  if (income > 24500000) return 160000;
+  if (income > 24000000) return 320000;
+  if (y <= 2024) return 480000;
+  if (income > 23500000) return 480000;
+
+  if (y === 2025) {
+    if (income <= 1320000) return 950000;
     if (income <= 3360000) return 880000;
     if (income <= 4890000) return 680000;
     if (income <= 6550000) return 630000;
+    return 580000;
   }
-  if (income <= 23500000) return 580000;
-  if (income <= 24000000) return 480000;
-  if (income <= 24500000) return 320000;
-  if (income <= 25000000) return 160000;
-  return 0;
+  if (y === 2026 || y === 2027) {
+    if (income <= 4890000) return 1040000;
+    if (income <= 6550000) return 670000;
+    return 620000;
+  }
+  // 令和10年分 (2028) 以後
+  if (income <= 1320000) return 990000;
+  return 620000;
+}
+
+/**
+ * 青色申告特別控除の額。事業の所得 (売上 − 経費) を超えては引けない
+ * (赤字や少額の黒字の年に、所得をマイナスにする控除はできない)。
+ */
+export function capBlueDeduction(maxDeduction: number, businessProfit: number): number {
+  return Math.max(0, Math.min(maxDeduction, businessProfit));
 }
 
 // 青色申告特別控除

@@ -188,6 +188,143 @@ export function findAccountCodeByName(name: string | null): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// 科目コード → 区分 (売上/経費などの集計はここを単一の基準にする)
+// ---------------------------------------------------------------------------
+
+/** 取込時に科目名を解決できなかった明細に付く仮コード (未分類)。 */
+export const UNCLASSIFIED_ACCOUNT_CODE = "999";
+
+export type AccountCategoryMap = ReadonlyMap<string, Account["category"]>;
+
+/** 既定の科目表だけで作った「コード → 区分」の対応表。 */
+export const DEFAULT_CATEGORY_MAP: AccountCategoryMap = new Map(
+  DEFAULT_ACCOUNTS.map((a) => [a.code, a.category]),
+);
+
+const CATEGORIES: readonly Account["category"][] = [
+  "asset",
+  "liability",
+  "equity",
+  "revenue",
+  "expense",
+];
+
+/**
+ * 既定の科目表 + DB の accounts テーブル (マスタ取込・ユーザ追加分) を合わせた
+ * 「コード → 区分」の対応表を返す。既定コードの区分は DB 側で上書きさせない。
+ */
+export async function loadAccountCategoryMap(): Promise<AccountCategoryMap> {
+  const map = new Map(DEFAULT_CATEGORY_MAP);
+  try {
+    const { db } = await import("@/lib/localDb");
+    const { data } = await db.from("accounts").select("code, category");
+    for (const row of (data as { code: string; category: string }[] | null) ?? []) {
+      const cat = row.category as Account["category"];
+      if (row.code && !map.has(row.code) && CATEGORIES.includes(cat)) {
+        map.set(row.code, cat);
+      }
+    }
+  } catch {
+    /* DB が読めない時は既定の科目表だけで判定する */
+  }
+  return map;
+}
+
+/** 損益計算書・貸借対照表のどこに入るか。 */
+export type AccountKind = "revenue" | "cogs" | "expense" | "bs";
+
+/**
+ * 科目コード → 集計上の区分。
+ *   - revenue: 収益 / cogs: 売上原価 (5xx) / expense: 経費 / bs: 資産・負債・資本
+ *   - null: 科目表に無いコード (取込で付いた 999 = 未分類 など)
+ *
+ * 以前は「コードの先頭が 4 なら売上、5・6 なら経費」と数字だけで判定していたため、
+ * 999 (未分類) や A9xx (マスタ取込で採番) の明細が売上にも経費にも入らず、
+ * 黙って集計から消えていた。区分は必ず科目表から引き、引けないものは
+ * null として呼び出し側が「未分類」として扱う (= 利用者に見せる)。
+ */
+export function classifyAccountCode(
+  code: string | null | undefined,
+  categories: AccountCategoryMap = DEFAULT_CATEGORY_MAP,
+): AccountKind | null {
+  if (!code) return null;
+  const cat = categories.get(code);
+  if (!cat) return null;
+  if (cat === "revenue") return "revenue";
+  if (cat === "expense") return /^5\d\d$/.test(code) ? "cogs" : "expense";
+  return "bs";
+}
+
+/**
+ * 他の会計ソフト (freee / マネーフォワード / 弥生) でよく使われる科目名の別名。
+ * 意味が同じと言い切れるものだけを載せる (迷うものは未分類のまま利用者に選ばせる)。
+ */
+const ACCOUNT_NAME_ALIASES: Record<string, string> = {
+  // 収益
+  売上: "400",
+  売上金額: "400",
+  // 売上原価
+  仕入: "501",
+  仕入金額: "501",
+  期首棚卸高: "500",
+  期末棚卸高: "502",
+  // 経費
+  交際費: "607",
+  接待費: "607",
+  外注費: "614",
+  業務委託費: "614",
+  保険料: "608",
+  支払保険料: "608",
+  支払利息: "615",
+  給料手当: "613",
+  給与手当: "613",
+  給料: "613",
+  雑給: "613",
+  家賃: "616",
+  貸倒損失: "617",
+  図書費: "620",
+  書籍費: "620",
+  手数料: "622",
+  荷造発送費: "602",
+  発送費: "602",
+  広告費: "606",
+  交通費: "604",
+  旅費: "604",
+  事務用品費: "610",
+  // 資産・負債・資本
+  預金: "110",
+  未払い金: "210",
+};
+
+function normalizeAccountName(name: string): string {
+  return name.normalize("NFKC").replace(/\s/g, "");
+}
+
+const ACCOUNT_BY_NORMALIZED_NAME = new Map(
+  DEFAULT_ACCOUNTS.map((a) => [normalizeAccountName(a.name), a]),
+);
+
+/**
+ * 科目名から既定の科目を引く (完全一致 → 別名)。空白と全角/半角の差は無視する。
+ * 引けない時は null (取込側は未分類コードにして利用者に知らせる)。
+ */
+export function resolveAccountByName(
+  name: string | null | undefined,
+): { code: string; name: string } | null {
+  if (!name) return null;
+  const key = normalizeAccountName(name);
+  if (!key) return null;
+  const exact = ACCOUNT_BY_NORMALIZED_NAME.get(key);
+  if (exact) return { code: exact.code, name: exact.name };
+  const aliasCode = ACCOUNT_NAME_ALIASES[key];
+  if (aliasCode) {
+    const a = DEFAULT_ACCOUNTS.find((x) => x.code === aliasCode);
+    if (a) return { code: a.code, name: a.name };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // 予測変換 (freee 風タイプアヘッド) 用の読み仮名 + 検索
 // ---------------------------------------------------------------------------
 

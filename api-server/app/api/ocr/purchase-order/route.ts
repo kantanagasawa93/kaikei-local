@@ -15,6 +15,7 @@ import {
   getLicense,
   incrementUsage,
   isLicenseValid,
+  refundUsage,
 } from "@/lib/license";
 
 export const maxDuration = 30;
@@ -83,7 +84,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const license = await getLicense(licenseKey);
+  // ライセンス台帳 (Upstash Redis) に到達できない時は例外になる。未処理のまま
+  // 500 を返すと利用者には原因が分からないので、503 で明示する。
+  let license: Awaited<ReturnType<typeof getLicense>>;
+  try {
+    license = await getLicense(licenseKey);
+  } catch (e) {
+    console.error("license lookup failed:", e);
+    return NextResponse.json(
+      { error: "ライセンスを確認できませんでした。時間をおいて再試行してください。" },
+      { status: 503, headers: corsHeaders() }
+    );
+  }
   if (!license) {
     return NextResponse.json(
       { error: "ライセンスキーが無効です" },
@@ -97,15 +109,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 領収書 OCR と同じ月次枠を消費 (Gemini API を 1 回呼ぶため公平)
-  const usage = await incrementUsage(licenseKey);
-  if (!usage.ok) {
-    return NextResponse.json(
-      { error: `今月の利用上限 ${usage.limit} 枚に達しました。` },
-      { status: 429, headers: corsHeaders() }
-    );
-  }
-
+  // リクエスト自体が不正・サーバ設定不備の場合に月次枠を消費しないよう、
+  // 枠のカウントアップは「これから実際に Gemini を呼ぶ」直前まで遅らせる。
   let body: { image?: string; media_type?: string };
   try {
     body = await req.json();
@@ -127,6 +132,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "サーバ設定エラー（APIキー未設定）" },
       { status: 500, headers: corsHeaders() }
+    );
+  }
+
+  // 領収書 OCR と同じ月次枠を消費 (Gemini API を 1 回呼ぶため公平)
+  const usage = await incrementUsage(licenseKey);
+  if (!usage.ok) {
+    return NextResponse.json(
+      { error: `今月の利用上限 ${usage.limit} 枚に達しました。` },
+      { status: 429, headers: corsHeaders() }
     );
   }
 
@@ -168,6 +182,8 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       const errText = await res.text();
       console.error("Gemini API error (PO):", res.status, errText);
+      // 結果を返せなかったので、消費した 1 枚分を戻す
+      await refundUsage(licenseKey);
       if (res.status === 429) {
         return NextResponse.json(
           {
@@ -208,6 +224,7 @@ export async function POST(req: NextRequest) {
     );
   } catch (e) {
     console.error("PO OCR error:", e);
+    await refundUsage(licenseKey);
     return NextResponse.json(
       { error: "サーバエラー" },
       { status: 500, headers: corsHeaders() }

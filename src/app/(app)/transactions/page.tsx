@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,8 +25,12 @@ import { Upload, Check, X, CreditCard } from "lucide-react";
 import { type ParsedTransaction } from "@/lib/csv-import";
 import { parseBankOrCardCsvBytes } from "@/lib/bank-csv";
 import { toast } from "@/lib/toast";
-import { findAccountCodeByName, getAccountByCode } from "@/lib/accounts";
 import { findMatchingRule, recordRuleApplication } from "@/lib/auto-rules";
+import {
+  BankTxAlreadyHandledError,
+  importBankTransactions,
+  journalizeBankTransaction,
+} from "@/lib/bank-journal";
 import type { BankAccount, BankTransaction } from "@/types";
 
 export default function TransactionsPage() {
@@ -36,6 +40,8 @@ export default function TransactionsPage() {
   const [parsedData, setParsedData] = useState<ParsedTransaction[]>([]);
   const [importing, setImporting] = useState(false);
   const [monthFilter, setMonthFilter] = useState("");
+  // 仕訳作成の二重押し防止 (明細 id 単位)
+  const busyIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     loadBankAccounts();
@@ -91,96 +97,37 @@ export default function TransactionsPage() {
   }, [bankAccounts, selectedAccountId]);
 
   async function handleImport() {
-    if (!selectedAccountId || parsedData.length === 0) return;
+    if (!selectedAccountId || parsedData.length === 0 || importing) return;
     setImporting(true);
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const records = parsedData.map((t) => ({
-      bank_account_id: selectedAccountId,
-      user_id: user.id,
-      date: t.date,
-      description: t.description,
-      amount: t.amount,
-      balance_after: t.balance_after,
-      is_income: t.is_income,
-      category: t.suggested_account_name,
-      status: "unmatched" as const,
-    }));
-
-    await supabase.from("bank_transactions").insert(records);
-    setParsedData([]);
-    loadTransactions();
-    setImporting(false);
+    try {
+      const res = await importBankTransactions(selectedAccountId, parsedData);
+      setParsedData([]);
+      toast.success(
+        res.skipped > 0
+          ? `${res.added} 件を取り込みました（取込済みの ${res.skipped} 件は重複のため除外）`
+          : `${res.added} 件を取り込みました`,
+      );
+    } catch (e) {
+      toast.error(`取り込みに失敗しました: ${(e as Error)?.message || String(e)}`);
+    } finally {
+      setImporting(false);
+      await loadTransactions();
+    }
   }
 
   async function handleCreateJournal(transaction: BankTransaction) {
-    const account = bankAccounts.find((a) => a.id === transaction.bank_account_id);
-    const isBank = account?.account_type === "bank";
-
-    // 自動登録ルールで推測
-    const matched = await findMatchingRule(transaction);
-
-    // 仕訳作成
-    const { data: journal } = await supabase
-      .from("journals")
-      .insert({
-        date: transaction.date,
-        description: transaction.description,
-      })
-      .select()
-      .single();
-
-    if (!journal) return;
-
-    if (transaction.is_income) {
-      // 入金: 借方=普通預金、貸方=売上
-      const revCode = matched?.action_type === "suggest_journal" ? matched.account_code || "400" : "400";
-      const revName = matched?.account_name || "売上高";
-      const taxCode = matched?.tax_code || "S10";
-      const taxAmount = Math.floor((transaction.amount * 10) / 110);
-      await supabase.from("journal_lines").insert([
-        { journal_id: journal.id, account_code: "110", account_name: "普通預金", debit_amount: transaction.amount, credit_amount: 0, tax_code: "OUT", tax_amount: 0 },
-        { journal_id: journal.id, account_code: revCode, account_name: revName, debit_amount: 0, credit_amount: transaction.amount, tax_code: taxCode, tax_amount: taxAmount },
-      ]);
-    } else {
-      // 出金: 借方=経費科目、貸方=普通預金 or 未払金(クレカ)
-      const creditAccount = isBank
-        ? { code: "110", name: "普通預金" }
-        : { code: "210", name: "未払金" };
-
-      // ルール > suggestAccount から来た科目名 > 雑費 の優先順位
-      let expenseCode: string = "699";
-      let expenseName: string = "雑費";
-      let taxCode: string = "P10";
-      if (matched?.account_code) {
-        expenseCode = matched.account_code;
-        expenseName = matched.account_name || getAccountByCode(matched.account_code)?.name || "雑費";
-        if (matched.tax_code) taxCode = matched.tax_code;
-      } else if (transaction.category) {
-        expenseCode = findAccountCodeByName(transaction.category) || "699";
-        expenseName = transaction.category || "雑費";
-      }
-
-      await supabase.from("journal_lines").insert([
-        { journal_id: journal.id, account_code: expenseCode, account_name: expenseName, debit_amount: transaction.amount, credit_amount: 0, tax_code: taxCode, tax_amount: Math.floor((transaction.amount * 10) / 110) },
-        { journal_id: journal.id, account_code: creditAccount.code, account_name: creditAccount.name, debit_amount: 0, credit_amount: transaction.amount, tax_code: "OUT", tax_amount: 0 },
-      ]);
+    if (busyIds.current.has(transaction.id)) return;
+    busyIds.current.add(transaction.id);
+    try {
+      const account = bankAccounts.find((a) => a.id === transaction.bank_account_id);
+      await journalizeBankTransaction(transaction, account);
+    } catch (e) {
+      if (e instanceof BankTxAlreadyHandledError) toast.info(e.message);
+      else toast.error(`仕訳を作成できませんでした: ${(e as Error)?.message || String(e)}`);
+    } finally {
+      busyIds.current.delete(transaction.id);
+      await loadTransactions();
     }
-
-    // ステータス更新
-    await supabase
-      .from("bank_transactions")
-      .update({ status: "matched", journal_id: journal.id })
-      .eq("id", transaction.id);
-
-    // ルール採用履歴を記録（ユーザが明示的に仕訳作成 = 採用）
-    if (matched) {
-      await recordRuleApplication(matched.id, transaction.id, true);
-    }
-
-    loadTransactions();
   }
 
   async function handleIgnoreWithRuleReject(tx: BankTransaction) {

@@ -95,11 +95,36 @@ const CHECKSUM_MISMATCH_RE = /previously applied but has been modified/i;
 
 let _repairAttempted = false;
 
-async function getDb(): Promise<Database> {
-  if (_db) return _db;
+/**
+ * 進行中の load。起動直後は layout / page / boot の複数箇所がほぼ同時に
+ * getDb() を呼ぶ。Promise を共有しないと Database.load が並走して、
+ * マイグレーションを実行中の接続とぶつかり "database is locked" (code 5) で
+ * 後発のクエリが失敗する (新規インストールの初回起動 / マイグレーションを含む
+ * アップデート直後の初回起動で発生)。
+ */
+let _dbLoading: Promise<Database> | null = null;
+
+function getDb(): Promise<Database> {
+  if (_db) return Promise.resolve(_db);
+  if (!_dbLoading) {
+    _dbLoading = loadDb().then(
+      (loaded) => {
+        _db = loaded;
+        return loaded;
+      },
+      (e) => {
+        // 失敗した Promise を握り続けると二度と復旧できないので捨てる
+        _dbLoading = null;
+        throw e;
+      },
+    );
+  }
+  return _dbLoading;
+}
+
+async function loadDb(): Promise<Database> {
   try {
-    _db = await Database.load("sqlite:kaikei.db");
-    return _db;
+    return await Database.load("sqlite:kaikei.db");
   } catch (e) {
     const msg = (e as Error)?.message || String(e);
     if (CHECKSUM_MISMATCH_RE.test(msg) && !_repairAttempted) {
@@ -127,8 +152,7 @@ async function getDb(): Promise<Database> {
           )
           .catch(() => {});
         // sqlx の状態をクリアしたので再 load
-        _db = await Database.load("sqlite:kaikei.db");
-        return _db;
+        return await Database.load("sqlite:kaikei.db");
       } catch (re) {
         console.error("[localDb] auto-repair 失敗:", re);
         throw e; // 元の checksum mismatch を投げ直す
@@ -175,6 +199,13 @@ interface QueryState {
 // 既存コードはSupabaseの緩い型( data: any )前提なので、dataは any として返す
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Result<_T> = { data: any; error: Error | null; count?: number };
+
+/**
+ * id 列を持たない表 (code を主キーにしているマスタ)。
+ * ここに id を自動付与すると「no column named id」で INSERT が必ず失敗する
+ * (しかも localDb は例外を投げないので、呼び出し側は成功したと思い込む)。
+ */
+const TABLES_WITHOUT_ID: ReadonlySet<string> = new Set(["accounts", "tax_classes"]);
 
 class QueryBuilder<T = Row> implements PromiseLike<Result<T>> {
   private state: QueryState;
@@ -429,8 +460,8 @@ class QueryBuilder<T = Row> implements PromiseLike<Result<T>> {
       // kaikei はローカル1ユーザ構成。既存コードが user_id を渡してくるが、
       // SQLite 側のテーブルには user_id カラムがないので自動で落とす。
       delete row.user_id;
-      // id は自動付与
-      if (row.id === undefined) {
+      // id は自動付与 (id 列の無い表は除く)
+      if (row.id === undefined && !TABLES_WITHOUT_ID.has(this.state.table)) {
         row.id = crypto.randomUUID();
       }
       // boolean → 0/1 変換（SQLite互換）

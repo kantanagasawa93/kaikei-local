@@ -137,6 +137,21 @@ export async function incrementUsage(
   return { used, limit: license.monthly_limit, ok: used <= license.monthly_limit };
 }
 
+/**
+ * incrementUsage で消費した 1 枚分を戻す。
+ * 「枠は減ったのに結果は返せなかった」(上流 Gemini の障害・タイムアウト等) を
+ * 利用者の負担にしないため。ベストエフォートで、失敗しても握りつぶす。
+ */
+export async function refundUsage(key: string): Promise<void> {
+  if (isOwnerKey(key)) return;
+  try {
+    const yyyyMm = new Date().toISOString().slice(0, 7);
+    await getRedis().decr(`usage:${key}:${yyyyMm}`);
+  } catch (e) {
+    console.error("refundUsage failed:", e);
+  }
+}
+
 export async function getCurrentUsage(key: string): Promise<number> {
   if (isOwnerKey(key)) return 0;
   const yyyyMm = new Date().toISOString().slice(0, 7);

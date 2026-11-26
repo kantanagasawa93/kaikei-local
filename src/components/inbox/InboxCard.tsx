@@ -49,6 +49,7 @@ export function InboxCard({
   onQuickConfirm,
   onReocr,
   onOpenForReceipt,
+  onEdited,
 }: {
   row: InboxRow;
   quickConfirming: boolean;
@@ -66,6 +67,8 @@ export function InboxCard({
   onQuickConfirm: () => void;
   onReocr: (twoPass: boolean) => void;
   onOpenForReceipt: () => void;
+  /** 編集を保存した後に呼ばれる (親が一覧を読み直して、カードの表示を最新にする) */
+  onEdited?: () => void;
 }) {
   // 画像表示は plugin-fs で生バイトを読んで Blob URL 化する。
   // asset:// 経由だとパスのスペース展開や HEIC の MIME 判定で
@@ -83,37 +86,49 @@ export function InboxCard({
 
   const handleSaveEdit = async (alsoRejournalize: boolean) => {
     if (saving) return;
+    const amountNum = editAmount.trim() ? parseInt(editAmount.replace(/[,¥\s]/g, ""), 10) : null;
+    if (amountNum !== null && (!Number.isFinite(amountNum) || amountNum < 0)) {
+      toast.error("金額は 0 以上の数字で入力してください");
+      return;
+    }
     setSaving(true);
     try {
-      await updateInboxClaudeResult(row.id, {
-        vendor_name: editVendor || null,
-        amount: editAmount ? parseInt(editAmount, 10) : null,
+      const updated = await updateInboxClaudeResult(row.id, {
+        vendor_name: editVendor.trim() || null,
+        amount: amountNum,
         date: editDate || null,
       });
       if (alsoRejournalize) {
-        // photo_inbox.state が imported なら、receipts/journals を消して
-        // 再仕訳化する。`rejournalize` は journal_id を引数に取るので、
-        // imported_receipt_id から逆引き → journal_id を探す
+        // photo_inbox.state が imported なら、紐付く仕訳を「いま保存した値」で作り直す。
+        // (以前はここで AI OCR をもう一度走らせていたため、直した金額や日付が
+        //  新しい読み取り結果で上書きされ、「保存して再仕訳化しました」と出るのに
+        //  修正が反映されていなかった)
         const { db } = await import("@/lib/localDb");
         const { rejournalize } = await import("@/lib/auto-journal");
-        const { data: rec } = await db
-          .from("receipts")
-          .select("id")
-          .eq("id", row.imported_receipt_id ?? "")
-          .single();
-        if (rec) {
-          const { data: jr } = await db
-            .from("journals")
-            .select("id")
-            .eq("receipt_id", (rec as { id: string }).id)
-            .single();
-          const journalId = (jr as { id: string } | null)?.id;
-          if (journalId) {
-            await rejournalize(journalId);
-            toast.success("編集内容を保存して再仕訳化しました");
-          } else {
-            toast.success("編集を保存しました (再仕訳化対象の journal なし)");
-          }
+        const { data: jr, error: journalError } = row.imported_receipt_id
+          ? await db
+              .from("journals")
+              .select("id")
+              .eq("receipt_id", row.imported_receipt_id)
+              .single()
+          : { data: null, error: null };
+        if (journalError) throw journalError;
+        const journalId = (jr as { id: string } | null)?.id;
+        if (journalId) {
+          await rejournalize(journalId, {
+            presetOcr: {
+              raw_text: typeof updated.raw_text === "string" ? updated.raw_text : "",
+              vendor_name: (updated.vendor_name as string | null) ?? null,
+              amount: (updated.amount as number | null) ?? null,
+              date: (updated.date as string | null) ?? null,
+              suggested_account_code: (updated.suggested_account_code as string | null) ?? null,
+              suggested_account_name: (updated.suggested_account_name as string | null) ?? null,
+              items: Array.isArray(updated.items)
+                ? (updated.items as import("@/types").OcrItem[])
+                : [],
+            },
+          });
+          toast.success("編集内容で仕訳を作り直しました");
         } else {
           toast.success("編集を保存しました (まだ仕訳化されていないので保存のみ)");
         }
@@ -121,11 +136,21 @@ export function InboxCard({
         toast.success("AI OCR 結果を更新しました");
       }
       setEditing(false);
+      onEdited?.();
     } catch (e) {
       toast.error(`更新失敗: ${(e as Error).message}`);
     } finally {
       setSaving(false);
     }
+  };
+
+  /** 編集を始める時は、いま表示している行の値で入力欄を作り直す (再読込後の古い値を使わない) */
+  const beginEdit = () => {
+    const current = parseClaudeResult(row.claude_result_json);
+    setEditVendor(current.vendor_name);
+    setEditAmount(current.amount);
+    setEditDate(current.date);
+    setEditing(true);
   };
 
   useEffect(() => {
@@ -225,7 +250,7 @@ export function InboxCard({
           {hasClaudeJson && !editing && (
             <button
               type="button"
-              onClick={() => setEditing(true)}
+              onClick={beginEdit}
               className="text-[10px] text-muted-foreground hover:text-foreground inline-flex items-center gap-0.5"
               title="AI OCR の vendor / amount / date を編集"
             >

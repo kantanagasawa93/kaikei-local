@@ -1,17 +1,22 @@
 /**
- * 起動時の自動バックアップ (ローリング 7 日分)。
+ * 起動時の自動バックアップ (ローリング 7 世代)。
  *
  * アプリ起動時に ~/Library/Application Support/dev.kaikei.app/snapshots/
- * に kaikei-YYYY-MM-DD.db を作成。既存ファイルがあれば skip (日 1 回)。
- * 7 日より古いスナップショットは自動削除。
+ * に kaikei-YYYY-MM-DD.db を作成。同じ日付のものが既にあれば skip (日 1 回)。
  *
- * メインの kaikei.db と同じ場所なので容量は倍必要になるが、
- * 誤操作で DB を壊した時の保険。ユーザーは設定画面から直近の snapshot を
- * kaikei.db にリネーム/コピーすれば復元できる。
+ * - スナップショットは Rust 側の db_snapshot (VACUUM INTO) で作る。
+ *   kaikei.db は WAL モードなので、ファイルを直接コピーすると前回の異常終了などで
+ *   WAL に残っているコミットが欠ける。
+ * - 残すのは「新しい方から 7 個」。以前は「7 日より古いものを削除」だったため、
+ *   しばらくアプリを開かないと、次の起動で過去分が全部消えて当日分だけになっていた
+ *   (= 保険として一番欲しい「数日前の状態」が残らない)。
+ *
+ * 画像は含まない DB だけの保険。丸ごとのバックアップは設定画面の「バックアップ（ZIP）」。
  */
 
 const SNAP_DIR = "snapshots";
-const KEEP_DAYS = 7;
+const KEEP_COUNT = 7;
+const SNAP_RE = /^kaikei-(\d{4})-(\d{2})-(\d{2})\.db$/;
 
 function todayStr(): string {
   const d = new Date();
@@ -20,58 +25,41 @@ function todayStr(): string {
   ).padStart(2, "0")}`;
 }
 
+/** 残すスナップショットを選ぶ (日付の新しい順に keep 個)。純関数にしてテストする。 */
+export function selectSnapshotsToRemove(names: string[], keep: number = KEEP_COUNT): string[] {
+  const snaps = names.filter((n) => SNAP_RE.test(n)).sort(); // YYYY-MM-DD なので辞書順 = 日付順
+  return snaps.slice(0, Math.max(0, snaps.length - keep));
+}
+
 export async function runAutoBackup(): Promise<void> {
   try {
-    const { mkdir, readFile, writeFile, readDir, remove, BaseDirectory } =
-      await import("@tauri-apps/plugin-fs");
+    const { exists, readDir, remove, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const { invoke } = await import("@tauri-apps/api/core");
 
-    // 現 DB 読込 (無ければ何もしない = 初回起動)
-    let dbBytes: Uint8Array;
-    try {
-      dbBytes = await readFile("kaikei.db", { baseDir: BaseDirectory.AppData });
-    } catch {
-      return;
-    }
-    if (!dbBytes || dbBytes.length === 0) return;
+    // DB が無ければ何もしない (= 初回起動)
+    if (!(await exists("kaikei.db", { baseDir: BaseDirectory.AppData }))) return;
 
-    // snapshots/ 作成
-    try {
-      await mkdir(SNAP_DIR, {
-        baseDir: BaseDirectory.AppData,
-        recursive: true,
-      });
-    } catch {}
-
-    const today = todayStr();
-    const snapName = `${SNAP_DIR}/kaikei-${today}.db`;
-
-    // 既存 (同日) があれば skip
     let existing: { name: string; isFile: boolean }[] = [];
     try {
       existing = (await readDir(SNAP_DIR, {
         baseDir: BaseDirectory.AppData,
       })) as { name: string; isFile: boolean }[];
-    } catch {}
-
-    const alreadyToday = existing.some((e) => e.isFile && e.name === `kaikei-${today}.db`);
-    if (!alreadyToday) {
-      await writeFile(snapName, dbBytes, { baseDir: BaseDirectory.AppData });
+    } catch {
+      /* snapshots/ がまだ無い — db_snapshot 側で作られる */
     }
 
-    // 7 日より古いスナップショットを削除
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - KEEP_DAYS);
-    for (const entry of existing) {
-      if (!entry.isFile) continue;
-      const m = entry.name.match(/^kaikei-(\d{4})-(\d{2})-(\d{2})\.db$/);
-      if (!m) continue;
-      const d = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`);
-      if (d < cutoff) {
-        try {
-          await remove(`${SNAP_DIR}/${entry.name}`, {
-            baseDir: BaseDirectory.AppData,
-          });
-        } catch {}
+    const todayName = `kaikei-${todayStr()}.db`;
+    const names = existing.filter((e) => e.isFile).map((e) => e.name);
+    if (!names.includes(todayName)) {
+      await invoke<number>("db_snapshot", { name: todayName });
+      names.push(todayName);
+    }
+
+    for (const name of selectSnapshotsToRemove(names)) {
+      try {
+        await remove(`${SNAP_DIR}/${name}`, { baseDir: BaseDirectory.AppData });
+      } catch {
+        /* 消せなくても次回また試す */
       }
     }
   } catch (e) {

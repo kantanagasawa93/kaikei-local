@@ -11,6 +11,8 @@ import { ArrowLeft, Copy, History } from "lucide-react";
 import Link from "next/link";
 import type { Journal, JournalLine } from "@/types";
 
+import { todayLocal } from "@/lib/date-utils";
+import { createJournal } from "@/lib/journal-save";
 interface RecentJournal extends Journal {
   journal_lines: JournalLine[];
 }
@@ -76,37 +78,8 @@ export default function NewJournalPage() {
     description: string;
     lines: JournalLineInput[];
   }) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("認証が必要です");
-
-    const { data: journal, error } = await supabase
-      .from("journals")
-      .insert({
-        user_id: user.id,
-        date: data.date,
-        description: data.description,
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    const lineRecords = data.lines.map((line) => ({
-      journal_id: journal.id,
-      account_code: line.account_code,
-      account_name: line.account_name,
-      debit_amount: line.debit_amount,
-      credit_amount: line.credit_amount,
-      tax_code: line.tax_code,
-      tax_amount: line.tax_amount,
-      partner_id: line.partner_id,
-      memo: line.memo,
-    }));
-
-    await supabase.from("journal_lines").insert(lineRecords);
-
+    // 失敗時は例外になり、フォームがエラーを表示する (明細の無い仕訳は残さない)
+    await createJournal(data);
     router.push("/journals");
   };
 
@@ -131,7 +104,7 @@ export default function NewJournalPage() {
             key={seedKey}
             onSubmit={handleSubmit}
             initialData={seed ? {
-              date: new Date().toISOString().split("T")[0],
+              date: todayLocal(),
               description: seed.description,
               lines: seed.lines,
             } : undefined}

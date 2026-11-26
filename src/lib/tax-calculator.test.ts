@@ -7,6 +7,7 @@ import {
   calculateTaxDue,
   calculateMedicalDeduction,
   getBlueReturnDeduction,
+  capBlueDeduction,
 } from "@/lib/tax-calculator";
 
 describe("calculateIncomeTax — 速算表", () => {
@@ -36,10 +37,34 @@ describe("calculateBasicDeduction — 令和7年度改正", () => {
     expect(calculateBasicDeduction(10000000, 2025)).toBe(580000);
     expect(calculateBasicDeduction(24000000, 2025)).toBe(480000);
   });
-  it("令和7・8年分限定の中間帯上乗せは 2027 年分から消える", () => {
-    expect(calculateBasicDeduction(3000000, 2026)).toBe(880000);
-    expect(calculateBasicDeduction(3000000, 2027)).toBe(580000);
-    expect(calculateBasicDeduction(1000000, 2027)).toBe(950000); // 95万は恒久
+  it("令和8・9年分 (2026・2027): 489万円以下 104万 / 655万円以下 67万 / それ以上 62万", () => {
+    for (const y of [2026, 2027]) {
+      expect(calculateBasicDeduction(1000000, y)).toBe(1040000);
+      expect(calculateBasicDeduction(3000000, y)).toBe(1040000);
+      expect(calculateBasicDeduction(4890000, y)).toBe(1040000);
+      expect(calculateBasicDeduction(4890001, y)).toBe(670000);
+      expect(calculateBasicDeduction(6550000, y)).toBe(670000);
+      expect(calculateBasicDeduction(6550001, y)).toBe(620000);
+      expect(calculateBasicDeduction(23500000, y)).toBe(620000);
+      expect(calculateBasicDeduction(23500001, y)).toBe(480000);
+      expect(calculateBasicDeduction(24500000, y)).toBe(320000);
+      expect(calculateBasicDeduction(25000000, y)).toBe(160000);
+      expect(calculateBasicDeduction(25000001, y)).toBe(0);
+    }
+  });
+  it("令和10年分 (2028) 以後: 132万円以下 99万、それ以上は 62万", () => {
+    expect(calculateBasicDeduction(1320000, 2028)).toBe(990000);
+    expect(calculateBasicDeduction(1320001, 2028)).toBe(620000);
+    expect(calculateBasicDeduction(5000000, 2030)).toBe(620000);
+    expect(calculateBasicDeduction(23500001, 2028)).toBe(480000);
+  });
+  it("2025年分の境界値", () => {
+    expect(calculateBasicDeduction(1320000, 2025)).toBe(950000);
+    expect(calculateBasicDeduction(1320001, 2025)).toBe(880000);
+    expect(calculateBasicDeduction(3360001, 2025)).toBe(680000);
+    expect(calculateBasicDeduction(4890001, 2025)).toBe(630000);
+    expect(calculateBasicDeduction(6550001, 2025)).toBe(580000);
+    expect(calculateBasicDeduction(23500001, 2025)).toBe(480000);
   });
 });
 
@@ -96,5 +121,28 @@ describe("その他の控除", () => {
     expect(getBlueReturnDeduction(true, true)).toBe(650000);
     expect(getBlueReturnDeduction(true, false)).toBe(550000);
     expect(getBlueReturnDeduction(false, true)).toBe(0);
+  });
+});
+
+describe("capBlueDeduction — 青色申告特別控除は事業の所得を超えて引けない", () => {
+  it("黒字が控除額以上ならそのまま", () => {
+    expect(capBlueDeduction(650000, 3800000)).toBe(650000);
+  });
+  it("黒字が控除額より小さければ黒字の額まで", () => {
+    expect(capBlueDeduction(650000, 300000)).toBe(300000);
+  });
+  it("赤字・ゼロなら控除なし", () => {
+    expect(capBlueDeduction(650000, 0)).toBe(0);
+    expect(capBlueDeduction(650000, -200000)).toBe(0);
+  });
+});
+
+describe("基礎控除は『青色申告特別控除後』の合計所得金額で判定する", () => {
+  it("売上 600万・経費 220万・青色 65万 (2025年分) → 合計所得 315万 → 88万", () => {
+    const profit = 6000000 - 2200000;
+    const blue = capBlueDeduction(650000, profit);
+    // 控除前の 380万で判定すると 68万になり、税額が 20,400 円多く出ていた
+    expect(calculateBasicDeduction(profit, 2025)).toBe(680000);
+    expect(calculateBasicDeduction(profit - blue, 2025)).toBe(880000);
   });
 });

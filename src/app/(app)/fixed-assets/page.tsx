@@ -35,10 +35,11 @@ import { straightLineYear, bookValueAtYearEnd } from "@/lib/depreciation";
 import type { FixedAsset } from "@/types";
 import { confirmDialog } from "@/lib/confirm";
 
+import { todayLocal } from "@/lib/date-utils";
 const ASSET_ACCOUNT_CODES = ["160", "161", "162", "163", "164", "165"];
 
 type DepMethod = "straight_line" | "none";
-const emptyForm: {
+interface AssetForm {
   name: string;
   asset_account_code: string;
   acquisition_date: string;
@@ -47,22 +48,31 @@ const emptyForm: {
   depreciation_method: DepMethod;
   business_ratio: number;
   residual_value: number;
-} = {
-  name: "",
-  asset_account_code: "163",
-  acquisition_date: new Date().toISOString().split("T")[0],
-  acquisition_cost: 0,
-  useful_life_years: 4,
-  depreciation_method: "straight_line",
-  business_ratio: 100,
-  residual_value: 0,
-};
+}
+
+/**
+ * 空の入力フォーム。取得日の既定値 (今日) は呼ぶたびに作る。
+ * 以前はモジュール読み込み時に 1 度だけ評価していたため、アプリを開きっぱなしに
+ * すると前日以前の日付が既定になり、しかも UTC 基準で朝は 1 日ずれていた。
+ */
+function emptyForm(): AssetForm {
+  return {
+    name: "",
+    asset_account_code: "163",
+    acquisition_date: todayLocal(),
+    acquisition_cost: 0,
+    useful_life_years: 4,
+    depreciation_method: "straight_line",
+    business_ratio: 100,
+    residual_value: 0,
+  };
+}
 
 export default function FixedAssetsPage() {
   const [assets, setAssets] = useState<FixedAsset[]>([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState<AssetForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [posting, setPosting] = useState(false);
   const [postMsg, setPostMsg] = useState<string | null>(null);
@@ -102,7 +112,7 @@ export default function FixedAssetsPage() {
       business_ratio: form.business_ratio,
       residual_value: form.residual_value,
     });
-    setForm(emptyForm);
+    setForm(emptyForm());
     setOpen(false);
     setSaving(false);
     load();

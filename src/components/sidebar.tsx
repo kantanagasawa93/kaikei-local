@@ -71,11 +71,12 @@ export function Sidebar() {
   const handleOpenDataFolder = async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const { appDataDir } = await import("@tauri-apps/api/path");
-      const dir = await appDataDir();
-      await invoke("plugin:shell|open", { path: dir });
+      // plugin:shell|open はフォルダパスを拒否する (http/mailto/tel のみ) ので専用コマンドで開く
+      await invoke("open_app_folder", { which: "data" });
     } catch (e) {
       console.error("Failed to open data folder", e);
+      const { toast } = await import("@/lib/toast");
+      toast.error("データフォルダを開けませんでした。メニューの「ファイル → データフォルダを開く」をお試しください。");
     }
   };
 

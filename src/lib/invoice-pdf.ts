@@ -15,7 +15,7 @@
 
 import { PDFDocument, rgb } from "pdf-lib";
 import type { Invoice, InvoiceItem, IssuerSettings } from "@/types";
-import { TAX_CLASSES } from "@/lib/tax-classes";
+import { TAX_CLASSES, calculateTax, extractTaxFromIncluded } from "@/lib/tax-classes";
 import { embedJapaneseFonts, containsNonAscii } from "@/lib/pdf-fonts";
 
 export async function exportInvoicePdf(
@@ -262,6 +262,21 @@ export async function exportInvoicePdf(
     existing.subtotal += item.amount;
     existing.tax += item.tax_amount;
     byTax.set(code, existing);
+  }
+  // 税額は税区分ごとの合計から 1 回だけ端数処理する (適格請求書の要件)。
+  // 行ごとに切り捨てた item.tax_amount の合算だと数円ずれる。
+  if (isInclusive) {
+    for (const [code, t] of byTax.entries()) {
+      t.tax = extractTaxFromIncluded(t.subtotal, code);
+    }
+  } else {
+    // 外税: 以前は行ごとの税額を足していた。その方式で保存済みの文書は、
+    // 表の税額と合計欄 (invoice.tax_amount) が食い違わないよう元の数字のまま出す。
+    let perRateTotal = 0;
+    for (const [code, t] of byTax.entries()) perRateTotal += calculateTax(t.subtotal, code);
+    if (perRateTotal === invoice.tax_amount) {
+      for (const [code, t] of byTax.entries()) t.tax = calculateTax(t.subtotal, code);
+    }
   }
 
   for (const [code, t] of byTax.entries()) {

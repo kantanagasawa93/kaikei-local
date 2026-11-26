@@ -66,6 +66,29 @@ fi
 # バージョン欄にタグ名から v を外して書き込む
 VERSION="${TAG#v}"
 
+# タグとアプリのバージョンが食い違ったままリリースすると、latest.json は
+# 「$VERSION が最新」と告知するのに配布バイナリは古いバージョンを名乗るため、
+# 利用者側で「アップデートあり」が永久に消えなくなる。必ず一致させる。
+APP_VERSION=$(awk -F'"' '/"version"/ {print $4; exit}' package.json)
+if [ "$VERSION" != "$APP_VERSION" ] && [ -z "${ALLOW_VERSION_MISMATCH:-}" ]; then
+  echo "ERROR: タグ $TAG (version $VERSION) と package.json の version ($APP_VERSION) が一致しません"
+  echo "       package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml を $VERSION に上げてから再実行してください"
+  exit 1
+fi
+
+# 既存タグが HEAD 以外を指している = そのバージョンは別のコミットで公開済み。
+# このまま進めると、同じバージョン番号のまま中身だけ差し替わり、既に入れた人には
+# 更新が届かない (バージョンが同じなので updater が動かない)。
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+  TAG_COMMIT=$(git rev-list -n1 "$TAG")
+  HEAD_COMMIT=$(git rev-parse HEAD)
+  if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ] && [ -z "${ALLOW_RETAG:-}" ]; then
+    echo "ERROR: タグ $TAG は既に別のコミット (${TAG_COMMIT:0:7}) を指しています (HEAD は ${HEAD_COMMIT:0:7})"
+    echo "       公開済みバージョンの中身を差し替えることになるため中止します。新しいバージョン番号でリリースしてください"
+    exit 1
+  fi
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "ERROR: GitHub CLI (gh) がインストールされていません"
   exit 1
@@ -78,6 +101,40 @@ if [ -z "${SKIP_STATUS:-}" ]; then
   echo ""
   echo "==> -1. release-status (Round 15 ㉹ で導入したダッシュボード)"
   "$(dirname "$0")/release-status.sh" || true
+fi
+
+# precheck は APPLE_* env の有無を検査するので、~/.kaikei-release.env の読み込みは
+# 必ず precheck より前に行う (後ろにあると素の `release.sh <tag>` が毎回 precheck で落ちる)。
+# Round 11 ㉥: ユーザが既に release-setup-credentials.sh を実行済みなら
+# ~/.kaikei-release.env が存在し、APPLE_* env が一発で揃う。
+# UNSIGNED=1 / NOTARIZE_SKIP=1 が指定されている時は env なしで進める。
+if [ -z "${UNSIGNED:-}" ] && [ -z "${NOTARIZE_SKIP:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  if [ -f "$HOME/.kaikei-release.env" ]; then
+    echo "==> ~/.kaikei-release.env を自動 source (Round 11 ㉥)"
+    # shellcheck disable=SC1090
+    source "$HOME/.kaikei-release.env"
+  else
+    cat <<EOF
+
+⚠️  APPLE_* env が未設定で、~/.kaikei-release.env も見つかりません。
+
+公証付きリリースを打つには、先に下記を 1 回だけ実行してください (対話的):
+  scripts/release-setup-credentials.sh
+
+それで以下が自動で揃います:
+  - keychain に notarytool credential profile (AC_PASSWORD) を保存
+  - ~/.kaikei-release.env に APPLE_SIGNING_IDENTITY / APPLE_ID /
+    APPLE_PASSWORD (=@keychain:AC_PASSWORD) / APPLE_TEAM_ID を書き出し
+
+完了後に再度このコマンド (scripts/release.sh $TAG) を打つと、
+~/.kaikei-release.env が自動 source されます。
+
+未署名で構わない場合は:
+  UNSIGNED=1 scripts/release.sh $TAG          # 完全未署名 (arm64 のみ)
+  NOTARIZE_SKIP=1 scripts/release.sh $TAG     # 署名はする / 公証だけ skip
+EOF
+    exit 1
+  fi
 fi
 
 # 0. Round 4 ㊀ で導入: フル precheck を回して失敗してたら止める。
@@ -124,38 +181,6 @@ if [ -f "$HOME/.cargo/env" ]; then
   source "$HOME/.cargo/env"
 fi
 
-# Round 11 ㉥: ユーザが既に release-setup-credentials.sh を実行済みなら
-# ~/.kaikei-release.env が存在し、APPLE_* env が一発で揃う。
-# UNSIGNED=1 / NOTARIZE_SKIP=1 が指定されている時は env なしで進める。
-if [ -z "${UNSIGNED:-}" ] && [ -z "${NOTARIZE_SKIP:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-  if [ -f "$HOME/.kaikei-release.env" ]; then
-    echo "==> ~/.kaikei-release.env を自動 source (Round 11 ㉥)"
-    # shellcheck disable=SC1090
-    source "$HOME/.kaikei-release.env"
-  else
-    cat <<EOF
-
-⚠️  APPLE_* env が未設定で、~/.kaikei-release.env も見つかりません。
-
-公証付きリリースを打つには、先に下記を 1 回だけ実行してください (対話的):
-  scripts/release-setup-credentials.sh
-
-それで以下が自動で揃います:
-  - keychain に notarytool credential profile (AC_PASSWORD) を保存
-  - ~/.kaikei-release.env に APPLE_SIGNING_IDENTITY / APPLE_ID /
-    APPLE_PASSWORD (=@keychain:AC_PASSWORD) / APPLE_TEAM_ID を書き出し
-
-完了後に再度このコマンド (scripts/release.sh $TAG) を打つと、
-~/.kaikei-release.env が自動 source されます。
-
-未署名で構わない場合は:
-  UNSIGNED=1 scripts/release.sh $TAG          # 完全未署名 (arm64 のみ)
-  NOTARIZE_SKIP=1 scripts/release.sh $TAG     # 署名はする / 公証だけ skip
-EOF
-    exit 1
-  fi
-fi
-
 # Round 13 ㉯: DRY_RUN=1 でビルド以降を全部 stub にして、何が実行されるかだけ
 # 表示する。precheck と push-check は通常通り走るので「リリース直前の最終確認」
 # として使える。
@@ -186,9 +211,11 @@ ASSETS=()
 if [ -n "${UNSIGNED:-}" ]; then
   echo "==> 未署名ビルド (ARM only)"
   npx tauri build --bundles dmg
-  DMG_SRC=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
-  if [ -z "$DMG_SRC" ]; then
-    echo "ERROR: DMG が見つかりません"
+  # dmg/ には過去バージョンの DMG も残っているので、今回のバージョンを名指しする
+  # (以前は `ls *.dmg | head -1` で、いちばん古い DMG を公開してしまっていた)
+  DMG_SRC="src-tauri/target/release/bundle/dmg/KAIKEI LOCAL_${APP_VERSION}_aarch64.dmg"
+  if [ ! -f "$DMG_SRC" ]; then
+    echo "ERROR: DMG が見つかりません: $DMG_SRC"
     exit 1
   fi
   cp "$DMG_SRC" "/tmp/KAIKEI_LOCAL.dmg"
@@ -270,8 +297,12 @@ if [ -z "${UNSIGNED:-}" ] && [ -z "${UPDATER_SKIP:-}" ]; then
   fi
 
   if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-    echo "⚠️  TAURI_SIGNING_PRIVATE_KEY 未設定 — updater bundle 生成を skip"
-    echo "   有効化するには: scripts/setup-updater-keys.sh を 1 度実行"
+    # latest.json なしで公開すると、既存の利用者には「最新です」としか見えず
+    # 更新が届かない。意図して省く時だけ UPDATER_SKIP=1 を明示させる。
+    echo "ERROR: TAURI_SIGNING_PRIVATE_KEY 未設定 — 自動アップデート用の署名ができません"
+    echo "       ~/.kaikei-updater.env を用意するか (scripts/setup-updater-keys.sh)、"
+    echo "       updater 抜きで出す場合は UPDATER_SKIP=1 を付けて再実行してください"
+    exit 1
   else
     echo ""
     echo "==> 1.6 updater bundle (.app.tar.gz + .sig) 生成"
@@ -296,7 +327,26 @@ if [ -z "${UNSIGNED:-}" ] && [ -z "${UPDATER_SKIP:-}" ]; then
       TAR_NAME="KAIKEI_LOCAL_${ARCH}.app.tar.gz"
       TAR_PATH="$UPDATER_DIR/$TAR_NAME"
       echo "  - $ARCH: tar.gz 化 → $TAR_PATH"
-      tar -czf "$TAR_PATH" -C "$APP_DIR" "KAIKEI LOCAL.app"
+      # macOS の tar は拡張属性 (com.apple.provenance 等) を AppleDouble (._*) という
+      # 別エントリにして書き出す。tauri-plugin-updater は各エントリの先頭パス要素を
+      # 落として展開するので、先頭の "._KAIKEI LOCAL.app" が「展開先ディレクトリ自身」
+      # を指してしまい、アップデートのインストールが必ず失敗する。
+      # → COPYFILE_DISABLE=1 と --no-mac-metadata の両方で ._* を作らせない。
+      COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$TAR_PATH" -C "$APP_DIR" "KAIKEI LOCAL.app"
+      # 念のため中身を検査 (先頭が .app 本体で、._* が 1 つも無いこと)
+      if ! python3 - "$TAR_PATH" <<'PYCHECK'
+import sys, tarfile
+names = tarfile.open(sys.argv[1]).getnames()
+bad = [n for n in names if n.split("/")[-1].startswith("._")]
+ok = bool(names) and names[0] == "KAIKEI LOCAL.app" and not bad
+if not ok:
+    print(f"    tar の中身が不正: first={names[:1]} AppleDouble={len(bad)}件", file=sys.stderr)
+sys.exit(0 if ok else 1)
+PYCHECK
+      then
+        echo "ERROR: $TAR_NAME に AppleDouble (._*) が混入、または構造が想定外です。自動アップデートが壊れるため中止します"
+        exit 1
+      fi
 
       # tauri signer sign で .sig を生成 (空 password 前提)
       echo "  - $ARCH: 署名 (.sig)"
@@ -326,32 +376,30 @@ if [ -z "${UNSIGNED:-}" ] && [ -z "${UPDATER_SKIP:-}" ]; then
       # latest.json 生成
       LATEST_JSON="$UPDATER_DIR/latest.json"
       PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-      RELEASE_NOTES_ESCAPED=$(awk 'BEGIN{ORS="\\n"} {gsub(/"/, "\\\""); print}' "$NOTES_FILE" | sed 's/\\n$//')
-
-      {
-        echo "{"
-        echo "  \"version\": \"$VERSION\","
-        echo "  \"notes\": \"$RELEASE_NOTES_ESCAPED\","
-        echo "  \"pub_date\": \"$PUB_DATE\","
-        echo "  \"platforms\": {"
-        FIRST=1
-        for ARCH in aarch64 x64; do
-          eval "TRIPLE=\${PLATFORM_${ARCH}_TRIPLE:-}"
-          eval "URL=\${PLATFORM_${ARCH}_URL:-}"
-          eval "SIG=\${PLATFORM_${ARCH}_SIG:-}"
-          if [ -n "$TRIPLE" ] && [ -n "$URL" ] && [ -n "$SIG" ]; then
-            if [ $FIRST -eq 0 ]; then echo "    ,"; fi
-            FIRST=0
-            echo "    \"$TRIPLE\": {"
-            echo "      \"signature\": \"$SIG\","
-            echo "      \"url\": \"$URL\""
-            echo -n "    }"
-          fi
-        done
-        echo ""
-        echo "  }"
-        echo "}"
-      } > "$LATEST_JSON"
+      # 手書きの echo で JSON を組むと、リリースノート中の \ やタブで壊れる。
+      # 値は環境変数で渡して python の json に組ませる。
+      LATEST_VERSION="$VERSION" LATEST_PUB_DATE="$PUB_DATE" LATEST_NOTES_FILE="$NOTES_FILE" \
+      LATEST_AARCH64_URL="${PLATFORM_aarch64_URL:-}" LATEST_AARCH64_SIG="${PLATFORM_aarch64_SIG:-}" \
+      LATEST_X64_URL="${PLATFORM_x64_URL:-}" LATEST_X64_SIG="${PLATFORM_x64_SIG:-}" \
+      python3 - "$LATEST_JSON" <<'PYJSON'
+import json, os, sys
+platforms = {}
+for triple, key in (("darwin-aarch64", "AARCH64"), ("darwin-x86_64", "X64")):
+    url, sig = os.environ.get(f"LATEST_{key}_URL", ""), os.environ.get(f"LATEST_{key}_SIG", "")
+    if url and sig:
+        platforms[triple] = {"signature": sig, "url": url}
+with open(os.environ["LATEST_NOTES_FILE"], encoding="utf-8") as f:
+    notes = f.read().rstrip("\n")
+doc = {
+    "version": os.environ["LATEST_VERSION"],
+    "notes": notes,
+    "pub_date": os.environ["LATEST_PUB_DATE"],
+    "platforms": platforms,
+}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(doc, f, ensure_ascii=False, indent=2)
+    f.write("\n")
+PYJSON
 
       echo ""
       echo "==> latest.json 内容:"

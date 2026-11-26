@@ -17,7 +17,9 @@ import {
   getApiKey,
   hasAiOcrConsent,
   setAiOcrConsent,
+  AiOcrConsentRequiredError,
 } from "@/lib/ai-ocr";
+import { defaultTaxCodeForAccountCode, extractTaxFromIncluded } from "@/lib/tax-classes";
 import { compressImageForOcr } from "@/lib/image-compression";
 import { AiOcrConsentDialog } from "@/components/ai-ocr-consent";
 import { AiOcrQuotaBanner } from "@/components/ai-ocr-quota-banner";
@@ -28,6 +30,29 @@ import { toast } from "@/lib/toast";
 import type { OcrResult } from "@/types";
 import { ArrowLeft, Sparkles, Save, Zap, Inbox as InboxIcon } from "lucide-react";
 import Link from "next/link";
+
+import { todayLocal } from "@/lib/date-utils";
+/**
+ * 受信箱 (photo_inbox) の写真を「この領収書として取り込み済み」にする。
+ * 受信箱から開いていない場合 (inboxId が null) は何もしない。
+ */
+async function markInboxImported(inboxId: string | null, receiptId: string): Promise<void> {
+  if (!inboxId) return;
+  const { error } = await db
+    .from("photo_inbox")
+    .update({
+      state: "imported",
+      imported_receipt_id: receiptId,
+      imported_at: new Date().toISOString(),
+      last_error: null,
+    })
+    .eq("id", inboxId);
+  if (error) {
+    // 領収書自体は保存できている。受信箱側の表示だけが古いままになるので知らせる
+    console.error("受信箱の更新に失敗:", error);
+    toast.error("領収書は保存しましたが、受信箱の状態を更新できませんでした（受信箱で「破棄」してください）");
+  }
+}
 
 export default function NewReceiptPage() {
   // Next.js 16: useSearchParams を使う Component は Suspense 境界の中に置く必要がある。
@@ -186,9 +211,16 @@ function NewReceiptPageInner() {
     await runOcr(file);
   };
 
-  const runOcr = async (file: File) => {
+  /**
+   * @param opts.forceLocal true なら AI OCR を使わず、必ずこの Mac 上の OCR で読む。
+   *   同意ダイアログで「同意しない」を選んだ直後の実行に使う。
+   *   (setUseAiOcr(false) は次のレンダーまで反映されないので、state を頼りに
+   *    分岐すると「同意しない」を押したのに画像が送信されてしまう)
+   */
+  const runOcr = async (file: File, opts: { forceLocal?: boolean } = {}) => {
     setIsProcessing(true);
     setError(null);
+    const wantAi = !opts.forceLocal && useAiOcr && hasApiKey;
 
     try {
       // アップロード前に画像を縮小 (長辺 1600px / JPEG q=0.85)。
@@ -205,9 +237,9 @@ function NewReceiptPageInner() {
 
       let result: OcrResult;
 
-      if (useAiOcr && hasApiKey) {
-        // Claude API で高精度読み取り
-        const apiKey = await getApiKey();
+      // 送信の直前にも同意を確かめる (ここまでの分岐に穴があっても送らない)
+      const apiKey = wantAi && (await hasAiOcrConsent()) ? await getApiKey() : null;
+      if (wantAi) {
         if (apiKey) {
           const { base64, mediaType } = await fileToBase64(workFile);
           // ストリーミングを優先。途中で取れたフィールドはその場でフォームに反映する。
@@ -228,10 +260,15 @@ function NewReceiptPageInner() {
             if (r.usage) setOcrUsage(r.usage);
             result = r;
           } catch (streamErr) {
-            console.warn("[ocr] streaming failed, falling back:", streamErr);
-            const r = await ocrWithClaude(base64, mediaType, apiKey);
-            if (r.usage) setOcrUsage(r.usage);
-            result = r;
+            if (streamErr instanceof AiOcrConsentRequiredError) {
+              // 同意が無い → 外部には送らず、この Mac 上の OCR で読む
+              result = await processReceiptImage(workFile);
+            } else {
+              console.warn("[ocr] streaming failed, falling back:", streamErr);
+              const r = await ocrWithClaude(base64, mediaType, apiKey);
+              if (r.usage) setOcrUsage(r.usage);
+              result = r;
+            }
           }
         } else {
           result = await processReceiptImage(workFile);
@@ -252,7 +289,22 @@ function NewReceiptPageInner() {
       }
     } catch (err) {
       console.error("OCR処理に失敗しました:", err);
-      setError(`読み取りに失敗しました: ${(err as Error).message}`);
+      setError(
+        `読み取りに失敗しました: ${(err as Error).message}（下の欄に手入力して保存できます）`,
+      );
+      // 読み取りに失敗しても入力フォームは出す。以前はフォーム自体が表示されず、
+      // エラーも見えないまま何も起きない状態になっていた。
+      setOcrResult(
+        (prev) =>
+          prev ?? {
+            raw_text: "",
+            vendor_name: null,
+            amount: null,
+            date: null,
+            suggested_account_code: null,
+            suggested_account_name: null,
+          },
+      );
     } finally {
       setIsProcessing(false);
     }
@@ -281,6 +333,7 @@ function NewReceiptPageInner() {
       date: date || null,
       accountCode: accountCode || null,
       accountName: accountName || null,
+      inboxId,
     };
 
     toast.info("領収書を保存中...");
@@ -302,7 +355,9 @@ function NewReceiptPageInner() {
           .from("receipts")
           .getPublicUrl(fileName);
 
+        const receiptId = crypto.randomUUID();
         const { error: insertError } = await supabase.from("receipts").insert({
+          id: receiptId,
           user_id: user.id,
           image_url: urlData.publicUrl,
           ocr_text: snapshot.ocrText,
@@ -314,6 +369,7 @@ function NewReceiptPageInner() {
           status: "processed",
         });
         if (insertError) throw insertError;
+        await markInboxImported(snapshot.inboxId, receiptId);
 
         toast.success("領収書を保存しました");
       } catch (error) {
@@ -338,6 +394,7 @@ function NewReceiptPageInner() {
       date: date || null,
       accountCode: accountCode || null,
       accountName: accountName || null,
+      inboxId,
     };
 
     toast.info("仕訳を作成中...");
@@ -349,7 +406,11 @@ function NewReceiptPageInner() {
         if (!user) throw new Error("認証が必要です");
 
         const fileName = `${user.id}/${Date.now()}-${snapshot.file.name}`;
-        await supabase.storage.from("receipts").upload(fileName, snapshot.file);
+        // 画像の保存に失敗したまま進むと、存在しないファイルを指す領収書と仕訳が残る
+        const { error: uploadError } = await supabase.storage
+          .from("receipts")
+          .upload(fileName, snapshot.file);
+        if (uploadError) throw uploadError;
 
         const { data: urlData } = supabase.storage
           .from("receipts")
@@ -373,8 +434,11 @@ function NewReceiptPageInner() {
           .select()
           .single();
         if (insertError) throw insertError;
+        // 受信箱から開いた写真は、ここで「取り込み済み」にする。これをしないと
+        // 受信箱に「領収書」のまま残り、次の一括自動仕訳で同じ写真がもう 1 回仕訳化される。
+        await markInboxImported(snapshot.inboxId, receipt.id);
 
-        const journalDate = snapshot.date || new Date().toISOString().split("T")[0];
+        const journalDate = snapshot.date || todayLocal();
 
         const { data: journal, error: journalError } = await supabase
           .from("journals")
@@ -388,15 +452,18 @@ function NewReceiptPageInner() {
           .single();
         if (journalError) throw journalError;
 
-        const taxAmount = Math.floor((amountNum * 10) / 110);
+        // 税区分は科目から決める (租税公課・保険料などに一律 10% の仕入税額を立てない)
+        const debitCode = snapshot.accountCode || "699";
+        const taxCode = defaultTaxCodeForAccountCode(debitCode);
+        const taxAmount = extractTaxFromIncluded(amountNum, taxCode);
         const { error: linesError } = await supabase.from("journal_lines").insert([
           {
             journal_id: journal.id,
-            account_code: snapshot.accountCode || "699",
+            account_code: debitCode,
             account_name: snapshot.accountName || "雑費",
             debit_amount: amountNum,
             credit_amount: 0,
-            tax_code: "P10",
+            tax_code: taxCode,
             tax_amount: taxAmount,
           },
           {
@@ -409,7 +476,11 @@ function NewReceiptPageInner() {
             tax_amount: 0,
           },
         ]);
-        if (linesError) throw linesError;
+        if (linesError) {
+          // 明細の無い仕訳は一覧に出せず、編集も削除もできなくなるので残さない
+          await supabase.from("journals").delete().eq("id", journal.id);
+          throw linesError;
+        }
 
         toast.success("仕訳を作成しました");
       } catch (error) {
@@ -441,7 +512,8 @@ function NewReceiptPageInner() {
           const f = pendingFile;
           setPendingFile(null);
           setUseAiOcr(false); // 次回からは Tesseract
-          if (f) runOcr(f);
+          // 同意していないので、必ずこの Mac 上の OCR で読む (画像は送信しない)
+          if (f) void runOcr(f, { forceLocal: true });
         }}
       />
 

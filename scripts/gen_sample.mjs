@@ -2,6 +2,7 @@ import { buildShotokuShinkokuXtx } from "../src/lib/etax/rko0010.ts";
 import { buildConsumptionTaxStandardXtx } from "../src/lib/etax/rsh0010.ts";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 const ctx = {
   fiscalYear: 2025,
@@ -62,7 +63,7 @@ const blue = {
   aoiro_tokubetsu_kojo: 650000,
 };
 
-const out = "/Users/nagasawakanta/Desktop";
+const out = path.join(os.homedir(), "Desktop");
 const r = buildShotokuShinkokuXtx(ctx, { income, blue });
 fs.writeFileSync(path.join(out, "RKO0010_sample.xtx"), r.xml);
 

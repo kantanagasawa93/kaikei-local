@@ -63,6 +63,96 @@ async function getApiBase(): Promise<string> {
 }
 
 /**
+ * 利用者の同意なしに画像を外部サーバへ送ろうとした時のエラー。
+ * メッセージは classifyOcrError の "consent" バケットに入る文言にしている。
+ */
+export class AiOcrConsentRequiredError extends Error {
+  constructor() {
+    super("AI OCR の同意がありません。設定 → AI 読み取りで同意してから実行してください");
+    this.name = "AiOcrConsentRequiredError";
+  }
+}
+
+/**
+ * 画像を外部へ送る関数は、必ず最初にこれを通す。
+ *
+ * 同意の確認は以前、呼び出し側 (各画面) の責任になっていた。そのため画面側の
+ * 分岐に 1 つ穴があるだけで (例: 同意ダイアログで「同意しない」を押した直後の
+ * 再実行)、同意していない利用者の領収書画像が送信されていた。
+ * 送信そのものを行うこの層で止めれば、呼び出し側の実装に関わらず守れる。
+ */
+export async function assertAiOcrConsent(): Promise<void> {
+  if (!(await hasAiOcrConsent())) {
+    throw new AiOcrConsentRequiredError();
+  }
+}
+
+/** "1,280" / "¥1,280" / 1280 → 1280。数値にできなければ null。 */
+function toAmount(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? Math.round(v) : null;
+  if (typeof v === "string") {
+    const cleaned = v.normalize("NFKC").replace(/[,¥円\s]/g, "");
+    if (!cleaned) return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? Math.round(n) : null;
+  }
+  return null;
+}
+
+/**
+ * 429 のうち「上流 (Gemini) の当日枠切れ」だけをバナー対象にする。
+ * ライセンスの月次上限 (「今月の利用上限…」) まで「本日の枠切れ・16 時に復活」と
+ * 案内すると、待っても直らないので区別する。
+ */
+function isUpstreamDailyQuota(message: string): boolean {
+  return !/今月|月次|monthly/i.test(message);
+}
+
+/** AI が何も読み取れなかった結果 (空の JSON 等) を「成功」として返さない。 */
+function assertOcrHasContent(r: OcrResult): void {
+  const hasItems = (r.items ?? []).length > 0;
+  if (!r.vendor_name && r.amount == null && !r.date && !hasItems && !r.raw_text) {
+    throw new Error("AI が領収書の内容を読み取れませんでした（結果が空でした）");
+  }
+}
+
+async function afterOcrSuccess(): Promise<void> {
+  // 成功 = 枠が復活した証拠なのでバナーをクリア
+  try {
+    const { clearQuotaExhausted } = await import("./ai-ocr-quota");
+    await clearQuotaExhausted();
+  } catch {
+    /* silent */
+  }
+  // 使用量モニタにカウント (1 時間 100 件超なら warning フラグ)
+  try {
+    const { recordOcrCall } = await import("./ai-ocr-usage");
+    const { overRate, rateCount } = await recordOcrCall();
+    if (overRate) {
+      const { toast } = await import("./toast");
+      toast.info(`AI OCR 使用ペースが速い: 直近 1 時間で ${rateCount} 回`);
+    }
+  } catch {
+    /* silent */
+  }
+}
+
+async function throwForFailedResponse(response: Response): Promise<never> {
+  const err = await response.json().catch(() => ({ error: "unknown" }));
+  const message: string = err.error || `API error (${response.status})`;
+  // Round 28: 429 = Gemini Free Tier 上限超過 → app_settings に記録してバナー表示
+  if (response.status === 429 && isUpstreamDailyQuota(message)) {
+    try {
+      const { markQuotaExhausted } = await import("./ai-ocr-quota");
+      await markQuotaExhausted();
+    } catch {
+      /* silent */
+    }
+  }
+  throw new Error(message);
+}
+
+/**
  * サーバ経由で OCR 実行
  */
 export async function ocrWithClaude(
@@ -70,6 +160,7 @@ export async function ocrWithClaude(
   mediaType: string,
   licenseKey: string
 ): Promise<OcrResult & { usage?: { used: number; limit: number } }> {
+  await assertAiOcrConsent();
   const base = await getApiBase();
   const response = await fetch(`${base}/api/ocr`, {
     method: "POST",
@@ -83,39 +174,8 @@ export async function ocrWithClaude(
     }),
   });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: "unknown" }));
-    // Round 28: 429 = Gemini Free Tier 上限超過 → app_settings に記録してバナー表示
-    if (response.status === 429) {
-      try {
-        const { markQuotaExhausted } = await import("./ai-ocr-quota");
-        await markQuotaExhausted();
-      } catch {
-        /* silent */
-      }
-    }
-    throw new Error(err.error || `API error (${response.status})`);
-  }
-
-  // 成功 = 枠が復活した証拠なのでバナーをクリア
-  try {
-    const { clearQuotaExhausted } = await import("./ai-ocr-quota");
-    await clearQuotaExhausted();
-  } catch {
-    /* silent */
-  }
-
-  // 使用量モニタにカウント (1 時間 100 件超なら warning フラグ)
-  try {
-    const { recordOcrCall } = await import("./ai-ocr-usage");
-    const { overRate, rateCount } = await recordOcrCall();
-    if (overRate) {
-      const { toast } = await import("./toast");
-      toast.info(`AI OCR 使用ペースが速い: 直近 1 時間で ${rateCount} 回`);
-    }
-  } catch {
-    /* silent */
-  }
+  if (!response.ok) await throwForFailedResponse(response);
+  await afterOcrSuccess();
 
   const json = await response.json();
 
@@ -124,16 +184,18 @@ export async function ocrWithClaude(
   const combinedText = [json.vendor_name || "", itemsToCombinedText(items), json.raw_text || ""].join(" ");
   const suggested = suggestAccount(combinedText);
 
-  return {
+  const result = {
     raw_text: json.raw_text || "",
     vendor_name: json.vendor_name || null,
-    amount: json.amount ? Number(json.amount) : null,
+    amount: toAmount(json.amount),
     date: json.date || null,
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
     items, // Round 7 ㊐ + Round 8 ㊕: 仕訳分割で参照 (price 付き対応)
     usage: json.usage,
   };
+  assertOcrHasContent(result);
+  return result;
 }
 
 /**
@@ -149,6 +211,7 @@ export async function ocrWithClaudeStream(
   licenseKey: string,
   onPartial?: (partial: PartialOcrFields) => void
 ): Promise<OcrResult & { usage?: { used: number; limit: number } }> {
+  await assertAiOcrConsent();
   const base = await getApiBase();
   const response = await fetch(`${base}/api/ocr?stream=1`, {
     method: "POST",
@@ -163,10 +226,7 @@ export async function ocrWithClaudeStream(
     }),
   });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: "unknown" }));
-    throw new Error(err.error || `API error (${response.status})`);
-  }
+  if (!response.ok) await throwForFailedResponse(response);
   if (!response.body) {
     throw new Error("ストリーム未対応のレスポンスでした");
   }
@@ -219,6 +279,7 @@ export async function ocrWithClaudeStream(
   }
 
   if (serverError) throw new Error(serverError);
+  await afterOcrSuccess();
 
   // 蓄積テキストから最終 JSON を抽出
   let finalParsed: Record<string, unknown> = {};
@@ -237,22 +298,20 @@ export async function ocrWithClaudeStream(
   ].join(" ");
   const suggested = suggestAccount(combinedText);
 
-  const amountRaw = finalParsed.amount;
-  return {
+  const result = {
     raw_text: (finalParsed.raw_text as string) || "",
     vendor_name: (finalParsed.vendor_name as string) || null,
-    amount:
-      typeof amountRaw === "number"
-        ? amountRaw
-        : amountRaw
-          ? Number(amountRaw)
-          : null,
+    amount: toAmount(finalParsed.amount),
     date: (finalParsed.date as string) || null,
     suggested_account_code: suggested?.code || null,
     suggested_account_name: suggested?.name || null,
     items, // Round 7 ㊐ + Round 8 ㊕
     usage,
   };
+  // 途中で切れた JSON などで何も取れていない時は「成功」にしない
+  // (呼び出し側が非ストリーミングに切り替えて取り直せるようにする)
+  assertOcrHasContent(result);
+  return result;
 }
 
 /**

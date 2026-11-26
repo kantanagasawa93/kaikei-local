@@ -85,7 +85,7 @@ export async function checkReadiness(
         label: "発行者情報 (屋号 / 氏名 / 住所)",
         status: "ok",
         detail: "登録済み",
-        href: "/invoices/issuer",
+        href: "/invoices/settings",
       });
     } else {
       checks.push({
@@ -93,7 +93,7 @@ export async function checkReadiness(
         label: "発行者情報 (屋号 / 氏名 / 住所)",
         status: "error",
         detail: `${filled.length}/3 項目だけ登録済み — e-Tax 提出に必要`,
-        href: "/invoices/issuer",
+        href: "/invoices/settings",
       });
     }
     if (iss?.registered_number) {
@@ -102,7 +102,7 @@ export async function checkReadiness(
         label: "インボイス登録番号",
         status: "ok",
         detail: iss.registered_number,
-        href: "/invoices/issuer",
+        href: "/invoices/settings",
       });
     } else {
       checks.push({
@@ -110,7 +110,7 @@ export async function checkReadiness(
         label: "インボイス登録番号",
         status: "warning",
         detail: "未登録 — 登録事業者なら必ず入力 (免税事業者は不要)",
-        href: "/invoices/issuer",
+        href: "/invoices/settings",
       });
     }
   } catch {
@@ -119,7 +119,7 @@ export async function checkReadiness(
       label: "発行者情報",
       status: "error",
       detail: "未登録",
-      href: "/invoices/issuer",
+      href: "/invoices/settings",
     });
   }
 

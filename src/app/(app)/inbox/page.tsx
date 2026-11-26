@@ -40,6 +40,7 @@ import {
   scanNow,
   listInbox,
   setInboxState,
+  setInboxStates,
   reocrInboxRow,
   markInboxViewed,
   markInboxAllViewed,
@@ -66,6 +67,54 @@ import { toast } from "@/lib/toast";
 import { confirmDialog } from "@/lib/confirm";
 
 type InboxState = InboxRow["state"];
+
+/** 破棄理由 (auto_dismissed_reason) がフィルタに合うか。 */
+function matchDismissReason(it: InboxRow, want: string): boolean {
+  if (!it.auto_dismissed_reason) return want === "manual";
+  try {
+    const parsed = JSON.parse(it.auto_dismissed_reason) as { reason?: string };
+    const r = parsed.reason ?? "pattern";
+    if (want === "manual") return false;
+    if (want === "pattern") return r !== "expired_30d" && r !== "duplicate";
+    return r === want;
+  } catch {
+    return want === "manual";
+  }
+}
+
+/** タブ内の絞り込み (破棄理由・失敗バケット) を適用した、画面に並ぶカード一覧。 */
+function visibleInboxItems(
+  items: InboxRow[],
+  opts: {
+    filter: InboxState | "all";
+    expiredOnly: boolean;
+    reasonFilter: "expired_30d" | "duplicate" | "pattern" | "manual" | null;
+    failureBucketFilter: FailureBucket | null;
+  },
+): InboxRow[] {
+  let out = items;
+  if (opts.filter === "dismissed" && (opts.expiredOnly || opts.reasonFilter)) {
+    out = out.filter((it) =>
+      opts.expiredOnly
+        ? matchDismissReason(it, "expired_30d")
+        : matchDismissReason(it, opts.reasonFilter ?? ""),
+    );
+  }
+  if (opts.filter === "receipt_failed" && opts.failureBucketFilter) {
+    out = out.filter(
+      (it) => classifyOcrError(it.last_error).bucket === opts.failureBucketFilter,
+    );
+  }
+  return out;
+}
+
+const STATE_LABEL: Partial<Record<InboxState, string>> = {
+  candidate: "未判定",
+  receipt: "領収書",
+  not_receipt: "違う",
+  dismissed: "破棄",
+  receipt_failed: "失敗",
+};
 
 export default function InboxPage() {
   const router = useRouter();
@@ -113,6 +162,19 @@ export default function InboxPage() {
   const [helpOpen, setHelpOpen] = useState(false);
   // ㉧ Round 11: 検索 input にフォーカスを当てたい時のフラグ
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 画面に並んでいるカード。描画・キーボード操作・全選択は必ずこの配列を使う。
+  // (以前はキーボード操作と全選択が絞り込み前の items を見ていたため、失敗タブや
+  //  破棄タブで絞り込み中は、ハイライトされたカードと実際に操作される写真が別だった)
+  const visible = visibleInboxItems(items, {
+    filter,
+    expiredOnly,
+    reasonFilter,
+    failureBucketFilter,
+  });
+  // クイック確定の実行中フラグ。state は次のレンダーまで反映されず、キーボードの
+  // ハンドラは古い値を見続けるので、連打の防止は ref で行う。
+  const quickConfirmingRef = useRef(false);
 
   // ㊌ hover preview ハンドラ: enter で 250ms 後に表示、leave で 100ms 後に消す
   // Round 28: ホバー対象カードが画面右半分にある時はプレビューを左に出して
@@ -181,11 +243,11 @@ export default function InboxPage() {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-      if (items.length === 0) return;
+      if (visible.length === 0) return;
 
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
-        setFocusIdx((i) => Math.min(items.length - 1, i < 0 ? 0 : i + 1));
+        setFocusIdx((i) => Math.min(visible.length - 1, i < 0 ? 0 : i + 1));
         return;
       }
       if (e.key === "ArrowUp" || e.key === "k") {
@@ -215,8 +277,8 @@ export default function InboxPage() {
         return;
       }
 
-      if (focusIdx < 0 || focusIdx >= items.length) return;
-      const row = items[focusIdx];
+      if (focusIdx < 0 || focusIdx >= visible.length) return;
+      const row = visible[focusIdx];
 
       if (e.key === " ") {
         e.preventDefault();
@@ -224,6 +286,9 @@ export default function InboxPage() {
         setHovered((cur) => (cur && cur.id === row.id ? null : row));
         return;
       }
+      // 以降は写真の状態を変える操作。キーを押しっぱなしにした時の連続発火は無視する
+      // (Enter の長押しで同じ写真の仕訳が何本も作られていた)
+      if (e.repeat) return;
       if (e.key === "Enter") {
         e.preventDefault();
         if (row.state === "receipt") {
@@ -255,7 +320,7 @@ export default function InboxPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, focusIdx]);
+  }, [items, focusIdx, filter, expiredOnly, reasonFilter, failureBucketFilter]);
   // ㊁ 失敗パターン集計 (top バケットを「失敗」タブの近くにヒント表示)
   const [failureStats, setFailureStats] = useState<FailureStats | null>(null);
   // ㊌ Round 6: hover プレビュー対象 (右側 pane に拡大画像 + OCR を表示)
@@ -365,7 +430,11 @@ export default function InboxPage() {
     if (!ok) return;
     try {
       // 1 回の UPDATE で全 candidate を dismissed へ
-      await db.from("photo_inbox").update({ state: "dismissed" }).eq("state", "candidate");
+      const { error } = await db
+        .from("photo_inbox")
+        .update({ state: "dismissed" })
+        .eq("state", "candidate");
+      if (error) throw error;
       toast.success(`${count} 件を破棄しました`);
       await refresh();
     } catch (e) {
@@ -520,23 +589,25 @@ export default function InboxPage() {
     }
   };
 
-  const markReceipt = async (id: string) => {
-    await setInboxState(id, "receipt");
+  // 判定の変更。取り込み済みの写真は変更しない (setInboxState 側で守っている)
+  const changeState = async (id: string, state: Exclude<InboxState, "imported">) => {
+    try {
+      const changed = await setInboxState(id, state);
+      if (!changed) {
+        toast.info(
+          "取り込み済みの写真の判定は変えられません。やり直す時は仕訳帳の「受信箱に戻す」を使ってください",
+        );
+      }
+    } catch (e) {
+      toast.error(`変更に失敗: ${(e as Error).message}`);
+    }
     await refresh();
   };
-  const markNotReceipt = async (id: string) => {
-    await setInboxState(id, "not_receipt");
-    await refresh();
-  };
-  const dismiss = async (id: string) => {
-    await setInboxState(id, "dismissed");
-    await refresh();
-  };
+  const markReceipt = (id: string) => changeState(id, "receipt");
+  const markNotReceipt = (id: string) => changeState(id, "not_receipt");
+  const dismiss = (id: string) => changeState(id, "dismissed");
   // ③ 逆操作: 破棄 / 違う / 失敗 → 領収書 候補に戻す
-  const restoreToCandidate = async (id: string) => {
-    await setInboxState(id, "candidate");
-    await refresh();
-  };
+  const restoreToCandidate = (id: string) => changeState(id, "candidate");
   const retryFailed = async (id: string) => {
     await resetFailedToReceipt(id);
     toast.success("再試行待ち (state=領収書) に戻しました");
@@ -562,21 +633,24 @@ export default function InboxPage() {
     });
   };
   const selectAllVisible = () => {
-    setSelected(new Set(items.map((it) => it.id)));
+    setSelected(new Set(visible.map((it) => it.id)));
   };
   const clearSelection = () => setSelected(new Set());
 
   // 一括判定: 選択中の photo_inbox 行を 1 クエリで update する
-  const bulkSetState = async (state: InboxState) => {
+  const bulkSetState = async (state: Exclude<InboxState, "imported">) => {
     if (selected.size === 0) {
       toast.info("選択された写真がありません");
       return;
     }
     const ids = Array.from(selected);
     try {
-      // photo_inbox.id IN (...) で一括更新
-      await db.from("photo_inbox").update({ state }).in("id", ids);
-      toast.success(`${ids.length} 件を「${state}」に変更しました`);
+      const { changed, skippedImported } = await setInboxStates(ids, state);
+      const label = STATE_LABEL[state] ?? state;
+      toast.success(
+        `${changed} 件を「${label}」に変更しました` +
+          (skippedImported > 0 ? `（取り込み済みの ${skippedImported} 件は変更していません）` : ""),
+      );
       clearSelection();
       await refresh();
     } catch (e) {
@@ -650,7 +724,8 @@ export default function InboxPage() {
   // Round 6 ㊋: BlockedByPattern (license/consent エラーが 2 件以上連続) は
   // 個別 modal で「設定を開く」を促し、それ以外のエラーは普通の toast.error
   const quickConfirm = async (inboxId: string) => {
-    if (quickConfirming) return;
+    if (quickConfirmingRef.current) return;
+    quickConfirmingRef.current = true;
     setQuickConfirming(inboxId);
     try {
       await quickConfirmOne(inboxId);
@@ -666,6 +741,7 @@ export default function InboxPage() {
         toast.error(`仕訳化に失敗: ${(e as Error).message}`);
       }
     } finally {
+      quickConfirmingRef.current = false;
       setQuickConfirming(null);
       await refresh();
     }
@@ -1041,7 +1117,12 @@ export default function InboxPage() {
           return (
             <button
               key={f.key}
-              onClick={() => setFilter(k)}
+              onClick={() => {
+                // 別のタブで選んだ写真を、見えていないまま一括操作しないよう解除する
+                setFilter(k);
+                clearSelection();
+                setFocusIdx(-1);
+              }}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
                 filter === f.key
                   ? "bg-primary text-primary-foreground border-primary"
@@ -1270,21 +1351,8 @@ export default function InboxPage() {
                 size="sm"
                 variant="outline"
                 onClick={async () => {
-                  // 現在 visible な dismissed (= フィルタ後) の id を集める
-                  const matchReason = (it: InboxRow, want: string): boolean => {
-                    if (!it.auto_dismissed_reason) return want === "manual";
-                    try {
-                      const p = JSON.parse(it.auto_dismissed_reason) as { reason?: string };
-                      const r = p.reason ?? "pattern";
-                      if (want === "manual") return false;
-                      if (want === "pattern") return r !== "expired_30d" && r !== "duplicate";
-                      return r === want;
-                    } catch {
-                      return want === "manual";
-                    }
-                  };
-                  const want = expiredOnly ? "expired_30d" : (reasonFilter ?? "");
-                  const targets = items.filter((it) => matchReason(it, want));
+                  // いま並んでいる (= フィルタ後の) 破棄済みを対象にする
+                  const targets = visible;
                   if (targets.length === 0) return;
                   if (
                     !(await confirmDialog(
@@ -1293,16 +1361,16 @@ export default function InboxPage() {
                   )
                     return;
                   let restored = 0;
-                  for (const it of targets) {
-                    try {
-                      await db
-                        .from("photo_inbox")
-                        .update({ state: "candidate", auto_dismissed_reason: null })
-                        .eq("id", it.id);
-                      restored++;
-                    } catch {
-                      /* silent */
-                    }
+                  try {
+                    restored = (
+                      await setInboxStates(
+                        targets.map((it) => it.id),
+                        "candidate",
+                      )
+                    ).changed;
+                  } catch (e) {
+                    toast.error(`未判定に戻せませんでした: ${(e as Error).message}`);
+                    return;
                   }
                   toast.success(`${restored} 件を未判定に戻しました`);
                   await refresh();
@@ -1323,37 +1391,7 @@ export default function InboxPage() {
       })()}
 
       {(() => {
-        // Round 24 ⓖ + Round 26 ⓑ: dismissed タブで reason 別フィルタを適用
-        const matchReason = (it: InboxRow, want: string): boolean => {
-          if (!it.auto_dismissed_reason) {
-            return want === "manual";
-          }
-          try {
-            const parsed = JSON.parse(it.auto_dismissed_reason) as {
-              reason?: string;
-            };
-            const r = parsed.reason ?? "pattern";
-            if (want === "manual") return false;
-            if (want === "pattern") return r !== "expired_30d" && r !== "duplicate";
-            return r === want;
-          } catch {
-            return want === "manual";
-          }
-        };
-        let visible =
-          filter === "dismissed" && (expiredOnly || reasonFilter)
-            ? items.filter((it) => {
-                if (expiredOnly) return matchReason(it, "expired_30d");
-                if (reasonFilter) return matchReason(it, reasonFilter);
-                return true;
-              })
-            : items;
-        // Round 28 ⓒ: 失敗タブの bucket フィルタ
-        if (filter === "receipt_failed" && failureBucketFilter) {
-          visible = visible.filter(
-            (it) => classifyOcrError(it.last_error).bucket === failureBucketFilter,
-          );
-        }
+        // 並べるカードは、上で計算した visible (キーボード操作・全選択と同じ配列)
         return visible.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -1407,6 +1445,7 @@ export default function InboxPage() {
               onOpenForReceipt={() => {
                 router.push(`/receipts/new?inbox=${it.id}`);
               }}
+              onEdited={() => void refresh()}
             />
           ))}
         </div>

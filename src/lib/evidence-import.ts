@@ -13,6 +13,7 @@ import { db } from "@/lib/localDb";
 import JSZip from "jszip";
 import type { Receipt, Journal } from "@/types";
 
+import { todayLocal } from "@/lib/date-utils";
 const SUPPORTED_EXTS = ["jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "pdf", "tiff"];
 const MIME_BY_EXT: Record<string, string> = {
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
@@ -161,7 +162,7 @@ export async function importEvidenceZip(file: File): Promise<BulkImportResult> {
 
       // date: ファイル番号で既存の仕訳が見つかれば、その日付を優先採用
       // これにより 2025年の領収書画像を 2026年として保存する不整合を防ぐ
-      let resolvedDate = inferredDate || new Date().toISOString().split("T")[0];
+      let resolvedDate = inferredDate || todayLocal();
       if (freeeFileNo) {
         try {
           const { data: matching } = await db

@@ -11,12 +11,20 @@ import {
   commitAccounts,
   parseFreeePartnersCsv,
   commitPartners,
+  type ImportCounts,
   type ParsedAccount,
   type ParsedPartner,
 } from "@/lib/master-import";
 import { confirmDialog } from "@/lib/confirm";
 
 type TabKey = "accounts" | "partners";
+
+function importMessage(res: ImportCounts): string {
+  const base = `追加 ${res.added} / 更新 ${res.updated} / スキップ ${res.skipped} 件`;
+  return res.failed > 0
+    ? `⚠️ ${base} / 保存に失敗 ${res.failed} 件（もう一度取り込むと、失敗した分だけ追加されます）`
+    : `✅ ${base}`;
+}
 
 export default function MasterImportPage() {
   const [tab, setTab] = useState<TabKey>("accounts");
@@ -55,7 +63,7 @@ export default function MasterImportPage() {
     setAccUpdating(true);
     try {
       const res = await commitAccounts(accParsed, { updateExisting: accUpdateExisting });
-      setAccMsg(`✅ 追加 ${res.added} / 更新 ${res.updated} / スキップ ${res.skipped} 件`);
+      setAccMsg(importMessage(res));
     } catch (e) {
       setAccMsg(`❌ 失敗: ${(e as Error).message}`);
     } finally {
@@ -69,7 +77,7 @@ export default function MasterImportPage() {
     setPtUpdating(true);
     try {
       const res = await commitPartners(ptParsed, { updateExisting: ptUpdateExisting });
-      setPtMsg(`✅ 追加 ${res.added} / 更新 ${res.updated} / スキップ ${res.skipped} 件`);
+      setPtMsg(importMessage(res));
     } catch (e) {
       setPtMsg(`❌ 失敗: ${(e as Error).message}`);
     } finally {
