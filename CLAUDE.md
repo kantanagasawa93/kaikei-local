@@ -86,7 +86,7 @@ scripts/verify-release.sh v0.3.0           # リリース DMG の URL probe + �
 ```bash
 APP="$PWD/src-tauri/target/debug/bundle/macos/KAIKEI LOCAL.app"
 FAKE=<スクラッチ>/home   # DB・領収書・ログ・WebKit ストレージが全部この下に出来る
-open -g -n "$APP" --env HOME="$FAKE" --env CFFIXED_USER_HOME="$FAKE"   # -g: 前面に出さない
+open -g -n "$APP" --env HOME="$FAKE" --env CFFIXED_USER_HOME="$FAKE" --env KAIKEI_DISABLE_PHOTO_DELETE=1   # -g: 前面に出さない / 写真の削除は必ず拒否
 PID=$(pgrep -f "target/debug/bundle/macos/KAIKEI LOCAL.app/Contents/MacOS/kaikei")
 HOME="$FAKE" CFFIXED_USER_HOME="$FAKE" "$APP/Contents/MacOS/kaikei" --navigate=/journals
 screencapture -x -o -l <CGWindowID> out.png   # 裏にある窓でも撮れる
@@ -100,9 +100,9 @@ kill "$PID"                                    # テスト用だけを PID 指�
   一覧が空に見えるのは撮るのが早いだけのことが多い → 8 秒以上待って撮り直す
 - `npm run test` は本番と同じマイグレーションを当てたインメモリ SQLite で動く (`installTestDb()`)
 
-## 次ラウンド (Round 34) 候補
+## 次ラウンド (Round 35) 候補
 
-Round 33 の全体レビューで見つけて、まだ直していないもの。推し優先順は ㊀ → ㊁ → ㊂ → ㊃ → ㊄。
+Round 33 の全体レビューで見つけて、まだ直していないもの (Round 34 は利用者の要望 2 件を先に実装した)。推し優先順は ㊀ → ㊁ → ㊂ → ㊃ → ㊄。
 
 ### ㊀ 未分類 (999) 明細の付け替えツール ★★★★★
 - 他社ソフトの CSV を取り込んだ帳簿には 999 (未分類) の明細が大量に残る (交際費・外注費・カード/銀行口座名など、
@@ -140,14 +140,27 @@ Round 33 の全体レビューで見つけて、まだ直していないもの�
   その時に当日枠切れと同じく端末内 OCR へ切り替えるかを決める (vision-ocr-fallback.ts isQuotaError)
 - AI OCR の推定コスト表示 (0.02 円/回) を現行モデルの料金とトークン数で見直す / 実際の領収書写真で新モデルの読み取り精度を確かめる
 - プライバシーポリシー (legal) の送信先が未登録の `api.kaikei-local.com` のまま (実際は api-server-lac.vercel.app)
-- 取り込んだら元の写真・ファイルを消すオプション (写真アプリからの削除は OS の確認ダイアログが毎回出る /
-  iCloud 写真なら iPhone からも消える / いまの権限要求は読み取り用なので readWrite が要る)
+- 写真アプリからの削除 (Round 34) の続き: ドラッグ&ドロップ・スマホ取込で入れた元ファイルを消す / 1 件ずつ確定した時の扱い /
+  重複として統合した写真の元も消すか
+- 期間指定スキャン (Round 34) の続き: 物理削除済み (破棄から 90 日) の写真が、古い期間を再スキャンすると候補に戻る
 - api-server (Vercel) は 2026-11-26 に本番デプロイ済み (`cd api-server && vercel --prod` → api-server-lac.vercel.app):
   OCR の利用回数を失敗時に返す / 台帳に届かない時は 503 / Stripe webhook は secret 未設定なら拒否 /
   上流 (Gemini) の前払いクレジット切れ (402) は 503 + `code: upstream_credits_depleted` で返す (api-server/lib/gemini-errors.ts) /
   モデルは gemini-3.5-flash-lite (2.5-flash は 2026-12-01 に自動で切り替わるため先に移行。設定は api-server/lib/gemini-config.ts)。
   本番の env は GEMINI_API_KEY / OWNER_LICENSE_KEY / APP_SECRET のみ = **ライセンス台帳 (Upstash) と Stripe は未設定**。
   オーナーキー以外は使えない状態なので、ライセンスを販売するならここの整備が先
+
+### ✓ Round 34 で完了した項目 (履歴) — 利用者の要望: 期間指定スキャン / 取り込んだ写真を写真アプリから削除
+- 期間指定スキャン: photos.rs scan_recent に until を追加 / photo-scanner.ts scanPeriod (2 週間ごとの区間に分けて
+  進捗表示・中断) / resolveScanPeriod・splitScanWindows・cursorAfterScan (純関数 + テスト) /
+  終わりを区切った期間では「次回の起点」を動かさない・過去へ戻さない
+- 写真アプリからの削除: photos.rs delete_assets (PHAssetChangeRequest.deleteAssets、OS の確認ダイアログ) /
+  photo-originals.ts (対象は「取り込み済み + 領収書がアプリ側の画像を参照」だけ) / Rust 側でもアプリ側の画像の実在を確認 /
+  migration v15 (photo_inbox.source_deleted_at) / 設定「写真アプリの整理」+ 一括仕訳化後の自動確認 (既定オフ)
+- 写真の権限レベルを readWrite (2) に修正 (従来は addOnly の 1 を「読み取り」と誤認していた)
+- api-server (アプリ更新なしで反映): Gemini を 3.5-flash-lite へ移行 / 残高切れ (402) を 503 + code で返す
+- テスト 235 → 269 件、Rust 11 → 14 件。**実機での写真削除は未検証** (検証用インスタンスは本物の写真ライブラリに
+  繋がるため実行していない。利用者が少数の写真で確認する)
 
 ### ✓ Round 33 で完了した項目 (履歴) — テーマ「全体レビュー: 失わない / 二重にしない / 引っ越せる」
 - バックアップ・復元を Rust (backup.rs) に移設: VACUUM INTO スナップショット / 復元は次回起動時に適用 /
@@ -319,6 +332,9 @@ Round 33 の全体レビューで見つけて、まだ直していないもの�
 - **実機の画面を録った動画・スクリーンショットを公開物に入れない**: verify-app.sh の画面キャプチャは「窓の位置が取れない時は全画面」にフォールバックしていて、デスクトップ全体 (メモ・チャット・ファイル名) が写ったデモ動画を自動で commit + push し、LP (docs/) とアプリ (public/ → 全ユーザのオンボーディング) に同梱してしまった (v0.3.0〜v0.3.3)。公開する素材は必ずデモデータ (scripts/capture-lp-screenshots.mjs) で作り、**中身を人が見てから** 手で追加する。`public/` に置いたものは全部アプリに埋め込まれて配布される
 - **サンプルデータ・placeholder に実在の個人情報を書かない**: 動作確認用プリセットや入力例に本人の氏名・住所・電話番号・利用者識別番号を書くと、公開リポジトリの履歴と配布バイナリ (placeholder は本番ビルドにも残る) の両方に入る。架空の値 (山田太郎 / 東京都千代田区千代田1-1-1 / 1234567890123456) だけを使う
 - **api-server のエラー文言は、配布済みのアプリが正規表現で分類している**: 文言に「上限」「超過」「本日」「接続」などが入ると、別の原因 (ライセンス上限・当日枠切れ・ネットワーク不調) として案内される (classifyOcrError / isQuotaError)。文言を足す・変える時は gemini-errors.test.ts のように取り違えないことをテストし、機械判定用の `code` を付ける
+- **PHAccessLevel は addOnly = 1 / readWrite = 2**: 「1 = 読み取り」ではない。ライブラリを読む・写真を消すには 2 を渡す (photos.rs)。Apple の NS_ENUM は宣言順がそのまま値になるので、定数を書く時はヘッダを確認する
+- **PhotoKit は HOME を差し替えても本物の写真ライブラリに繋がる**: 「実データに触れない検証」の別インスタンスでも、写真の取得・削除は利用者の本物のライブラリが相手になる。写真を消す経路 (photos_delete_assets) は検証用インスタンスで実行しない。起動時に `--env KAIKEI_DISABLE_PHOTO_DELETE=1` を付けると Rust 側で必ず拒否する。OS の確認ダイアログを利用者の代わりに押さない
+- **消したら戻せない操作は、下の層でもう一度確かめる**: 写真の削除は、画面側 (photo-originals.ts) で対象を選んだうえで、Rust 側 (has_local_copy) でも「アプリ側の画像が実在して中身がある」ものだけに絞る。結果は OS の返す成否ではなく、操作後のライブラリの状態から求める
 - **Gemini のモデル ID と thinking の指定は組で変える**: 2.5 系は `thinkingConfig.thinkingBudget: 0`、3.x 系は `thinkingConfig.thinkingLevel: "minimal"`。逆の組み合わせはどちらも 400 になる。Google は廃止するモデルへのリクエストを後継モデルへ自動で回すので、古い指定を残していると切り替えの日に全リクエストが落ちる (2.5-flash → 3.5-flash-lite は 2026-12-01)。廃止日は https://ai.google.dev/gemini-api/docs/deprecations で確認し、モデルを変える時は架空の領収書画像で実際に通す
 - **AI 読み取りの不調は、まずサーバのログで上流のエラーを見る**: アプリには「AI 読み取りに失敗しました」としか出ない失敗でも、上流 (Gemini) の本文に原因が書いてある。`cd api-server && vercel logs --environment production --since 30m --no-branch --no-follow --expand`。本番で試す時は架空の領収書画像だけを送る
 - **履歴は 2026-11-26 に書き換え済み (git filter-repo)**: それ以前のコミット ID は全部変わっている。このファイルや CHANGELOG に出てくる古いコミット ID (例: `ea22c7b`, `f408b31`) は現在の履歴には存在しない。作成者名は GitHub ユーザー名に統一 (このリポジトリの user.name / user.email を設定済み)

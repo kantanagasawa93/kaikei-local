@@ -65,6 +65,11 @@ import {
 } from "@/lib/auto-journal";
 import { toast } from "@/lib/toast";
 import { confirmDialog } from "@/lib/confirm";
+import {
+  deleteImportedOriginals,
+  describeDeleteResult,
+  getAutoDeleteOriginals,
+} from "@/lib/photo-originals";
 
 type InboxState = InboxRow["state"];
 
@@ -504,6 +509,22 @@ export default function InboxPage() {
         toast.error(`全 ${result.failed} 件失敗: ${result.errors[0] ?? ""}`);
       }
       await refresh();
+      // 設定でオンにしている時だけ、取り込んだ写真を写真アプリから消すかを確認する
+      // (実際に消すかどうかは、このあと出る macOS の確認ダイアログで利用者が決める)
+      if (result.imported > 0) {
+        try {
+          if (await getAutoDeleteOriginals()) {
+            const deletion = await deleteImportedOriginals();
+            if (deletion.requested > 0) {
+              const message = describeDeleteResult(deletion);
+              if (deletion.error) toast.error(message);
+              else toast.info(message);
+            }
+          }
+        } catch (e) {
+          toast.error(`写真アプリからの削除に失敗: ${(e as Error).message}`);
+        }
+      }
     } catch (e) {
       toast.error(`自動仕訳に失敗: ${(e as Error).message}`);
     } finally {

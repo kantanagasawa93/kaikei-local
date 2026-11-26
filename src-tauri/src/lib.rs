@@ -630,6 +630,7 @@ async fn vision_recognize_text(
 async fn photos_scan_recent(
     app: tauri::AppHandle,
     since_unix: i64,
+    until_unix: Option<i64>,
 ) -> Result<Vec<serde_json::Value>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -638,7 +639,7 @@ async fn photos_scan_recent(
             .app_data_dir()
             .map_err(|e| format!("app data dir: {}", e))?;
         let inbox_dir = app_data.join("inbox");
-        let result = tokio::task::spawn_blocking(move || photos::scan_recent(since_unix, &inbox_dir))
+        let result = tokio::task::spawn_blocking(move || photos::scan_recent(since_unix, until_unix, &inbox_dir))
             .await
             .map_err(|e| format!("join: {}", e))??;
         let json = result
@@ -649,8 +650,87 @@ async fn photos_scan_recent(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (app, since_unix);
+        let _ = (app, since_unix, until_unix);
         Err("photos scan is only supported on macOS".into())
+    }
+}
+
+/// 指定した写真のうち、いまも「写真」ライブラリに残っているものの ID を返す。
+/// 利用者が写真アプリ側で自分で消した分を、受信箱の記録に反映するために使う。
+#[tauri::command]
+async fn photos_existing_asset_ids(asset_ids: Vec<String>) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(move || photos::existing_asset_ids(&asset_ids))
+            .await
+            .map_err(|e| format!("join: {}", e))?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = asset_ids;
+        Err("photos is only supported on macOS".into())
+    }
+}
+
+/// 削除を依頼する写真 1 枚分。`file_path` はアプリ側に持っている画像 (inbox/ の下)。
+#[derive(serde::Deserialize)]
+struct DeleteAssetItem {
+    asset_id: String,
+    file_path: String,
+}
+
+/// アプリ側に、その写真の画像が確かに残っているか。
+/// アプリのデータフォルダの下にある、中身のあるファイルだけを「残っている」とみなす。
+fn has_local_copy(app_data: &std::path::Path, file_path: &str) -> bool {
+    let (Ok(real), Ok(base)) = (
+        std::path::Path::new(file_path).canonicalize(),
+        app_data.canonicalize(),
+    ) else {
+        return false;
+    };
+    real.starts_with(&base)
+        && std::fs::metadata(&real)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+}
+
+/// 取り込み済みの写真を「写真」ライブラリから削除する (OS が確認ダイアログを出す)。
+///
+/// 画面側でも対象を選別しているが、消したら戻せない操作なので、ここでも
+/// 「アプリ側に画像が残っているもの」だけに絞る。残っていないものは `skipped_no_copy` で返す。
+#[tauri::command]
+async fn photos_delete_assets(
+    app: tauri::AppHandle,
+    items: Vec<DeleteAssetItem>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_data = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("app data dir: {}", e))?;
+        let mut ids: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        for it in items {
+            if has_local_copy(&app_data, &it.file_path) {
+                ids.push(it.asset_id);
+            } else {
+                skipped.push(it.asset_id);
+            }
+        }
+        let outcome = tokio::task::spawn_blocking(move || photos::delete_assets(&ids))
+            .await
+            .map_err(|e| format!("join: {}", e))??;
+        let mut json = serde_json::to_value(outcome).map_err(|e| format!("serialize: {}", e))?;
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert("skipped_no_copy".into(), serde_json::json!(skipped));
+        }
+        Ok(json)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, items);
+        Err("photos delete is only supported on macOS".into())
     }
 }
 
@@ -1244,6 +1324,12 @@ fn sql_migrations() -> Vec<Migration> {
             sql: migrations::SCHEMA_V14_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "photo_inbox_source_deleted_at",
+            sql: migrations::SCHEMA_V15_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -1708,6 +1794,8 @@ pub fn run() {
             photos_authorization_status,
             photos_request_authorization,
             photos_scan_recent,
+            photos_delete_assets,
+            photos_existing_asset_ids,
             vision_recognize_text,
             read_image_file,
             launchd_status,
@@ -1732,4 +1820,58 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod local_copy_tests {
+    use super::has_local_copy;
+    use std::fs;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "kaikei-local-copy-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("inbox")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn accepts_a_non_empty_file_under_app_data() {
+        let app = scratch("ok");
+        let f = app.join("inbox").join("a.jpg");
+        fs::write(&f, b"jpeg").unwrap();
+        assert!(has_local_copy(&app, &f.to_string_lossy()));
+        let _ = fs::remove_dir_all(&app);
+    }
+
+    #[test]
+    fn rejects_missing_and_empty_files() {
+        let app = scratch("missing");
+        let missing = app.join("inbox").join("gone.jpg");
+        assert!(!has_local_copy(&app, &missing.to_string_lossy()));
+        let empty = app.join("inbox").join("empty.jpg");
+        fs::write(&empty, b"").unwrap();
+        assert!(!has_local_copy(&app, &empty.to_string_lossy()));
+        // フォルダはファイルではない
+        assert!(!has_local_copy(&app, &app.join("inbox").to_string_lossy()));
+        let _ = fs::remove_dir_all(&app);
+    }
+
+    #[test]
+    fn rejects_files_outside_app_data() {
+        let app = scratch("inside");
+        let other = scratch("outside");
+        let f = other.join("inbox").join("a.jpg");
+        fs::write(&f, b"jpeg").unwrap();
+        // アプリのデータフォルダの外にあるファイルは「アプリ側の画像」とみなさない
+        assert!(!has_local_copy(&app, &f.to_string_lossy()));
+        // `..` で外へ出る指定も、実体の場所で判定する
+        let sneaky = app.join("inbox").join("..").join("..").join(other.file_name().unwrap()).join("inbox").join("a.jpg");
+        assert!(!has_local_copy(&app, &sneaky.to_string_lossy()));
+        let _ = fs::remove_dir_all(&app);
+        let _ = fs::remove_dir_all(&other);
+    }
 }

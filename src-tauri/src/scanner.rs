@@ -125,7 +125,7 @@ pub fn run_once(app_data_dir: &PathBuf) -> Result<ScanSummary, String> {
     )
     .map_err(|e| format!("insert log: {}", e))?;
 
-    let scanned = match photos::scan_recent(since, &inbox_dir) {
+    let scanned = match photos::scan_recent(since, None, &inbox_dir) {
         Ok(v) => v,
         Err(e) => {
             let _ = conn.execute(

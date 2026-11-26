@@ -21,6 +21,7 @@
 #![cfg(target_os = "macos")]
 #![allow(unexpected_cfgs)] // objc::msg_send macro emits some
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -62,8 +63,16 @@ const PH_AUTH_DENIED: i64 = 2;
 const PH_AUTH_AUTHORIZED: i64 = 3;
 const PH_AUTH_LIMITED: i64 = 4;
 
-/// PHAccessLevel: read-only で十分 (書き込みは要らない)。
-const PH_ACCESS_LEVEL_READ: i64 = 1;
+/// PHAccessLevel (Apple ヘッダ: addOnly = 1, readWrite = 2)。
+/// 以前は「読み取り用」のつもりで 1 を渡していたが、1 は「追加のみ」で、ライブラリを読む権限ではない。
+/// ライブラリを読む・取り込み済みの写真を削除するには readWrite が要る。
+const PH_ACCESS_LEVEL_READ_WRITE: i64 = 2;
+
+/// PHPhotosErrorDomain: 利用者が OS の確認ダイアログで取り消した
+const PH_PHOTOS_ERROR_USER_CANCELLED: i64 = 3072;
+
+/// 1 回の削除依頼で扱う上限 (OS の確認ダイアログ 1 回分)。
+pub const DELETE_ASSETS_MAX: usize = 500;
 
 /// PHAssetMediaType: 1 = image
 const PH_MEDIA_TYPE_IMAGE: i64 = 1;
@@ -117,7 +126,7 @@ pub struct ScannedPhoto {
 pub fn authorization_status() -> &'static str {
     unsafe {
         let cls = class!(PHPhotoLibrary);
-        let status: i64 = msg_send![cls, authorizationStatusForAccessLevel: PH_ACCESS_LEVEL_READ];
+        let status: i64 = msg_send![cls, authorizationStatusForAccessLevel: PH_ACCESS_LEVEL_READ_WRITE];
         match status {
             PH_AUTH_NOT_DETERMINED => "not_determined",
             PH_AUTH_RESTRICTED => "restricted",
@@ -154,7 +163,7 @@ pub fn request_authorization() -> &'static str {
 
         let cls = class!(PHPhotoLibrary);
         let _: () = msg_send![cls,
-            requestAuthorizationForAccessLevel: PH_ACCESS_LEVEL_READ
+            requestAuthorizationForAccessLevel: PH_ACCESS_LEVEL_READ_WRITE
             handler: &*handler];
     }
 
@@ -178,10 +187,17 @@ pub fn request_authorization() -> &'static str {
     }
 }
 
-/// `since_unix` 以降に撮影された画像を全取得し、JPEG/HEIF バイトを `output_dir`
-/// に保存して [`ScannedPhoto`] のリストを返す。
+/// `since_unix` より後 (`until_unix` があればその時刻まで) に撮影された画像を全取得し、
+/// JPEG/HEIF バイトを `output_dir` に保存して [`ScannedPhoto`] のリストを返す。
 /// 既存ファイル (asset_id で名前衝突) は再取得せずスキップ。
-pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhoto>, String> {
+///
+/// `until_unix` は期間を指定したスキャン用。長い期間を 1 回で処理すると、この関数が
+/// 返るまで進み具合が見えず中断もできないので、呼び出し側が期間を区切って何度も呼ぶ。
+pub fn scan_recent(
+    since_unix: i64,
+    until_unix: Option<i64>,
+    output_dir: &Path,
+) -> Result<Vec<ScannedPhoto>, String> {
     let auth = authorization_status();
     if auth != "authorized" && auth != "limited" {
         return Err(format!("not_authorized:{}", auth));
@@ -199,17 +215,25 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
             msg_send![alloc, init]
         };
 
-        // predicate: mediaType = 1 (image) AND creationDate > since
+        // predicate: mediaType = 1 (image) AND creationDate > since [AND creationDate <= until]
         // ObjC の variadic +predicateWithFormat: は Rust FFI から呼べないので、
         // +predicateWithFormat:argumentArray: 経由で NSArray<id> として引数を渡す。
         // %d は NSNumber に、%@ はそのまま NSDate に置換される。
-        let predicate_format = nsstring("mediaType = %@ AND creationDate > %@");
         let media_type_num: id = msg_send![class!(NSNumber),
             numberWithInt: PH_MEDIA_TYPE_IMAGE as i32];
-        let predicate_args: [id; 2] = [media_type_num, since_date];
+        let mut predicate_args: Vec<id> = vec![media_type_num, since_date];
+        let predicate_format = match until_unix {
+            Some(until) => {
+                let until_date: id = msg_send![class!(NSDate),
+                    dateWithTimeIntervalSince1970: until as f64];
+                predicate_args.push(until_date);
+                nsstring("mediaType = %@ AND creationDate > %@ AND creationDate <= %@")
+            }
+            None => nsstring("mediaType = %@ AND creationDate > %@"),
+        };
         let predicate_arr: id = msg_send![class!(NSArray),
             arrayWithObjects: predicate_args.as_ptr()
-            count: 2u64];
+            count: predicate_args.len() as u64];
         let predicate: id = msg_send![class!(NSPredicate),
             predicateWithFormat: predicate_format
             argumentArray: predicate_arr];
@@ -426,6 +450,218 @@ pub fn scan_recent(since_unix: i64, output_dir: &Path) -> Result<Vec<ScannedPhot
         }
 
         Ok(out)
+    }
+}
+
+// ────────────────────────────────────────────────────────────
+// 取り込み済みの写真をライブラリから削除する
+// ────────────────────────────────────────────────────────────
+
+/// 削除を依頼した結果。何が消えたかは OS の返すコードではなく、依頼後のライブラリの
+/// 状態から求める (ダイアログへの応答が遅れてこちらが待ち切れなかった場合でも、
+/// 次に呼ばれた時に `missing` として拾える)。
+#[derive(serde::Serialize, Debug, Clone, Default)]
+pub struct DeleteAssetsOutcome {
+    /// 依頼した ID の数
+    pub requested: usize,
+    /// この依頼でライブラリから無くなった ID (「最近削除した項目」へ移動)
+    pub deleted: Vec<String>,
+    /// 依頼の時点で既にライブラリに無かった ID (利用者が自分で消した等)
+    pub missing: Vec<String>,
+    /// 利用者が OS の確認ダイアログで取り消した
+    pub cancelled: bool,
+    /// それ以外の失敗の説明
+    pub error: Option<String>,
+}
+
+/// raw pointer をブロックに持ち込むための入れ物。
+struct ObjcPtr(id);
+unsafe impl Send for ObjcPtr {}
+unsafe impl Sync for ObjcPtr {}
+
+/// localIdentifier の配列から PHFetchResult を得る (autorelease pool の中で呼ぶこと)。
+unsafe fn fetch_assets_by_ids(asset_ids: &[String]) -> id {
+    let ns_ids: Vec<id> = asset_ids
+        .iter()
+        .map(|s| {
+            let ns: id = nsstring(s);
+            let ns: id = msg_send![ns, autorelease];
+            ns
+        })
+        .collect();
+    let arr: id = msg_send![class!(NSArray),
+        arrayWithObjects: ns_ids.as_ptr()
+        count: ns_ids.len() as u64];
+    msg_send![class!(PHAsset), fetchAssetsWithLocalIdentifiers: arr options: nil]
+}
+
+unsafe fn ids_in_fetch_result(result: id) -> Vec<String> {
+    if result == nil {
+        return Vec::new();
+    }
+    let count: u64 = msg_send![result, count];
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let asset: id = msg_send![result, objectAtIndex: i];
+        if asset == nil {
+            continue;
+        }
+        let local_id: id = msg_send![asset, localIdentifier];
+        let s = nsstring_to_rust(local_id);
+        if !s.is_empty() {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// 指定した localIdentifier のうち、いまもライブラリに存在するものを返す。
+pub fn existing_asset_ids(asset_ids: &[String]) -> Result<Vec<String>, String> {
+    let auth = authorization_status();
+    if auth != "authorized" && auth != "limited" {
+        return Err(format!("not_authorized:{}", auth));
+    }
+    if asset_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    unsafe {
+        let pool: id = msg_send![class!(NSAutoreleasePool), new];
+        let out = ids_in_fetch_result(fetch_assets_by_ids(asset_ids));
+        let _: () = msg_send![pool, drain];
+        Ok(out)
+    }
+}
+
+/// 指定した写真を「写真」ライブラリから削除する。
+///
+/// - OS が確認ダイアログを出す (アプリ側では省けない)。利用者が「削除」を選ぶと
+///   「最近削除した項目」へ移り、30 日後に完全に消える。iCloud 写真を使っていれば他の端末からも消える。
+/// - ダイアログへの応答を最長 10 分待つ。
+/// - 呼び出し側は「アプリ側に画像が確かに残っている取り込み済みの写真」だけを渡すこと
+///   (この関数は渡された ID をそのまま消す)。
+/// - `KAIKEI_DISABLE_PHOTO_DELETE=1` の時は何もしない (検証用の別インスタンスが、
+///   利用者の本物の写真ライブラリに触れないようにするため)。
+pub fn delete_assets(asset_ids: &[String]) -> Result<DeleteAssetsOutcome, String> {
+    use block::ConcreteBlock;
+
+    if std::env::var("KAIKEI_DISABLE_PHOTO_DELETE").map(|v| v == "1").unwrap_or(false) {
+        return Err("photo_delete_disabled".into());
+    }
+    if asset_ids.is_empty() {
+        return Ok(DeleteAssetsOutcome::default());
+    }
+    if asset_ids.len() > DELETE_ASSETS_MAX {
+        return Err(format!("too_many_assets:{}", asset_ids.len()));
+    }
+    let auth = authorization_status();
+    if auth != "authorized" && auth != "limited" {
+        return Err(format!("not_authorized:{}", auth));
+    }
+    // 新しめの API は動的に解決する (古い OS で起動時に落ちないように)
+    let change_request_cls =
+        Class::get("PHAssetChangeRequest").ok_or_else(|| "PHAssetChangeRequest unavailable".to_string())?;
+
+    unsafe {
+        let pool: id = msg_send![class!(NSAutoreleasePool), new];
+
+        let assets: id = fetch_assets_by_ids(asset_ids);
+        let found = ids_in_fetch_result(assets);
+        let found_set: HashSet<&str> = found.iter().map(|s| s.as_str()).collect();
+        let missing: Vec<String> = asset_ids
+            .iter()
+            .filter(|s| !found_set.contains(s.as_str()))
+            .cloned()
+            .collect();
+        if found.is_empty() {
+            let _: () = msg_send![pool, drain];
+            return Ok(DeleteAssetsOutcome {
+                requested: asset_ids.len(),
+                deleted: Vec::new(),
+                missing,
+                cancelled: false,
+                error: None,
+            });
+        }
+
+        // 変更ブロックは後から別スレッドで呼ばれるので、fetch 結果を生かしておく
+        let _: id = msg_send![assets, retain];
+        let assets_ptr = ObjcPtr(assets);
+        let change_block = ConcreteBlock::new(move || {
+            let assets = assets_ptr.0;
+            #[allow(unused_unsafe)]
+            let _: () = unsafe { msg_send![change_request_cls, deleteAssets: assets] };
+        });
+        let change_block = change_block.copy();
+
+        // (成功したか, エラーコード, 説明)
+        let done: Arc<(Mutex<Option<(bool, i64, String)>>, std::sync::Condvar)> =
+            Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+        let done_clone = done.clone();
+        let completion = ConcreteBlock::new(move |success: BOOL, error: id| {
+            let ok = bool_from_objc(success);
+            #[allow(unused_unsafe)]
+            let (code, desc) = if error == nil {
+                (0i64, String::new())
+            } else {
+                unsafe {
+                    let code: i64 = msg_send![error, code];
+                    let d: id = msg_send![error, localizedDescription];
+                    (code, nsstring_to_rust(d))
+                }
+            };
+            let (lock, cvar) = &*done_clone;
+            let mut g = lock.lock().unwrap();
+            *g = Some((ok, code, desc));
+            cvar.notify_all();
+        });
+        let completion = completion.copy();
+
+        let library: id = msg_send![class!(PHPhotoLibrary), sharedPhotoLibrary];
+        let _: () = msg_send![library,
+            performChanges: &*change_block
+            completionHandler: &*completion];
+
+        // 利用者がダイアログに答えるのを待つ
+        let finished: Option<(bool, i64, String)> = {
+            let (lock, cvar) = &*done;
+            let mut g = lock.lock().unwrap();
+            let deadline = std::time::Instant::now() + Duration::from_secs(600);
+            while g.is_none() {
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let (ng, _) = cvar.wait_timeout(g, deadline - now).unwrap();
+                g = ng;
+            }
+            g.take()
+        };
+        // 待ち切れなかった時は、ダイアログがまだ開いていて後から変更ブロックが呼ばれ得る。
+        // その場合は fetch 結果を解放しない (解放済みのオブジェクトを触らせない)。
+        if finished.is_some() {
+            let _: () = msg_send![assets, release];
+        }
+
+        // 実際に消えたものを、ライブラリの現状から求める
+        let still: HashSet<String> = ids_in_fetch_result(fetch_assets_by_ids(&found))
+            .into_iter()
+            .collect();
+        let deleted: Vec<String> = found.iter().filter(|s| !still.contains(*s)).cloned().collect();
+        let _: () = msg_send![pool, drain];
+
+        let (cancelled, error) = match finished {
+            None => (false, Some("timeout".to_string())),
+            Some((true, _, _)) => (false, None),
+            Some((false, code, _)) if code == PH_PHOTOS_ERROR_USER_CANCELLED => (true, None),
+            Some((false, code, desc)) => (false, Some(format!("{} (code {})", desc, code))),
+        };
+        Ok(DeleteAssetsOutcome {
+            requested: asset_ids.len(),
+            deleted,
+            missing,
+            cancelled,
+            error,
+        })
     }
 }
 

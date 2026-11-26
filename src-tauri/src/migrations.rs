@@ -644,3 +644,13 @@ BEGIN
    WHERE id = NEW.id;
 END;
 "#;
+
+/// v15: photo_inbox.source_deleted_at — 取り込み済みの写真を「写真」ライブラリから削除した日時。
+///
+/// NULL = まだライブラリに残っている (または未確認)。
+/// 取り込んだ写真はアプリ側 (inbox/) に画像を持っているので、元の写真を消しても領収書は残る。
+/// 「どれを消したか」を記録しておかないと、削除の対象を毎回ライブラリに問い合わせることになり、
+/// 件数の表示もできない。
+pub const SCHEMA_V15_SQL: &str = r#"
+ALTER TABLE photo_inbox ADD COLUMN source_deleted_at TEXT;
+"#;

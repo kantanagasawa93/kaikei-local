@@ -442,6 +442,57 @@ export interface ScanItemProgress {
 }
 
 /**
+ * 期間を指定したスキャンの範囲。sinceUnix より後、untilUnix まで (省略時は現在まで) に
+ * 撮影された写真が対象 (Rust 側の条件と同じく `since < 撮影時刻 <= until`)。
+ */
+export interface ScanRange {
+  sinceUnix: number;
+  untilUnix?: number;
+}
+
+/**
+ * 期間 (fromUnix, toUnix] を、古い順に windowSeconds ごとの区間へ分ける (純関数)。
+ *
+ * 写真の取得 (Rust) は 1 回の呼び出しが終わるまで進み具合が見えず、中断もできない。
+ * 1 年分を 1 回で頼むと数十分固まって見えるので、区間に分けて順に処理する。
+ * 区間は隙間も重なりも無いように作る (前の区間の終わり = 次の区間の始まり)。
+ */
+export function splitScanWindows(
+  fromUnix: number,
+  toUnix: number,
+  windowSeconds: number = 14 * 24 * 3600,
+): { sinceUnix: number; untilUnix: number }[] {
+  const out: { sinceUnix: number; untilUnix: number }[] = [];
+  if (!Number.isFinite(fromUnix) || !Number.isFinite(toUnix)) return out;
+  if (toUnix <= fromUnix || windowSeconds <= 0) return out;
+  let start = Math.floor(fromUnix);
+  const end = Math.floor(toUnix);
+  while (start < end) {
+    const next = Math.min(start + Math.floor(windowSeconds), end);
+    out.push({ sinceUnix: start, untilUnix: next });
+    start = next;
+  }
+  return out;
+}
+
+/**
+ * スキャン後に「次回の起点」(カーソル) をどこへ動かすか。動かさない時は null (純関数)。
+ *
+ *   - 終わりを区切った期間 (過去の一部分) のスキャンでは動かさない。動かすと、
+ *     その期間より後・前回スキャンより前の写真が「スキャン済み」扱いになる。
+ *   - 過去へは戻さない。戻すと、次の通常スキャンが古い写真を全部やり直す。
+ */
+export function cursorAfterScan(opts: {
+  lastScan: number;
+  since: number;
+  cursor: number;
+  range?: ScanRange;
+}): number | null {
+  if (opts.range && opts.range.untilUnix !== undefined) return null;
+  return opts.cursor > Math.max(opts.since, opts.lastScan) ? opts.cursor : null;
+}
+
+/**
  * 「今すぐスキャン」のメインエントリ。
  *
  * @param trigger 'manual' (UI ボタン) | 'launchagent' (定期実行)
@@ -454,6 +505,8 @@ export async function scanNow(
   onProgress?: (done: number, total: number, lastItem?: ScanItemProgress) => void,
   /** Round 17 ㊅ AbortSignal — UI から「キャンセル」ボタンで中断 */
   signal?: AbortSignal,
+  /** 期間指定スキャン用。指定した時は「前回スキャン以降」ではなく、この期間を対象にする */
+  range?: ScanRange,
 ): Promise<ScanResult> {
   const auth = await getAuthStatus();
   if (auth !== "authorized" && auth !== "limited") {
@@ -461,9 +514,11 @@ export async function scanNow(
   }
 
   const lastScan = await getLastScanUnix();
-  const since = lastScan > 0
-    ? lastScan
-    : (fallbackSince ?? Math.floor(Date.now() / 1000) - 7 * 24 * 3600);
+  const since = range
+    ? range.sinceUnix
+    : lastScan > 0
+      ? lastScan
+      : (fallbackSince ?? Math.floor(Date.now() / 1000) - 7 * 24 * 3600);
 
   // photo_scan_log に進行中行を入れる
   const logId = crypto.randomUUID();
@@ -480,7 +535,10 @@ export async function scanNow(
   const errors: string[] = [];
   let scanned: ScannedPhoto[] = [];
   try {
-    scanned = await invoke<ScannedPhoto[]>("photos_scan_recent", { sinceUnix: since });
+    scanned = await invoke<ScannedPhoto[]>("photos_scan_recent", {
+      sinceUnix: since,
+      untilUnix: range?.untilUnix ?? null,
+    });
   } catch (e) {
     const msg = (e as Error).message ?? String(e);
     errors.push(msg);
@@ -838,8 +896,9 @@ export async function scanNow(
     processed,
     failedTakenAts,
   );
-  if (cursor > since) {
-    await setLastScanUnix(cursor);
+  const nextCursor = cursorAfterScan({ lastScan, since, cursor, range });
+  if (nextCursor !== null) {
+    await setLastScanUnix(nextCursor);
   }
 
   await db
@@ -888,6 +947,154 @@ export async function scanNow(
   };
 }
 
+export type ScanPeriodPreset = "7d" | "30d" | "90d" | "1y" | "custom";
+
+const PRESET_DAYS: Record<Exclude<ScanPeriodPreset, "custom">, number> = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+  "1y": 365,
+};
+
+/**
+ * 画面の期間指定 (プリセット or 日付) を、スキャンの範囲に直す (純関数)。
+ * 日付はローカルの日付 (YYYY-MM-DD) で、開始日・終了日とも「その日を含む」。
+ * 終了日が今日以降なら「現在まで」(toUnix なし)。指定が不正な時は null。
+ */
+export function resolveScanPeriod(
+  preset: ScanPeriodPreset,
+  custom: { from: string; to: string },
+  nowMs: number = Date.now(),
+): { fromUnix: number; toUnix?: number } | null {
+  const now = Math.floor(nowMs / 1000);
+  if (preset !== "custom") {
+    return { fromUnix: now - PRESET_DAYS[preset] * 24 * 3600 };
+  }
+  const start = localDayBoundaryIso(custom.from, "start");
+  const end = localDayBoundaryIso(custom.to, "end");
+  if (!start || !end) return null;
+  // スキャンの条件は「since より後」なので、開始日の 0:00 ちょうどを含めるために 1 秒手前から
+  const fromUnix = Math.floor(new Date(start).getTime() / 1000) - 1;
+  const toUnix = Math.floor(new Date(end).getTime() / 1000);
+  if (toUnix <= fromUnix || fromUnix >= now) return null;
+  return toUnix >= now ? { fromUnix } : { fromUnix, toUnix };
+}
+
+/** 期間指定スキャンの進み具合 */
+export interface PeriodScanProgress {
+  /** いま処理している区間 (1 始まり) と区間の総数 */
+  windowIndex: number;
+  windowCount: number;
+  sinceUnix: number;
+  untilUnix: number;
+  /** 区間内の進み具合。写真の取得が終わるまでは 0 / 0 */
+  done: number;
+  total: number;
+  lastItem?: ScanItemProgress;
+}
+
+export interface PeriodScanResult extends ScanResult {
+  /** 途中で中断された */
+  cancelled: boolean;
+  windowCount: number;
+  windowsDone: number;
+}
+
+/**
+ * 期間を指定してスキャンする。
+ *
+ * @param period fromUnix より後、toUnix まで (省略時は現在まで) に撮影された写真が対象
+ *
+ * 既に受信箱にある写真 (取り込み済み・破棄済みを含む) は、もう一度は入らない。
+ * 中断した時は、処理し終えた区間までの結果が残る。
+ */
+export async function scanPeriod(
+  period: { fromUnix: number; toUnix?: number },
+  onProgress?: (p: PeriodScanProgress) => void,
+  signal?: AbortSignal,
+): Promise<PeriodScanResult> {
+  const now = Math.floor(Date.now() / 1000);
+  // 終わりが「いま」以降なら、最後の区間は終わりを区切らない (通常スキャンと同じ扱いになり、
+  // 次回の起点も進む)
+  const openEnded = period.toUnix === undefined || period.toUnix >= now;
+  const to = openEnded ? now : (period.toUnix as number);
+  const windows = splitScanWindows(period.fromUnix, to);
+  if (windows.length === 0) {
+    throw new Error("スキャンする期間が正しくありません（開始日が終了日より後になっています）");
+  }
+
+  const total: PeriodScanResult = {
+    scanned: 0,
+    newPhotos: 0,
+    receiptCount: 0,
+    errors: [],
+    autoDismissed: 0,
+    skipped: 0,
+    duplicate: 0,
+    cancelled: false,
+    windowCount: windows.length,
+    windowsDone: 0,
+  };
+
+  for (let i = 0; i < windows.length; i++) {
+    if (signal?.aborted) {
+      total.cancelled = true;
+      break;
+    }
+    const w = windows[i];
+    const isLast = i === windows.length - 1;
+    const emit = (done: number, count: number, lastItem?: ScanItemProgress) => {
+      if (!onProgress) return;
+      try {
+        onProgress({
+          windowIndex: i + 1,
+          windowCount: windows.length,
+          sinceUnix: w.sinceUnix,
+          untilUnix: w.untilUnix,
+          done,
+          total: count,
+          lastItem,
+        });
+      } catch {
+        /* 画面側のコールバックの失敗でスキャンを止めない */
+      }
+    };
+    emit(0, 0);
+    const r = await scanNow("manual", undefined, emit, signal, {
+      sinceUnix: w.sinceUnix,
+      untilUnix: isLast && openEnded ? undefined : w.untilUnix,
+    });
+    total.scanned += r.scanned;
+    total.newPhotos += r.newPhotos;
+    total.receiptCount += r.receiptCount;
+    total.autoDismissed = (total.autoDismissed ?? 0) + (r.autoDismissed ?? 0);
+    total.skipped = (total.skipped ?? 0) + (r.skipped ?? 0);
+    total.duplicate = (total.duplicate ?? 0) + (r.duplicate ?? 0);
+    const cancelledHere = r.errors.includes("user_cancelled");
+    total.errors.push(...r.errors.filter((e) => e !== "user_cancelled"));
+    if (cancelledHere) {
+      total.cancelled = true;
+      break;
+    }
+    total.windowsDone = i + 1;
+  }
+
+  // 受信箱の「直近スキャン」には、区間ごとではなく期間全体の合計を出す
+  try {
+    await saveLastScanSummary({
+      scanned: total.scanned,
+      newPhotos: total.newPhotos,
+      receiptCount: total.receiptCount,
+      skipped: total.skipped ?? 0,
+      duplicate: total.duplicate ?? 0,
+      finished_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn("saveLastScanSummary failed:", e);
+  }
+  return total;
+}
+
 export interface InboxRow {
   id: string;
   source_asset_id: string;
@@ -914,6 +1121,8 @@ export interface InboxRow {
   score_signals_json: string | null;
   // v8 追加カラム (Round 21 ⓑ: ユーザが受信箱でカードを開いた最終時刻)
   last_viewed_at?: string | null;
+  /** v15: 元の写真を「写真」ライブラリから削除した日時 (残っていれば null) */
+  source_deleted_at?: string | null;
 }
 
 /**

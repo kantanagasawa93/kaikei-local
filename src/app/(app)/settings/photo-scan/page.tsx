@@ -7,7 +7,7 @@
  * Phase 3 で「毎日 21:00 に自動スキャン」を追加予定 (LaunchAgent 登録)
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -28,10 +28,24 @@ import {
   launchAgentInstall,
   launchAgentUninstall,
   recentScanLog,
+  resolveScanPeriod,
+  scanPeriod,
   type AuthStatus,
   type LaunchAgentStatus,
+  type PeriodScanProgress,
   type ScanLogRow,
+  type ScanPeriodPreset,
 } from "@/lib/photo-scanner";
+import {
+  countDeletableOriginals,
+  deleteImportedOriginals,
+  describeDeleteResult,
+  getAutoDeleteOriginals,
+  reconcileDeletedOriginals,
+  setAutoDeleteOriginals,
+} from "@/lib/photo-originals";
+import { confirmDialog } from "@/lib/confirm";
+import { todayLocal, addDaysToDateString } from "@/lib/date-utils";
 import {
   getAutoJournalMode,
   setAutoJournalMode,
@@ -48,6 +62,16 @@ export default function PhotoScanSettingsPage() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [logs, setLogs] = useState<ScanLogRow[]>([]);
   const [autoJournal, setAutoJournalState] = useState(false);
+  // 期間を指定したスキャン
+  const [periodPreset, setPeriodPreset] = useState<ScanPeriodPreset>("30d");
+  const [periodFrom, setPeriodFrom] = useState<string>(() => addDaysToDateString(todayLocal(), -30));
+  const [periodTo, setPeriodTo] = useState<string>(() => todayLocal());
+  const [periodProgress, setPeriodProgress] = useState<PeriodScanProgress | null>(null);
+  const periodAbortRef = useRef<AbortController | null>(null);
+  // 写真アプリの整理 (取り込み済みの元写真を消す)
+  const [deletableCount, setDeletableCount] = useState<number>(0);
+  const [deletingOriginals, setDeletingOriginals] = useState(false);
+  const [autoDelete, setAutoDeleteState] = useState(false);
 
   const refresh = async () => {
     setAuth(await getAuthStatus());
@@ -57,6 +81,24 @@ export default function PhotoScanSettingsPage() {
     if (a.time) setScheduleTime(a.time);
     setLogs(await recentScanLog(5));
     setAutoJournalState(await getAutoJournalMode());
+    setAutoDeleteState(await getAutoDeleteOriginals());
+    await refreshDeletable();
+  };
+
+  const refreshDeletable = async () => {
+    try {
+      // 利用者が写真アプリ側で自分で消した分を、先に記録へ反映する (失敗しても件数は出す)
+      if ((await getAuthStatus()) === "authorized") {
+        try {
+          await reconcileDeletedOriginals();
+        } catch (e) {
+          console.warn("reconcileDeletedOriginals failed:", e);
+        }
+      }
+      setDeletableCount(await countDeletableOriginals());
+    } catch (e) {
+      console.warn("countDeletableOriginals failed:", e);
+    }
   };
 
   const handleScheduleEnable = async () => {
@@ -127,6 +169,71 @@ export default function PhotoScanSettingsPage() {
       setScanning(false);
     }
   };
+
+  const handlePeriodScan = async () => {
+    if (scanning) return;
+    const period = resolveScanPeriod(periodPreset, { from: periodFrom, to: periodTo });
+    if (!period) {
+      toast.error("期間が正しくありません（開始日と終了日を確認してください）");
+      return;
+    }
+    setScanning(true);
+    const controller = new AbortController();
+    periodAbortRef.current = controller;
+    try {
+      const result = await scanPeriod(period, (p) => setPeriodProgress(p), controller.signal);
+      const parts = [`${result.scanned} 枚取得`, `新規 ${result.newPhotos} 枚`];
+      if (result.receiptCount > 0) parts.push(`領収書 ${result.receiptCount} 枚`);
+      if (result.skipped && result.skipped > 0) parts.push(`明らかに対象外 ${result.skipped} 枚は除外`);
+      if (result.duplicate && result.duplicate > 0) parts.push(`重複 ${result.duplicate} 枚を統合`);
+      const summary = parts.join(" / ");
+      if (result.cancelled) {
+        toast.info(
+          `スキャンを中断しました（${result.windowsDone} / ${result.windowCount} 区間まで処理）: ${summary}`,
+        );
+      } else {
+        toast.success(`期間のスキャン完了: ${summary}`);
+      }
+      if (result.errors.length > 0) {
+        toast.error(`取り込めなかった写真が ${result.errors.length} 枚あります: ${result.errors[0]}`);
+      }
+      await refresh();
+    } catch (e) {
+      toast.error(`スキャン失敗: ${(e as Error).message}`);
+    } finally {
+      setScanning(false);
+      setPeriodProgress(null);
+      periodAbortRef.current = null;
+    }
+  };
+
+  const handleDeleteOriginals = async () => {
+    if (deletingOriginals || deletableCount === 0) return;
+    const ok = await confirmDialog(
+      `取り込み済みの写真 ${deletableCount} 枚を、写真アプリから削除します。\n\n` +
+        "・このあと macOS の確認ダイアログが出ます。そこで「削除」を選んだ時だけ消えます。\n" +
+        "・消した写真は、写真アプリの「最近削除した項目」に 30 日残ります。\n" +
+        "・iCloud 写真を使っている場合は、iPhone など他の端末からも消えます。\n" +
+        "・KAIKEI LOCAL に取り込んだ領収書の画像は、そのまま残ります。",
+    );
+    if (!ok) return;
+    setDeletingOriginals(true);
+    try {
+      const result = await deleteImportedOriginals();
+      const message = describeDeleteResult(result);
+      if (result.error) toast.error(message);
+      else if (result.deleted > 0 || result.alreadyGone > 0) toast.success(message);
+      else toast.info(message);
+    } catch (e) {
+      toast.error(`写真アプリからの削除に失敗: ${(e as Error).message}`);
+    } finally {
+      setDeletingOriginals(false);
+      await refreshDeletable();
+    }
+  };
+
+  const formatDay = (unix: number) =>
+    new Date(unix * 1000).toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" });
 
   const isAuthorized = auth === "authorized" || auth === "limited";
 
@@ -287,6 +394,138 @@ export default function PhotoScanSettingsPage() {
               </Button>
             </Link>
           </div>
+
+          {/* 期間を指定してスキャン */}
+          <div className="border-t pt-4 space-y-3">
+            <div>
+              <div className="text-sm font-medium">期間を指定してスキャン</div>
+              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                前回より前に撮った写真も対象にできます。既に受信箱にある写真（取り込み済み・破棄済みを含む）は、
+                もう一度は入りません。長い期間ほど時間がかかり、途中で中断できます。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={periodPreset}
+                onChange={(e) => setPeriodPreset(e.target.value as ScanPeriodPreset)}
+                disabled={scanning}
+                className="border rounded px-2 py-1 text-sm bg-background"
+                aria-label="スキャンする期間"
+              >
+                <option value="7d">過去 7 日</option>
+                <option value="30d">過去 30 日</option>
+                <option value="90d">過去 90 日</option>
+                <option value="1y">過去 1 年</option>
+                <option value="custom">日付を指定</option>
+              </select>
+              {periodPreset === "custom" && (
+                <>
+                  <input
+                    type="date"
+                    value={periodFrom}
+                    max={periodTo || undefined}
+                    onChange={(e) => setPeriodFrom(e.target.value)}
+                    disabled={scanning}
+                    className="border rounded px-2 py-1 text-sm"
+                    aria-label="開始日"
+                  />
+                  <span className="text-sm text-muted-foreground">〜</span>
+                  <input
+                    type="date"
+                    value={periodTo}
+                    min={periodFrom || undefined}
+                    onChange={(e) => setPeriodTo(e.target.value)}
+                    disabled={scanning}
+                    className="border rounded px-2 py-1 text-sm"
+                    aria-label="終了日"
+                  />
+                </>
+              )}
+              <Button variant="outline" onClick={handlePeriodScan} disabled={!isAuthorized || scanning}>
+                この期間をスキャン
+              </Button>
+              {periodProgress && (
+                <Button variant="ghost" size="sm" onClick={() => periodAbortRef.current?.abort()}>
+                  中断
+                </Button>
+              )}
+            </div>
+            {periodProgress && (
+              <div className="text-xs text-muted-foreground" role="status">
+                区間 {periodProgress.windowIndex} / {periodProgress.windowCount}（
+                {formatDay(periodProgress.sinceUnix + 1)}〜{formatDay(periodProgress.untilUnix)}）:{" "}
+                {periodProgress.total > 0
+                  ? `${periodProgress.done} / ${periodProgress.total} 枚を判定中`
+                  : "写真を取得中…"}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 写真アプリの整理: 取り込み済みの元写真を消す */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">写真アプリの整理</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            領収書として取り込んだ写真は、KAIKEI LOCAL の中に画像を保存しています。
+            元の写真を写真アプリから消して、ライブラリをすっきりさせられます。
+            対象は「取り込み済みで、領収書の画像がアプリ内に残っている写真」だけです。
+          </p>
+          <ul className="list-disc pl-5 space-y-1 text-xs text-muted-foreground leading-relaxed">
+            <li>削除のたびに macOS の確認ダイアログが出ます（省略できません）。</li>
+            <li>消した写真は、写真アプリの「最近削除した項目」に 30 日残ります。</li>
+            <li>iCloud 写真を使っている場合は、iPhone など他の端末からも消えます。</li>
+          </ul>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-sm">
+              写真アプリに残っている取り込み済みの写真:{" "}
+              <strong>{deletableCount} 枚</strong>
+            </div>
+            <Button
+              variant="outline"
+              onClick={handleDeleteOriginals}
+              disabled={!isAuthorized || deletingOriginals || deletableCount === 0}
+            >
+              {deletingOriginals
+                ? "確認ダイアログの応答待ち…"
+                : `${deletableCount} 枚を写真アプリから削除`}
+            </Button>
+          </div>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoDelete}
+              onChange={async (e) => {
+                const v = e.target.checked;
+                try {
+                  await setAutoDeleteOriginals(v);
+                  setAutoDeleteState(v);
+                  toast.success(
+                    v
+                      ? "まとめて仕訳化したあとに、削除の確認を出すようにしました"
+                      : "自動での削除の確認を止めました",
+                  );
+                } catch (err) {
+                  toast.error(`設定の保存に失敗: ${(err as Error).message}`);
+                }
+              }}
+              className="w-4 h-4 mt-0.5"
+            />
+            <span className="text-sm">
+              受信箱で「領収書をすべて自動仕訳」を実行したあとに、取り込んだ写真の削除を確認する
+              <span className="block text-xs text-muted-foreground">
+                オフの時は、このボタンを押した時だけ削除します。
+              </span>
+            </span>
+          </label>
+          {!isAuthorized && (
+            <p className="text-xs text-amber-700">
+              ※ 写真へのアクセス許可が必要です。先に上のセクションで許可してください。
+            </p>
+          )}
         </CardContent>
       </Card>
 
